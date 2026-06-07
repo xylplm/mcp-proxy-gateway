@@ -41,12 +41,11 @@ interface LoginResponseBody {
  */
 export async function login(payload: LoginRequest): Promise<string> {
   // 公开端点 /api/auth/login 与 axios baseURL `/api/admin` 不同前缀，需显式覆盖。
+  // 响应拦截器已解包统一信封，response.data 即为内层数据 { token, expiresAt }。
   const response = await request.post<LoginResponseBody>('/auth/login', payload, {
     baseURL: '/api',
   })
-  const body = response.data
-  // 兼容 { token } 与 { data: { token } } 两种契约形态
-  const token = body?.token ?? body?.data?.token
+  const token = response.data?.token
   if (token === undefined || token === '') {
     throw new Error('登录响应中未包含访问令牌')
   }

@@ -17,7 +17,7 @@
  *   PUT  /settings                    校验并回写常规配置（cron 服务端专项校验）
  *   POST /auth/change-password        校验当前密码后改密（受 JWT 保护）
  */
-import request from '@/api/request'
+import request, { ApiError } from '@/api/request'
 
 /** 对外 MCP 模式取值，与后端 config.ModeSmart / ModeFull 对齐。 */
 export type MCPMode = 'smart' | 'full'
@@ -132,7 +132,7 @@ interface SettingsResponse {
  * 值为该字段的中文错误说明，便于前端按字段定位并展示（Req 7.3、18.6）。
  */
 export interface APIErrorBody {
-  code?: string
+  code?: number
   message?: string
   fields?: Record<string, string>
 }
@@ -140,11 +140,15 @@ export interface APIErrorBody {
 /**
  * 从任意错误中提取后端统一错误体（含字段级说明）。
  *
- * 用于设置页将服务端校验错误映射回对应表单字段；非 Axios/无响应体时返回 null。
+ * 响应拦截器已把请求失败统一规整为 ApiError（含 code/message/fields），此处据此还原
+ * 为 { code, message, fields } 视图，供设置页将服务端校验错误映射回对应表单字段；
+ * 非 ApiError 时返回 null。
  */
 export function extractAPIError(err: unknown): APIErrorBody | null {
-  const e = err as { response?: { data?: APIErrorBody } }
-  return e?.response?.data ?? null
+  if (err instanceof ApiError) {
+    return { code: err.code, message: err.message, fields: err.fields }
+  }
+  return null
 }
 
 /** 读取当前常规配置快照（Req 17.5、18.4）。 */

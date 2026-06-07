@@ -1,32 +1,78 @@
 /**
- * Axios 全局请求实例
+ * Axios 全局请求实例与统一响应处理
  *
  * 设计要点（对应 design.md「请求层」「鉴权中间件」「错误模型」与 Req 17.4 / 17.6）：
  * - baseURL 统一指向管理 REST API 前缀 `/api/admin`，与后端路由约定一致；
  * - 请求拦截器：从会话 store 读取管理员 JWT 并注入 `Authorization: Bearer <token>`（Req 17.6）；
- * - 响应拦截器：当后端返回鉴权失败/令牌失效（HTTP 401 或统一错误模型 code=UNAUTHORIZED）时，
- *   清除本地会话并重定向到登录页（Req 17.6、design.md 错误模型「令牌缺失/无效/过期」）。
+ * - 响应拦截器（统一信封）：后端管理端点统一返回信封 `{ code, message, data }`：
+ *     · 成功（code === 20000）：把响应体替换为内层 `data`，于是上层 `request.get<T>` 的
+ *       `res.data` 直接是业务数据 T，无需各处再 `.data.data`；
+ *     · 业务失败（HTTP 2xx 但 code !== 20000，理论上少见）：构造带 code/message/fields 的
+ *       ApiError 并 reject；
+ *     · 传输/系统失败（HTTP 4xx/5xx）：从信封提取 message/code/fields 构造 ApiError 并 reject；
+ *       HTTP 401 额外清会话并重定向登录（Req 17.6）。
+ *
+ * 默认提示：业务侧 catch 到的统一是 ApiError，其 message 即后端中文提示，可直接展示；
+ * 同时保留 code 与 fields，便于业务按需做字段级处理或精细分支。
  *
  * 注意：本文件会引用路由单例与会话 store。
  * - 会话 store（Pinia）在拦截器回调内按需获取，确保 Pinia 已完成初始化；
- * - 登录路由在 router 中以懒加载方式注册，避免 request → router → LoginView → auth → request 的模块循环依赖。
+ * - 登录路由在 router 中以懒加载方式注册，避免模块循环依赖。
  */
-import axios, { type AxiosInstance, type InternalAxiosRequestConfig } from 'axios'
+import axios, {
+  type AxiosInstance,
+  type AxiosRequestConfig,
+  type AxiosResponse,
+  type InternalAxiosRequestConfig,
+} from 'axios'
 import router from '@/router'
 import { useSessionStore } from '@/stores/session'
 
 /** 管理后台 API 基础路径前缀 */
 export const ADMIN_API_BASE_URL = '/api/admin'
 
+/** 成功响应的统一业务码，与后端 httpapi 的 codeSuccess 对齐。 */
+export const CODE_SUCCESS = 20000
+
 /**
- * 后端统一错误响应体（与 design.md「错误模型」对齐）。
- * 仅声明前端关心的字段，便于在响应拦截器中识别鉴权失败类别。
+ * 后端统一响应信封。
+ *
+ * - code：数字业务状态码（成功 20000，失败见后端 codeToBusinessCode）；
+ * - message：人类可读提示，可直接用于默认错误展示；
+ * - data：业务数据载荷；失败时为 null 或 { fields } 字段级明细。
  */
-interface ApiErrorBody {
-  /** 错误类别，如 UNAUTHORIZED / VALIDATION / NOT_FOUND 等 */
-  code?: string
-  /** 人类可读的错误描述 */
-  message?: string
+export interface Envelope<T = unknown> {
+  code: number
+  message: string
+  data: T
+}
+
+/**
+ * 统一业务错误。
+ *
+ * 由响应拦截器在请求失败（HTTP 错误或业务码非成功）时抛出，业务侧 `catch (e)` 后
+ * 可直接读取 message 展示，或据 code/fields 做精细处理。
+ */
+export class ApiError extends Error {
+  /** 数字业务状态码。 */
+  readonly code: number
+  /** HTTP 状态码（若有响应）。 */
+  readonly httpStatus?: number
+  /** 字段级校验明细（来自信封 data.fields），无则为空对象。 */
+  readonly fields: Record<string, string>
+
+  constructor(
+    message: string,
+    code: number,
+    httpStatus?: number,
+    fields?: Record<string, string>,
+  ) {
+    super(message)
+    this.name = 'ApiError'
+    this.code = code
+    this.httpStatus = httpStatus
+    this.fields = fields ?? {}
+  }
 }
 
 /** 全局共享的 Axios 实例 */
@@ -49,41 +95,61 @@ request.interceptors.request.use(
     }
     return config
   },
-  (error) => {
-    return Promise.reject(error)
-  },
+  (error) => Promise.reject(error),
 )
 
-// 响应拦截器：统一处理 401/令牌失效（清会话 + 重定向登录，Req 17.6）
+// 响应拦截器：成功解包信封 data；失败统一构造 ApiError 并处理 401（Req 17.6）
 request.interceptors.response.use(
-  (response) => {
-    // 正常响应直接透传，由上层 API 封装按契约解包
-    return response
+  (response: AxiosResponse) => {
+    const body = response.data as Envelope | undefined
+    // 兼容非信封响应（如个别非管理端点）：无 code 字段时原样透传。
+    if (body == null || typeof body.code !== 'number') {
+      return response
+    }
+    if (body.code === CODE_SUCCESS) {
+      // 解包：把响应体替换为内层 data，上层 res.data 即业务数据。
+      response.data = body.data
+      return response
+    }
+    // HTTP 2xx 但业务码非成功：按业务错误抛出。
+    return Promise.reject(
+      new ApiError(body.message || '请求失败', body.code, response.status, extractFields(body.data)),
+    )
   },
   (error: unknown) => {
-    if (isUnauthorizedError(error)) {
-      // 鉴权失败/令牌失效：清除本地会话并重定向到登录页
-      redirectToLogin()
+    if (axios.isAxiosError(error)) {
+      const status = error.response?.status
+      const body = error.response?.data as Envelope | undefined
+
+      if (status === 401) {
+        // 鉴权失败/令牌失效：清除本地会话并重定向到登录页
+        redirectToLogin()
+      }
+
+      const message =
+        body?.message || error.message || '网络异常，请稍后重试'
+      const code = typeof body?.code === 'number' ? body.code : (status ?? 0)
+      return Promise.reject(new ApiError(message, code, status, extractFields(body?.data)))
     }
     return Promise.reject(error)
   },
 )
 
 /**
- * 判断错误是否为鉴权失败/令牌失效。
- * 兼容两类判定信号：
- * 1) HTTP 状态码 401（design.md 鉴权中间件失败返回 401）；
- * 2) 统一错误模型 body.code === 'UNAUTHORIZED'（design.md 错误模型）。
+ * 泛型请求：直接返回业务数据 T（已由响应拦截器解包信封）。
+ *
+ * 用法：`const list = await requestData<Upstream[]>({ url: '/upstreams' })`。
+ * 失败时抛出 ApiError（含 message/code/fields），由调用方按需 catch。
  */
-function isUnauthorizedError(error: unknown): boolean {
-  if (!axios.isAxiosError(error)) {
-    return false
-  }
-  if (error.response?.status === 401) {
-    return true
-  }
-  const body = error.response?.data as ApiErrorBody | undefined
-  return body?.code === 'UNAUTHORIZED'
+export async function requestData<T>(config: AxiosRequestConfig): Promise<T> {
+  const res = await request.request<T>(config)
+  return res.data as T
+}
+
+/** 从信封 data 中提取字段级校验明细（data.fields），无则返回空对象。 */
+function extractFields(data: unknown): Record<string, string> {
+  const fields = (data as { fields?: Record<string, string> } | null)?.fields
+  return fields ?? {}
 }
 
 /**
