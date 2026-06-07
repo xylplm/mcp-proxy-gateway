@@ -1,0 +1,21 @@
+<!doctype html>
+<!--
+  占位入口页（//go:embed dist/* 的最小占位）。
+
+  说明：前端 SPA 产物在构建时由 Dockerfile 阶段一构建并 COPY 覆盖本目录，再经
+  //go:embed 内嵌进 Go 二进制。本文件仅为保证仓库内 `go build ./...` / `go test`
+  始终可编译（embed 无法内嵌空目录），以及未构建前端时的纯后端联调提供最小占位，
+  故意不引用任何已构建资产。正式镜像中本文件会被真实构建产物覆盖。
+-->
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MCP Proxy Gateway</title>
+  </head>
+  <body>
+    <div id="app">
+      <p>MCP Proxy Gateway 后端已就绪。当前为未内嵌前端的占位页（开发联调用）；正式镜像会内嵌完整管理界面。</p>
+    </div>
+  </body>
+</html>

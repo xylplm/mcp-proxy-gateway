@@ -1,0 +1,468 @@
+<script setup lang="ts">
+/**
+ * 别名/描述重写规则区块（任务 26.2，Req 8.1）。
+ *
+ * 提供某上游 MCP 下别名规则的列表、新建/编辑（模态框）、删除（确认）、上移/下移排序。
+ * 别名规则不支持独立启停；排序通过交换相邻规则 sortOrder 后经 PUT 持久化实现。
+ * 风格：Tailwind 工具类 + TailAdmin（卡片 rounded-2xl border、表格、徽章、按钮、模态框）。
+ */
+import { computed, onMounted, ref, watch } from 'vue'
+import {
+  listAliases,
+  createAlias,
+  updateAlias,
+  deleteAlias,
+  type AliasRule,
+  type AliasRuleRequest,
+} from '@/api/rules'
+
+const props = defineProps<{
+  /** 当前选中的上游 MCP 标识，为空表示未选择。 */
+  upstreamId: string
+}>()
+
+const emit = defineEmits<{
+  (e: 'toast', message: string): void
+}>()
+
+/** 别名规则列表（按 sortOrder 升序）。 */
+const rules = ref<AliasRule[]>([])
+const loading = ref(false)
+const errorMessage = ref('')
+
+/** 模态框开关与编辑目标。 */
+const modalOpen = ref(false)
+const editing = ref<AliasRule | null>(null)
+/** 删除确认目标。 */
+const deleting = ref<AliasRule | null>(null)
+/** 保存中标记。 */
+const saving = ref(false)
+/** 表单字段级校验错误。 */
+const formError = ref('')
+
+/** 表单模型。 */
+const form = ref<AliasRuleRequest>({
+  pattern: '',
+  isRegex: false,
+  targetName: '',
+  targetDesc: '',
+  sortOrder: 0,
+})
+
+const isEdit = computed(() => editing.value !== null)
+
+/** 加载别名规则（按 sortOrder 升序）。 */
+async function load(): Promise<void> {
+  if (props.upstreamId === '') {
+    rules.value = []
+    return
+  }
+  loading.value = true
+  errorMessage.value = ''
+  try {
+    const list = await listAliases(props.upstreamId)
+    list.sort((a, b) => a.sortOrder - b.sortOrder)
+    rules.value = list
+  } catch (err) {
+    errorMessage.value = err instanceof Error ? err.message : '加载别名规则失败'
+  } finally {
+    loading.value = false
+  }
+}
+
+onMounted(load)
+watch(() => props.upstreamId, load)
+
+/** 打开新建模态框（sortOrder 追加到末尾）。 */
+function openCreate(): void {
+  editing.value = null
+  formError.value = ''
+  form.value = {
+    pattern: '',
+    isRegex: false,
+    targetName: '',
+    targetDesc: '',
+    sortOrder: rules.value.length,
+  }
+  modalOpen.value = true
+}
+
+/** 打开编辑模态框。 */
+function openEdit(rule: AliasRule): void {
+  editing.value = rule
+  formError.value = ''
+  form.value = {
+    pattern: rule.pattern,
+    isRegex: rule.isRegex,
+    targetName: rule.targetName ?? '',
+    targetDesc: rule.targetDesc ?? '',
+    sortOrder: rule.sortOrder,
+  }
+  modalOpen.value = true
+}
+
+/** 关闭模态框。 */
+function closeModal(): void {
+  modalOpen.value = false
+  editing.value = null
+}
+
+/** 前端基础校验：模式必填、目标名称/描述至少其一。 */
+function validate(): boolean {
+  const f = form.value
+  if (f.pattern.trim() === '') {
+    formError.value = '匹配模式不能为空'
+    return false
+  }
+  if (f.pattern.length > 200) {
+    formError.value = '匹配模式长度不能超过 200 个字符'
+    return false
+  }
+  if (f.targetName.trim() === '' && f.targetDesc.trim() === '') {
+    formError.value = '目标名称与目标描述至少填写其一'
+    return false
+  }
+  if (f.targetName.length > 100) {
+    formError.value = '目标名称长度不能超过 100 个字符'
+    return false
+  }
+  if (f.targetDesc.length > 1024) {
+    formError.value = '目标描述长度不能超过 1024 个字符'
+    return false
+  }
+  formError.value = ''
+  return true
+}
+
+/** 提交保存（创建或更新）。 */
+async function submit(): Promise<void> {
+  if (!validate()) return
+  saving.value = true
+  try {
+    const payload: AliasRuleRequest = { ...form.value }
+    if (isEdit.value && editing.value !== null) {
+      await updateAlias(editing.value.id, payload)
+      emit('toast', '别名规则已更新')
+    } else {
+      await createAlias(props.upstreamId, payload)
+      emit('toast', '别名规则已创建')
+    }
+    closeModal()
+    await load()
+  } catch (err) {
+    formError.value = err instanceof Error ? err.message : '保存失败'
+  } finally {
+    saving.value = false
+  }
+}
+
+/** 请求删除确认。 */
+function askDelete(rule: AliasRule): void {
+  deleting.value = rule
+}
+
+/** 确认删除。 */
+async function confirmDelete(): Promise<void> {
+  if (deleting.value === null) return
+  const rule = deleting.value
+  try {
+    await deleteAlias(rule.id)
+    emit('toast', '别名规则已删除')
+    deleting.value = null
+    await load()
+  } catch (err) {
+    emit('toast', err instanceof Error ? err.message : '删除失败')
+  }
+}
+
+/**
+ * 上移/下移：交换相邻两条规则的 sortOrder 后分别 PUT 持久化（Req 8.1）。
+ * 乐观更新本地列表，失败时回滚重载。
+ */
+async function move(rule: AliasRule, direction: -1 | 1): Promise<void> {
+  const idx = rules.value.findIndex((r) => r.id === rule.id)
+  const target = idx + direction
+  if (idx < 0 || target < 0 || target >= rules.value.length) return
+
+  const a = rules.value[idx]
+  const b = rules.value[target]
+  const aOrder = a.sortOrder
+  const bOrder = b.sortOrder
+
+  // 乐观更新。
+  const reordered = [...rules.value]
+  reordered[idx] = { ...b, sortOrder: aOrder }
+  reordered[target] = { ...a, sortOrder: bOrder }
+  reordered.sort((x, y) => x.sortOrder - y.sortOrder)
+  rules.value = reordered
+
+  try {
+    await Promise.all([
+      updateAlias(a.id, toRequest(a, bOrder)),
+      updateAlias(b.id, toRequest(b, aOrder)),
+    ])
+    await load()
+  } catch (err) {
+    emit('toast', err instanceof Error ? err.message : '排序失败')
+    await load()
+  }
+}
+
+/** 将规则连同新的 sortOrder 转为更新请求体。 */
+function toRequest(rule: AliasRule, sortOrder: number): AliasRuleRequest {
+  return {
+    pattern: rule.pattern,
+    isRegex: rule.isRegex,
+    targetName: rule.targetName ?? '',
+    targetDesc: rule.targetDesc ?? '',
+    sortOrder,
+  }
+}
+
+defineExpose({ reload: load })
+</script>
+
+<template>
+  <section
+    class="flex flex-col rounded-2xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03]"
+  >
+    <!-- 区块头部 -->
+    <div class="flex items-center justify-between border-b border-gray-200 px-5 py-4 dark:border-gray-800">
+      <div>
+        <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">别名 / 描述重写</h3>
+        <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+          共 {{ rules.length }} 条规则，按顺序匹配，仅应用首条命中
+        </p>
+      </div>
+      <button
+        type="button"
+        class="inline-flex items-center gap-1.5 rounded-lg bg-brand-500 px-3 py-2 text-sm font-medium text-white transition hover:bg-brand-600 disabled:opacity-50"
+        :disabled="upstreamId === ''"
+        @click="openCreate"
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+          <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+        </svg>
+        新建别名规则
+      </button>
+    </div>
+
+    <p
+      v-if="errorMessage !== ''"
+      class="m-4 rounded-lg bg-error-50 px-4 py-2.5 text-sm text-error-600 dark:bg-error-500/10 dark:text-error-400"
+    >
+      {{ errorMessage }}
+    </p>
+
+    <!-- 列表表格 -->
+    <div class="max-w-full overflow-x-auto">
+      <table class="min-w-full">
+        <thead>
+          <tr class="border-b border-gray-200 text-left text-xs font-medium text-gray-500 uppercase dark:border-gray-800 dark:text-gray-400">
+            <th class="px-5 py-3">匹配模式</th>
+            <th class="px-5 py-3">类型</th>
+            <th class="px-5 py-3">目标</th>
+            <th class="px-5 py-3">排序</th>
+            <th class="px-5 py-3 text-right">操作</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-gray-100 dark:divide-gray-800">
+          <tr v-if="upstreamId === ''">
+            <td colspan="5" class="px-5 py-10 text-center text-sm text-gray-400">请先选择上游 MCP</td>
+          </tr>
+          <tr v-else-if="loading">
+            <td colspan="5" class="px-5 py-10 text-center text-sm text-gray-400">加载中…</td>
+          </tr>
+          <tr v-else-if="rules.length === 0">
+            <td colspan="5" class="px-5 py-10 text-center text-sm text-gray-400">
+              暂无别名规则，点击「新建别名规则」开始添加
+            </td>
+          </tr>
+          <tr
+            v-for="(rule, index) in rules"
+            v-else
+            :key="rule.id"
+            class="text-sm text-gray-700 dark:text-gray-300"
+          >
+            <td class="px-5 py-4">
+              <code class="rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-800 dark:bg-gray-800 dark:text-gray-200">{{ rule.pattern }}</code>
+            </td>
+            <td class="px-5 py-4">
+              <span
+                class="inline-flex items-center rounded-full px-2.5 py-1 text-xs"
+                :class="rule.isRegex
+                  ? 'bg-brand-50 text-brand-600 dark:bg-brand-500/10 dark:text-brand-400'
+                  : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300'"
+              >
+                {{ rule.isRegex ? '正则' : '精确' }}
+              </span>
+            </td>
+            <td class="px-5 py-4">
+              <div v-if="rule.targetName" class="font-medium text-gray-800 dark:text-white/90">{{ rule.targetName }}</div>
+              <div v-if="rule.targetDesc" class="mt-0.5 max-w-xs truncate text-xs text-gray-500 dark:text-gray-400" :title="rule.targetDesc">
+                {{ rule.targetDesc }}
+              </div>
+            </td>
+            <td class="px-5 py-4">
+              <div class="flex items-center gap-1">
+                <button
+                  type="button"
+                  class="rounded-md border border-gray-200 p-1 text-gray-500 hover:bg-gray-50 disabled:opacity-40 dark:border-gray-700 dark:hover:bg-gray-800"
+                  :disabled="index === 0"
+                  aria-label="上移"
+                  @click="move(rule, -1)"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M6 15l6-6 6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></svg>
+                </button>
+                <button
+                  type="button"
+                  class="rounded-md border border-gray-200 p-1 text-gray-500 hover:bg-gray-50 disabled:opacity-40 dark:border-gray-700 dark:hover:bg-gray-800"
+                  :disabled="index === rules.length - 1"
+                  aria-label="下移"
+                  @click="move(rule, 1)"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></svg>
+                </button>
+              </div>
+            </td>
+            <td class="px-5 py-4">
+              <div class="flex items-center justify-end gap-1.5">
+                <button
+                  type="button"
+                  class="rounded-lg px-2.5 py-1.5 text-xs font-medium text-brand-600 hover:bg-brand-50 dark:text-brand-400 dark:hover:bg-brand-500/10"
+                  @click="openEdit(rule)"
+                >
+                  编辑
+                </button>
+                <button
+                  type="button"
+                  class="rounded-lg px-2.5 py-1.5 text-xs font-medium text-error-600 hover:bg-error-50 dark:text-error-400 dark:hover:bg-error-500/10"
+                  @click="askDelete(rule)"
+                >
+                  删除
+                </button>
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- 创建/编辑模态框 -->
+    <transition name="fade">
+      <div
+        v-if="modalOpen"
+        class="fixed inset-0 z-[100001] flex items-center justify-center bg-gray-900/40 p-4 backdrop-blur-[1px]"
+        @click.self="closeModal"
+      >
+        <div class="w-full max-w-lg rounded-2xl border border-gray-200 bg-white p-6 shadow-xl dark:border-gray-800 dark:bg-gray-900">
+          <h3 class="mb-4 text-base font-semibold text-gray-800 dark:text-white/90">
+            {{ isEdit ? '编辑别名规则' : '新建别名规则' }}
+          </h3>
+
+          <p
+            v-if="formError !== ''"
+            class="mb-4 rounded-lg bg-error-50 px-4 py-2.5 text-sm text-error-600 dark:bg-error-500/10 dark:text-error-400"
+          >
+            {{ formError }}
+          </p>
+
+          <div class="flex flex-col gap-4">
+            <div>
+              <label class="mb-1.5 block text-sm font-medium text-gray-700 dark:text-gray-300">匹配模式</label>
+              <input
+                v-model="form.pattern"
+                type="text"
+                placeholder="工具原始名称或正则表达式"
+                class="w-full rounded-lg border border-gray-300 px-3.5 py-2.5 text-sm text-gray-800 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white/90"
+              />
+            </div>
+            <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+              <input v-model="form.isRegex" type="checkbox" class="h-4 w-4 rounded border-gray-300 text-brand-500 focus:ring-brand-400" />
+              使用正则匹配（完整匹配）
+            </label>
+            <div>
+              <label class="mb-1.5 block text-sm font-medium text-gray-700 dark:text-gray-300">目标名称</label>
+              <input
+                v-model="form.targetName"
+                type="text"
+                placeholder="重写后的工具名称（与目标描述至少填一项）"
+                class="w-full rounded-lg border border-gray-300 px-3.5 py-2.5 text-sm text-gray-800 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white/90"
+              />
+            </div>
+            <div>
+              <label class="mb-1.5 block text-sm font-medium text-gray-700 dark:text-gray-300">目标描述</label>
+              <textarea
+                v-model="form.targetDesc"
+                rows="3"
+                placeholder="重写后的工具描述（与目标名称至少填一项）"
+                class="w-full rounded-lg border border-gray-300 px-3.5 py-2.5 text-sm text-gray-800 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white/90"
+              ></textarea>
+            </div>
+          </div>
+
+          <div class="mt-6 flex justify-end gap-3">
+            <button
+              type="button"
+              class="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+              @click="closeModal"
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              class="rounded-lg bg-brand-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-brand-600 disabled:opacity-50"
+              :disabled="saving"
+              @click="submit"
+            >
+              {{ saving ? '保存中…' : '保存' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </transition>
+
+    <!-- 删除确认 -->
+    <transition name="fade">
+      <div
+        v-if="deleting !== null"
+        class="fixed inset-0 z-[100001] flex items-center justify-center bg-gray-900/40 p-4 backdrop-blur-[1px]"
+        @click.self="deleting = null"
+      >
+        <div class="w-full max-w-sm rounded-2xl border border-gray-200 bg-white p-6 shadow-xl dark:border-gray-800 dark:bg-gray-900">
+          <h3 class="mb-2 text-base font-semibold text-gray-800 dark:text-white/90">确认删除</h3>
+          <p class="mb-5 text-sm text-gray-500 dark:text-gray-400">
+            确定删除别名规则「{{ deleting.pattern }}」吗？该操作不可恢复。
+          </p>
+          <div class="flex justify-end gap-3">
+            <button
+              type="button"
+              class="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+              @click="deleting = null"
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              class="rounded-lg bg-error-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-error-600"
+              @click="confirmDelete"
+            >
+              删除
+            </button>
+          </div>
+        </div>
+      </div>
+    </transition>
+  </section>
+</template>
+
+<style scoped>
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.2s ease;
+}
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+</style>

@@ -1,0 +1,174 @@
+package httpapi
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"testing"
+	"time"
+
+	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
+	"github.com/myGithub/mcp-proxy-gateway/internal/store"
+)
+
+// 本文件以内存 fake 注入 StatsService，验证统计查询端点（按上游/按 API Key/工具排行）
+// 的路由装配、时间区间与 limit 参数解析、错误映射，无需接真实仓储。
+
+// fakeStats 是 StatsService 的内存实现，记录最近一次入参以便断言。
+type fakeStats struct {
+	upstreamCounts []store.DimensionCount
+	apiKeyCounts   []store.DimensionCount
+	topTools       []store.ToolRank
+	err            error
+
+	gotStart time.Time
+	gotEnd   time.Time
+	gotLimit int
+}
+
+func (f *fakeStats) CountByUpstream(_ context.Context, start, end time.Time) ([]store.DimensionCount, error) {
+	f.gotStart, f.gotEnd = start, end
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.upstreamCounts, nil
+}
+
+func (f *fakeStats) CountByAPIKey(_ context.Context, start, end time.Time) ([]store.DimensionCount, error) {
+	f.gotStart, f.gotEnd = start, end
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.apiKeyCounts, nil
+}
+
+func (f *fakeStats) TopTools(_ context.Context, start, end time.Time, limit int) ([]store.ToolRank, error) {
+	f.gotStart, f.gotEnd, f.gotLimit = start, end, limit
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.topTools, nil
+}
+
+// TestStatsByUpstream 验证按上游统计端点返回计数并解析时间区间。
+func TestStatsByUpstream(t *testing.T) {
+	st := &fakeStats{upstreamCounts: []store.DimensionCount{{ID: "up-1", Count: 5}}}
+	e := newTestEngine(Deps{Stats: st})
+
+	w := doJSON(e, http.MethodGet, "/api/admin/stats/upstreams?start=2024-01-01T00:00:00Z&end=2024-02-01T00:00:00Z", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("期望 HTTP 200，实际 %d，响应体 %s", w.Code, w.Body.String())
+	}
+	var got struct {
+		Counts []store.DimensionCount `json:"counts"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("解析响应失败：%v", err)
+	}
+	if len(got.Counts) != 1 || got.Counts[0].ID != "up-1" {
+		t.Errorf("统计结果不符：%+v", got.Counts)
+	}
+	if !st.gotStart.Equal(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)) {
+		t.Errorf("start 未正确解析：%v", st.gotStart)
+	}
+}
+
+// TestStatsByAPIKey 验证按 API Key 统计端点返回计数。
+func TestStatsByAPIKey(t *testing.T) {
+	st := &fakeStats{apiKeyCounts: []store.DimensionCount{{ID: "key-1", Count: 9}}}
+	e := newTestEngine(Deps{Stats: st})
+
+	w := doJSON(e, http.MethodGet, "/api/admin/stats/apikeys", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("期望 HTTP 200，实际 %d", w.Code)
+	}
+	var got struct {
+		Counts []store.DimensionCount `json:"counts"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("解析响应失败：%v", err)
+	}
+	if len(got.Counts) != 1 || got.Counts[0].Count != 9 {
+		t.Errorf("统计结果不符：%+v", got.Counts)
+	}
+}
+
+// TestStatsTopToolsParsesLimit 验证工具排行端点解析 limit 并透传给统计服务（Req 16.3）。
+func TestStatsTopToolsParsesLimit(t *testing.T) {
+	st := &fakeStats{topTools: []store.ToolRank{{UpstreamID: "up", OriginalName: "t1", Count: 3}}}
+	e := newTestEngine(Deps{Stats: st})
+
+	w := doJSON(e, http.MethodGet, "/api/admin/stats/tools?limit=5", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("期望 HTTP 200，实际 %d", w.Code)
+	}
+	if st.gotLimit != 5 {
+		t.Errorf("期望 limit=5 透传给服务，实际 %d", st.gotLimit)
+	}
+	var got struct {
+		Tools []store.ToolRank `json:"tools"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("解析响应失败：%v", err)
+	}
+	if len(got.Tools) != 1 {
+		t.Errorf("排行结果不符：%+v", got.Tools)
+	}
+}
+
+// TestStatsTopToolsDefaultLimit 验证缺省 limit 时以 0 透传（由服务取默认值）。
+func TestStatsTopToolsDefaultLimit(t *testing.T) {
+	st := &fakeStats{}
+	e := newTestEngine(Deps{Stats: st})
+
+	w := doJSON(e, http.MethodGet, "/api/admin/stats/tools", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("期望 HTTP 200，实际 %d", w.Code)
+	}
+	if st.gotLimit != 0 {
+		t.Errorf("缺省 limit 期望以 0 透传，实际 %d", st.gotLimit)
+	}
+}
+
+// TestStatsInvalidTimeMapsTo400 验证非法时间参数返回字段级 400。
+func TestStatsInvalidTimeMapsTo400(t *testing.T) {
+	st := &fakeStats{}
+	e := newTestEngine(Deps{Stats: st})
+
+	w := doJSON(e, http.MethodGet, "/api/admin/stats/upstreams?start=not-a-time", "")
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("非法时间期望 HTTP 400，实际 %d", w.Code)
+	}
+}
+
+// TestStatsInvalidLimitMapsTo400 验证非整数 limit 返回字段级 400。
+func TestStatsInvalidLimitMapsTo400(t *testing.T) {
+	st := &fakeStats{}
+	e := newTestEngine(Deps{Stats: st})
+
+	w := doJSON(e, http.MethodGet, "/api/admin/stats/tools?limit=abc", "")
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("非法 limit 期望 HTTP 400，实际 %d", w.Code)
+	}
+}
+
+// TestStatsRangeValidationFromService 验证下层「开始晚于结束」VALIDATION 被映射为 400（Req 16.7）。
+func TestStatsRangeValidationFromService(t *testing.T) {
+	st := &fakeStats{err: domain.NewError(domain.CodeValidation, "开始时间晚于结束时间")}
+	e := newTestEngine(Deps{Stats: st})
+
+	w := doJSON(e, http.MethodGet, "/api/admin/stats/upstreams?start=2024-02-01T00:00:00Z&end=2024-01-01T00:00:00Z", "")
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("非法区间期望 HTTP 400，实际 %d", w.Code)
+	}
+}
+
+// TestStatsServiceUnavailable 验证依赖未接线时返回 503。
+func TestStatsServiceUnavailable(t *testing.T) {
+	e := newTestEngine(Deps{})
+
+	w := doJSON(e, http.MethodGet, "/api/admin/stats/tools", "")
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("依赖未接线期望 HTTP 503，实际 %d", w.Code)
+	}
+}

@@ -1,0 +1,36 @@
+# 多阶段构建在镜像内完成前端构建与 Go 编译，故构建上下文需包含源码，
+# 此处仅排除与构建无关或会被镜像内重新生成的内容，保持上下文精简。
+
+# 版本控制与 IDE
+.git
+.gitignore
+.gitattributes
+.vscode
+.idea
+.kiro
+
+# Go 构建/测试产物
+/out
+*.exe
+*.test
+*.out
+coverage.*
+
+# 前端依赖与构建产物（镜像内由阶段一重新安装/构建）
+web/node_modules
+web/dist
+web/.vscode
+
+# 内嵌占位目录中的真实前端产物（由阶段二 COPY --from=web 重新生成）
+internal/static/dist/assets
+internal/static/dist/images
+internal/static/dist/favicon.ico
+
+# 文档与杂项（不参与构建）
+*.md
+LICENSE
+
+# 本地环境与日志
+.env
+.env.*
+*.log

@@ -1,0 +1,33 @@
+# ===== 前端 =====
+# 依赖与构建产物
+/web/node_modules/
+/web/dist/
+# Vite/工具缓存
+/web/.eslintcache
+/web/*.local
+
+# 前端构建产物：由前端构建步骤同步至 internal/static/dist 供 go:embed 内嵌，
+# 属构建产物，不纳入版本控制（仓库仅保留最小占位 dist/index.html 以保证 go build 可编译）。
+/internal/static/dist/assets/
+/internal/static/dist/images/
+/internal/static/dist/favicon.ico
+
+# ===== 后端 / Go =====
+# 编译产物
+/out/
+*.exe
+*.test
+*.out
+coverage.*
+# 本地运行数据目录（YAML 配置与持久化数据）
+/data/
+
+# ===== 环境与密钥 =====
+.env
+.env.*
+
+# ===== 编辑器 / 系统 =====
+.idea/
+*.log
+.DS_Store
+Thumbs.db

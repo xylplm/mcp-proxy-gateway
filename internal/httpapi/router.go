@@ -1,0 +1,312 @@
+package httpapi
+
+import (
+	"context"
+	"time"
+
+	"github.com/gin-gonic/gin"
+
+	"github.com/myGithub/mcp-proxy-gateway/internal/apikey"
+	"github.com/myGithub/mcp-proxy-gateway/internal/audit"
+	"github.com/myGithub/mcp-proxy-gateway/internal/config"
+	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
+	"github.com/myGithub/mcp-proxy-gateway/internal/store"
+	"github.com/myGithub/mcp-proxy-gateway/internal/template"
+)
+
+// 本文件（任务 19.1）定义管理 REST API 的依赖契约与路由装配入口，覆盖上游 MCP、
+// 别名/屏蔽规则、API Key 及其屏蔽规则/ACL/限流配置三大类管理端点，全部挂载在
+// 管理员 JWT 中间件之下、统一前缀 /api/admin（设计「路由分面」，Req 17.5）。
+//
+// 架构定位：httpapi 是组合层（composition layer）。它不持有业务逻辑，仅把请求解析、
+// 校验委派、应用服务/仓储调用与统一错误响应接线起来。各依赖以窄接口注入，既贴合本
+// 项目其余包「窄接口 + 函数式选项」的风格，也便于在不接真实数据库的前提下做处理器单测。
+//
+// 依赖说明：
+//   - 上游 MCP 的 CRUD/启停/排序/重连由连接管理器（*manager.Manager）提供，手动刷新
+//     由同步服务的刷新器（*syncsvc.Refresher）提供。
+//   - 别名规则与 MCP 级屏蔽规则尚无独立应用服务，故由本层直接接线对应仓储
+//     （*store.AliasRepo、*store.FilterMCPRepo）并复用领域规则引擎做保存前字段校验，
+//     与设计「规则引擎为纯函数式」一致。
+//   - API Key 生命周期、API Key 级屏蔽规则分别由 *apikey.Manager、*apikey.FilterManager
+//     提供；ACL 白名单与限流配置无独立应用服务，由本层接线对应仓储完成。
+
+// UpstreamService 是上游 MCP 管理依赖的应用服务窄接口（Req 2.1、3.1、3.4、5.6、6.4）。
+//
+// *manager.Manager 满足该接口。相较 domain.MCP_Manager，此处额外要求 List（管理列表
+// 需返回各上游配置与连接状态，Req 2.3、2.8），并省略仅供内部使用的 GetState。
+type UpstreamService interface {
+	// Create 创建上游 MCP 服务。
+	Create(ctx context.Context, cfg domain.UpstreamConfig) (domain.Upstream, error)
+	// Update 更新上游 MCP 配置并按新配置重建连接。
+	Update(ctx context.Context, id string, cfg domain.UpstreamConfig) (domain.Upstream, error)
+	// Delete 删除上游 MCP 服务并级联清理工具缓存与规则。
+	Delete(ctx context.Context, id string) error
+	// List 返回全部上游 MCP 及其当前连接状态。
+	List(ctx context.Context) ([]domain.Upstream, error)
+	// SetEnabled 启用或停用某个上游 MCP 服务。
+	SetEnabled(ctx context.Context, id string, enabled bool) error
+	// Reorder 提交新的排序顺序（校验为已注册标识的恰好一次排列）。
+	Reorder(ctx context.Context, orderedIDs []string) error
+	// Reconnect 由管理员手动发起重连。
+	Reconnect(ctx context.Context, id string) error
+}
+
+// ToolRefresher 是手动刷新某上游 MCP 工具列表的窄接口（Req 6.4、6.5）。
+//
+// *syncsvc.Refresher 满足该接口。
+type ToolRefresher interface {
+	// Refresh 手动刷新指定上游 MCP 的工具列表，成功返回最新列表。
+	Refresh(ctx context.Context, upstreamID string) ([]domain.ToolDef, error)
+}
+
+// RuleValidator 是保存前校验别名/屏蔽规则的窄接口（Req 8.9、9.7、9.8、13.4）。
+//
+// *domain.engine（经 domain.NewRuleEngine 构造）满足该接口。
+type RuleValidator interface {
+	// ValidateAlias 校验别名规则（正则合法性、模式长度、目标字段非空等）。
+	ValidateAlias(r domain.AliasRule) error
+	// ValidateFilter 校验屏蔽规则（正则合法性、模式长度 1-200）。
+	ValidateFilter(r domain.FilterRule) error
+}
+
+// AliasStore 是别名规则管理依赖的仓储窄接口（Req 8.1）。
+//
+// *store.AliasRepo 满足该接口。
+type AliasStore interface {
+	Create(ctx context.Context, rule domain.AliasRule) (domain.AliasRule, error)
+	Get(ctx context.Context, id string) (domain.AliasRule, error)
+	ListByUpstream(ctx context.Context, upstreamID string) ([]domain.AliasRule, error)
+	Update(ctx context.Context, rule domain.AliasRule) (domain.AliasRule, error)
+	Delete(ctx context.Context, id string) error
+}
+
+// FilterMCPStore 是 MCP 级屏蔽规则管理依赖的仓储窄接口（Req 9.1、9.2、9.9、9.11）。
+//
+// *store.FilterMCPRepo 满足该接口。
+type FilterMCPStore interface {
+	Create(ctx context.Context, row store.FilterMCPRow) (store.FilterMCPRow, error)
+	Get(ctx context.Context, id string) (store.FilterMCPRow, error)
+	ListByUpstream(ctx context.Context, upstreamID string) ([]store.FilterMCPRow, error)
+	CountByUpstream(ctx context.Context, upstreamID string) (int, error)
+	Update(ctx context.Context, row store.FilterMCPRow) (store.FilterMCPRow, error)
+	SetEnabled(ctx context.Context, id string, enabled bool) error
+	Delete(ctx context.Context, id string) error
+}
+
+// APIKeyService 是 API Key 生命周期管理依赖的应用服务窄接口（Req 12.1）。
+//
+// *apikey.Manager 满足该接口。
+type APIKeyService interface {
+	Create(ctx context.Context, in apikey.CreateInput) (apikey.Created, error)
+	Get(ctx context.Context, id string) (apikey.Metadata, error)
+	List(ctx context.Context) ([]apikey.Metadata, error)
+	SetEnabled(ctx context.Context, id string, enabled bool) error
+	Delete(ctx context.Context, id string) error
+}
+
+// APIKeyFilterService 是 API Key 级屏蔽规则管理依赖的应用服务窄接口（Req 13.1）。
+//
+// *apikey.FilterManager 满足该接口。
+type APIKeyFilterService interface {
+	Create(ctx context.Context, in apikey.CreateFilterInput) (apikey.Filter, error)
+	List(ctx context.Context, apiKeyID string) ([]apikey.Filter, error)
+	SetEnabled(ctx context.Context, id string, enabled bool) error
+	Delete(ctx context.Context, id string) error
+}
+
+// ACLStore 是 API Key 来源白名单管理依赖的仓储窄接口（Req 13.9）。
+//
+// *store.ACLRepo 满足该接口。
+type ACLStore interface {
+	Create(ctx context.Context, entry store.ACLEntry) (store.ACLEntry, error)
+	ListByAPIKey(ctx context.Context, apiKeyID string) ([]store.ACLEntry, error)
+	Delete(ctx context.Context, id string) error
+}
+
+// RateLimitStore 是 API Key 限流配置读写依赖的仓储窄接口（Req 21）。
+//
+// 限流配置（速率上限与窗口）属 api_key 表元数据字段，无独立应用服务，故经此接口
+// 直接读取后回写。*store.APIKeyRepo 满足该接口。
+type RateLimitStore interface {
+	Get(ctx context.Context, id string) (store.APIKey, error)
+	Update(ctx context.Context, key store.APIKey) (store.APIKey, error)
+}
+
+// TemplateService 是模板市场（Template_Market）只读查询依赖的应用服务窄接口
+// （Req 14.1-14.7、14.13）。
+//
+// *template.Market 满足该接口。各查询方法返回深拷贝且无匹配时返回非 nil 空列表，
+// Get/Prefill 在模板不存在时返回 NOT_FOUND 错误。
+type TemplateService interface {
+	// List 返回模板市场中的全部模板。
+	List() []template.Template
+	// ListByCategory 返回指定分类下的模板（无匹配返回空列表）。
+	ListByCategory(c template.Category) []template.Template
+	// Search 按关键字检索名称或简介命中的模板（关键字为空视为不限定）。
+	Search(keyword string) []template.Template
+	// ListByCategories 返回按分类组织的模板视图，用于分类导航。
+	ListByCategories() []template.CategoryView
+	// Get 按标识返回模板详情；不存在返回 NOT_FOUND。
+	Get(id string) (template.Template, error)
+	// Prefill 返回基于模板的表单预填充数据；模板不存在返回 NOT_FOUND。
+	Prefill(templateID string) (template.PrefillForm, error)
+}
+
+// AuthService 是管理员认证依赖的应用服务窄接口（Req 1）。
+//
+// *auth.Service 满足该接口。注册/登录为公开端点（无需 JWT），改密为受保护端点。
+type AuthService interface {
+	// IsInitialized 报告是否已存在管理员账号（Req 1.1）。
+	IsInitialized() bool
+	// Register 注册唯一管理员账号并完成首次初始化（Req 1.2、1.3、1.9）。
+	Register(username, password string) error
+	// Login 校验凭证，匹配则签发会话令牌及其过期时刻（Req 1.4、1.5）。
+	Login(username, password string) (token string, expiresAt time.Time, err error)
+	// ChangePassword 校验当前密码与新密码后更新密码哈希（Req 1.8、1.10）。
+	ChangePassword(currentPassword, newPassword string) error
+}
+
+// SettingsService 是系统设置读写依赖的配置管理窄接口（Req 18.4、7.3）。
+//
+// *config.Manager 满足该接口。读取返回 YAML 常规配置快照，写入前由配置校验与
+// cron 校验把关（非法返回 VALIDATION）。
+type SettingsService interface {
+	// Config 返回当前 YAML 常规配置的快照副本。
+	Config() config.YAMLConfig
+	// Save 校验并将给定 YAML 配置回写持久化，成功后更新内存快照（Req 18.4）。
+	Save(cfg config.YAMLConfig) error
+}
+
+// CronValidator 是同步 cron 表达式保存前校验的窄接口（Req 7.3、7.4）。
+//
+// syncsvc.ValidateCron 满足该函数签名（以函数值注入，避免本包依赖 sync 包）。
+type CronValidator func(expr string) error
+
+// StatsService 是统计查询依赖的应用服务窄接口（Req 16.2、16.3、16.4）。
+//
+// *stats.QueryService 满足该接口。时间区间非法（开始晚于结束）由下层返回 VALIDATION。
+type StatsService interface {
+	// CountByUpstream 统计闭区间内各上游 MCP 的调用条数。
+	CountByUpstream(ctx context.Context, start, end time.Time) ([]store.DimensionCount, error)
+	// CountByAPIKey 统计闭区间内各 API Key 的调用条数。
+	CountByAPIKey(ctx context.Context, start, end time.Time) ([]store.DimensionCount, error)
+	// TopTools 返回闭区间内按调用次数降序的工具排行，至多 limit 条。
+	TopTools(ctx context.Context, start, end time.Time, limit int) ([]store.ToolRank, error)
+}
+
+// AuditService 是审计日志分页查询依赖的应用服务窄接口（Req 22.4）。
+//
+// *audit.Service 满足该接口。返回按发生时间倒序的分页结果。
+type AuditService interface {
+	// List 按发生时间倒序分页返回审计记录及总数（入参越界由下层收敛）。
+	List(ctx context.Context, page, pageSize int) (audit.PageResult, error)
+}
+
+// Router 汇集管理 REST API 的全部依赖，并提供路由装配方法。
+//
+// 各依赖均为窄接口，由装配层（任务 27.2）注入具体实现。允许部分依赖为 nil：对应
+// 端点在缺失依赖时将以服务未就绪的方式拒绝（见各处理器的防御性判断），便于渐进接线。
+type Router struct {
+	// upstream 为上游 MCP 管理应用服务。
+	upstream UpstreamService
+	// refresher 为上游工具列表手动刷新器。
+	refresher ToolRefresher
+	// ruleValidator 为别名/屏蔽规则的保存前校验器（领域规则引擎）。
+	ruleValidator RuleValidator
+	// aliasStore 为别名规则仓储。
+	aliasStore AliasStore
+	// filterMCPStore 为 MCP 级屏蔽规则仓储。
+	filterMCPStore FilterMCPStore
+	// apiKeys 为 API Key 生命周期管理应用服务。
+	apiKeys APIKeyService
+	// apiKeyFilters 为 API Key 级屏蔽规则管理应用服务。
+	apiKeyFilters APIKeyFilterService
+	// aclStore 为 API Key 来源白名单仓储。
+	aclStore ACLStore
+	// rateLimitStore 为 API Key 限流配置仓储。
+	rateLimitStore RateLimitStore
+	// auth 为管理员认证应用服务（注册/登录/改密）。
+	auth AuthService
+	// settings 为系统设置读写配置管理器。
+	settings SettingsService
+	// validateCron 为同步 cron 表达式保存前校验函数；为 nil 时跳过 cron 专项校验。
+	validateCron CronValidator
+	// stats 为统计查询应用服务。
+	stats StatsService
+	// audit 为审计日志分页查询应用服务。
+	audit AuditService
+	// templates 为模板市场只读查询应用服务。
+	templates TemplateService
+}
+
+// Deps 聚合构造 Router 所需的全部依赖，便于装配层一次性注入。
+type Deps struct {
+	Upstream       UpstreamService
+	Refresher      ToolRefresher
+	RuleValidator  RuleValidator
+	AliasStore     AliasStore
+	FilterMCPStore FilterMCPStore
+	APIKeys        APIKeyService
+	APIKeyFilters  APIKeyFilterService
+	ACLStore       ACLStore
+	RateLimitStore RateLimitStore
+	Auth           AuthService
+	Settings       SettingsService
+	ValidateCron   CronValidator
+	Stats          StatsService
+	Audit          AuditService
+	Templates      TemplateService
+}
+
+// NewRouter 构造管理 REST API 路由器。
+func NewRouter(d Deps) *Router {
+	return &Router{
+		upstream:       d.Upstream,
+		refresher:      d.Refresher,
+		ruleValidator:  d.RuleValidator,
+		aliasStore:     d.AliasStore,
+		filterMCPStore: d.FilterMCPStore,
+		apiKeys:        d.APIKeys,
+		apiKeyFilters:  d.APIKeyFilters,
+		aclStore:       d.ACLStore,
+		rateLimitStore: d.RateLimitStore,
+		auth:           d.Auth,
+		settings:       d.Settings,
+		validateCron:   d.ValidateCron,
+		stats:          d.Stats,
+		audit:          d.Audit,
+		templates:      d.Templates,
+	}
+}
+
+// Register 在给定路由器上注册管理 REST API 端点（Req 17.5）。
+//
+// 路由分两组：
+//   - 公开认证组 /api/auth/*：管理员注册（首次初始化）与登录，无需 JWT（Req 1.1、1.4），
+//     以便未持令牌的浏览器完成初始化与登录。该组始终注册，不受 adminAuth 是否为 nil 影响。
+//   - 受保护管理组 /api/admin/*：上游 MCP、规则、API Key、系统设置、统计、审计与改密，
+//     全部置于管理员 JWT 中间件之下。
+//
+// adminAuth 为管理员 JWT 鉴权中间件（通常为 auth.RequireAdmin 的返回值），以参数注入
+// 以避免本包与具体鉴权实现耦合。adminAuth 为 nil 时不注册任何受保护端点，避免误将管理
+// 端点暴露为无保护；但公开认证组仍会注册。
+func (r *Router) Register(router gin.IRouter, adminAuth gin.HandlerFunc) {
+	// 公开认证端点（注册/登录），无需 JWT（Req 1.1、1.4）。
+	r.registerPublicAuthRoutes(router)
+
+	if adminAuth == nil {
+		return
+	}
+
+	admin := router.Group("/api/admin", adminAuth)
+
+	r.registerUpstreamRoutes(admin)
+	r.registerRuleRoutes(admin)
+	r.registerAPIKeyRoutes(admin)
+	r.registerSettingsRoutes(admin)
+	r.registerStatsRoutes(admin)
+	r.registerAuditRoutes(admin)
+	r.registerTemplateRoutes(admin)
+	r.registerProtectedAuthRoutes(admin)
+}

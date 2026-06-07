@@ -1,0 +1,169 @@
+# GitHub Action 发布流水线
+#
+# 触发方式：仅手动触发（workflow_dispatch），不在 push/tag 时自动发版。
+#
+# 构建策略（串行 embed + 多阶段构建）：
+#   1) quality   —— 质量门禁（前端 lint + 后端 vet/格式检查/测试），失败即中止
+#   2) version   —— 生成日期版本号 1.0.<YYYYMMDDHHmm>（北京时间）
+#   3) docker    —— 用 buildx 一步构建多架构镜像并推送 Docker Hub。
+#                   编译在镜像内多阶段完成：前端构建 → Go 内嵌前端并交叉编译 → distroless 运行镜像。
+#   4) release   —— 自动打 git tag 并创建 GitHub Release
+#
+# 交付物为自包含静态二进制（前端经 //go:embed 内嵌），distroless 运行镜像体积小、攻击面最小。
+#
+# 约定写死的固定值（无需环境变量/密钥）：
+#   - 镜像仓库：Docker Hub
+#   - 镜像名称：xylplm/mcp-proxy-gateway
+# 需要在仓库 Secrets 中配置的凭据（敏感，不可写死）：
+#   - DOCKERHUB_USERNAME：Docker Hub 用户名
+#   - DOCKERHUB_TOKEN：Docker Hub 访问令牌
+name: release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write # 创建 tag 与 Release 需要写权限
+
+env:
+  IMAGE_NAME: xylplm/mcp-proxy-gateway
+
+jobs:
+  # ===========================================================================
+  # 质量门禁：发版前的前端 / 后端校验，任一失败即中止后续全部任务。
+  # ===========================================================================
+  quality:
+    name: 质量门禁
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: 前端依赖安装
+        working-directory: ./web
+        run: npm ci
+
+      - name: 前端 ESLint 校验
+        working-directory: ./web
+        run: npm run lint
+
+      - name: 后端 go vet
+        run: go vet ./...
+
+      - name: 后端 gofmt 格式检查
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "以下文件未通过 gofmt 格式检查："
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: 后端测试
+        run: go test ./...
+
+  # ===========================================================================
+  # 版本号：生成 1.0.<北京时间 YYYYMMDDHHmm>，供后续任务共享。
+  # ===========================================================================
+  version:
+    name: 生成版本号
+    needs: quality
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      tag: ${{ steps.ver.outputs.tag }}
+    steps:
+      - name: 生成日期版本号
+        id: ver
+        run: |
+          VERSION="1.0.$(TZ=Asia/Shanghai date +%Y%m%d%H%M)"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "生成版本号：${VERSION}（tag v${VERSION}）"
+
+  # ===========================================================================
+  # 构建并推送：buildx 一步出多架构镜像（编译在镜像多阶段内完成）。
+  # ===========================================================================
+  docker:
+    name: 构建并推送多架构镜像
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 配置 QEMU（多架构）
+        uses: docker/setup-qemu-action@v3
+
+      - name: 配置 Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 登录 Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: 构建并推送（amd64 + arm64，版本号 + latest）
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: false
+          build-args: |
+            VERSION=${{ needs.version.outputs.version }}
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ needs.version.outputs.version }}
+            ${{ env.IMAGE_NAME }}:latest
+          labels: |
+            org.opencontainers.image.title=MCP Proxy Gateway
+            org.opencontainers.image.version=${{ needs.version.outputs.version }}
+            org.opencontainers.image.source=https://github.com/xylplm/mcp-proxy-gateway
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ===========================================================================
+  # 发布：镜像推送成功后，自动打 git tag 并创建 GitHub Release。
+  # ===========================================================================
+  release:
+    name: 打 tag 并发布 Release
+    needs: [version, docker]
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 打 git tag 并创建 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.version.outputs.tag }}
+          name: ${{ needs.version.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          generate_release_notes: true
+          body: |
+            自动发布版本 `${{ needs.version.outputs.version }}`。
+
+            多架构 Docker 镜像（linux/amd64、linux/arm64）：
+            - `xylplm/mcp-proxy-gateway:${{ needs.version.outputs.version }}`
+            - `xylplm/mcp-proxy-gateway:latest`
+
+            拉取并运行：
+            ```bash
+            docker pull xylplm/mcp-proxy-gateway:${{ needs.version.outputs.version }}
+            ```
