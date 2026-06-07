@@ -341,71 +341,50 @@ watch(
               </button>
             </div>
 
-            <div class="overflow-hidden rounded-xl border border-gray-200 dark:border-gray-800">
-              <table class="min-w-full">
-                <thead>
-                  <tr class="border-b border-gray-200 text-left text-xs font-medium text-gray-500 uppercase dark:border-gray-800 dark:text-gray-400">
-                    <th class="px-4 py-3">匹配模式</th>
-                    <th class="px-4 py-3">类型</th>
-                    <th class="px-4 py-3">启用</th>
-                    <th class="px-4 py-3 text-right">操作</th>
-                  </tr>
-                </thead>
-                <tbody class="divide-y divide-gray-100 dark:divide-gray-800">
-                  <tr v-if="filtersLoading">
-                    <td colspan="4" class="px-4 py-8 text-center text-sm text-gray-400">加载中…</td>
-                  </tr>
-                  <tr v-else-if="filters.length === 0">
-                    <td colspan="4" class="px-4 py-8 text-center text-sm text-gray-400">
-                      暂无屏蔽规则
-                    </td>
-                  </tr>
-                  <tr
-                    v-for="rule in filters"
-                    v-else
-                    :key="rule.id"
-                    class="text-sm text-gray-700 dark:text-gray-300"
-                  >
-                    <td class="px-4 py-3 font-mono text-xs break-all">{{ rule.pattern }}</td>
-                    <td class="px-4 py-3">
-                      <span
-                        class="inline-flex items-center rounded-full px-2 py-0.5 text-xs"
-                        :class="
-                          rule.isRegex
-                            ? 'bg-brand-50 text-brand-600 dark:bg-brand-500/10 dark:text-brand-400'
-                            : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300'
-                        "
-                      >
-                        {{ rule.isRegex ? '正则' : '通配' }}
-                      </span>
-                    </td>
-                    <td class="px-4 py-3">
-                      <button
-                        type="button"
-                        role="switch"
-                        :aria-checked="rule.enabled"
-                        class="relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition"
-                        :class="rule.enabled ? 'bg-brand-500' : 'bg-gray-300 dark:bg-gray-700'"
-                        @click="toggleFilter(rule)"
-                      >
-                        <span
-                          class="inline-block h-3.5 w-3.5 transform rounded-full bg-white transition"
-                          :class="rule.enabled ? 'translate-x-5' : 'translate-x-1'"
-                        ></span>
-                      </button>
-                    </td>
-                    <td class="px-4 py-3 text-right">
-                      <button
-                        type="button"
-                        class="rounded-lg px-2.5 py-1.5 text-xs font-medium text-error-600 hover:bg-error-50 dark:text-error-400 dark:hover:bg-error-500/10"
-                        @click="removeFilter(rule)"
-                      >
-                        删除
-                      </button>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
+            <div v-if="filtersLoading" class="rounded-xl border border-gray-200 px-4 py-8 text-center text-sm text-gray-400 dark:border-gray-800">
+              加载中…
+            </div>
+            <div v-else-if="filters.length === 0" class="rounded-xl border border-dashed border-gray-300 px-4 py-8 text-center text-sm text-gray-400 dark:border-gray-700">
+              暂无屏蔽规则
+            </div>
+            <div v-else class="space-y-2">
+              <div
+                v-for="rule in filters"
+                :key="rule.id"
+                class="flex items-center gap-3 rounded-xl border border-gray-200 bg-white p-3 dark:border-gray-800 dark:bg-white/[0.03]"
+              >
+                <code class="min-w-0 flex-1 truncate font-mono text-xs text-gray-700 dark:text-gray-300" :title="rule.pattern">{{ rule.pattern }}</code>
+                <span
+                  class="shrink-0 inline-flex items-center rounded-full px-2 py-0.5 text-xs"
+                  :class="
+                    rule.isRegex
+                      ? 'bg-brand-50 text-brand-600 dark:bg-brand-500/10 dark:text-brand-400'
+                      : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300'
+                  "
+                >
+                  {{ rule.isRegex ? '正则' : '通配' }}
+                </span>
+                <button
+                  type="button"
+                  role="switch"
+                  :aria-checked="rule.enabled"
+                  class="relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition"
+                  :class="rule.enabled ? 'bg-brand-500' : 'bg-gray-300 dark:bg-gray-700'"
+                  @click="toggleFilter(rule)"
+                >
+                  <span
+                    class="inline-block h-3.5 w-3.5 transform rounded-full bg-white transition"
+                    :class="rule.enabled ? 'translate-x-5' : 'translate-x-1'"
+                  ></span>
+                </button>
+                <button
+                  type="button"
+                  class="shrink-0 rounded-lg px-2.5 py-1.5 text-xs font-medium text-error-600 hover:bg-error-50 dark:text-error-400 dark:hover:bg-error-500/10"
+                  @click="removeFilter(rule)"
+                >
+                  删除
+                </button>
+              </div>
             </div>
           </section>
 
@@ -438,42 +417,27 @@ watch(
               留空表示不限制来源；配置后仅白名单内的来源 IP 可使用该 API Key。
             </p>
 
-            <div class="overflow-hidden rounded-xl border border-gray-200 dark:border-gray-800">
-              <table class="min-w-full">
-                <thead>
-                  <tr class="border-b border-gray-200 text-left text-xs font-medium text-gray-500 uppercase dark:border-gray-800 dark:text-gray-400">
-                    <th class="px-4 py-3">CIDR</th>
-                    <th class="px-4 py-3 text-right">操作</th>
-                  </tr>
-                </thead>
-                <tbody class="divide-y divide-gray-100 dark:divide-gray-800">
-                  <tr v-if="aclLoading">
-                    <td colspan="2" class="px-4 py-8 text-center text-sm text-gray-400">加载中…</td>
-                  </tr>
-                  <tr v-else-if="aclEntries.length === 0">
-                    <td colspan="2" class="px-4 py-8 text-center text-sm text-gray-400">
-                      暂无来源白名单（不限制来源）
-                    </td>
-                  </tr>
-                  <tr
-                    v-for="entry in aclEntries"
-                    v-else
-                    :key="entry.ID"
-                    class="text-sm text-gray-700 dark:text-gray-300"
-                  >
-                    <td class="px-4 py-3 font-mono text-xs">{{ entry.CIDR }}</td>
-                    <td class="px-4 py-3 text-right">
-                      <button
-                        type="button"
-                        class="rounded-lg px-2.5 py-1.5 text-xs font-medium text-error-600 hover:bg-error-50 dark:text-error-400 dark:hover:bg-error-500/10"
-                        @click="removeACL(entry)"
-                      >
-                        删除
-                      </button>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
+            <div v-if="aclLoading" class="rounded-xl border border-gray-200 px-4 py-8 text-center text-sm text-gray-400 dark:border-gray-800">
+              加载中…
+            </div>
+            <div v-else-if="aclEntries.length === 0" class="rounded-xl border border-dashed border-gray-300 px-4 py-8 text-center text-sm text-gray-400 dark:border-gray-700">
+              暂无来源白名单（不限制来源）
+            </div>
+            <div v-else class="space-y-2">
+              <div
+                v-for="entry in aclEntries"
+                :key="entry.ID"
+                class="flex items-center gap-3 rounded-xl border border-gray-200 bg-white p-3 dark:border-gray-800 dark:bg-white/[0.03]"
+              >
+                <code class="min-w-0 flex-1 truncate font-mono text-xs text-gray-700 dark:text-gray-300">{{ entry.CIDR }}</code>
+                <button
+                  type="button"
+                  class="shrink-0 rounded-lg px-2.5 py-1.5 text-xs font-medium text-error-600 hover:bg-error-50 dark:text-error-400 dark:hover:bg-error-500/10"
+                  @click="removeACL(entry)"
+                >
+                  删除
+                </button>
+              </div>
             </div>
           </section>
 

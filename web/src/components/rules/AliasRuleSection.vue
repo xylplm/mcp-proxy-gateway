@@ -254,98 +254,78 @@ defineExpose({ reload: load })
       {{ errorMessage }}
     </p>
 
-    <!-- 列表表格 -->
-    <div class="max-w-full overflow-x-auto">
-      <table class="min-w-full">
-        <thead>
-          <tr class="border-b border-gray-200 text-left text-xs font-medium text-gray-500 uppercase dark:border-gray-800 dark:text-gray-400">
-            <th class="px-5 py-3">匹配模式</th>
-            <th class="px-5 py-3">类型</th>
-            <th class="px-5 py-3">目标</th>
-            <th class="px-5 py-3">排序</th>
-            <th class="px-5 py-3 text-right">操作</th>
-          </tr>
-        </thead>
-        <tbody class="divide-y divide-gray-100 dark:divide-gray-800">
-          <tr v-if="upstreamId === ''">
-            <td colspan="5" class="px-5 py-10 text-center text-sm text-gray-400">请先选择上游 MCP</td>
-          </tr>
-          <tr v-else-if="loading">
-            <td colspan="5" class="px-5 py-10 text-center text-sm text-gray-400">加载中…</td>
-          </tr>
-          <tr v-else-if="rules.length === 0">
-            <td colspan="5" class="px-5 py-10 text-center text-sm text-gray-400">
-              暂无别名规则，点击「新建别名规则」开始添加
-            </td>
-          </tr>
-          <tr
-            v-for="(rule, index) in rules"
-            v-else
-            :key="rule.id"
-            class="text-sm text-gray-700 dark:text-gray-300"
+    <!-- 列表：卡片网格（响应式，移动端友好） -->
+    <div v-if="upstreamId === ''" class="rounded-xl border border-dashed border-gray-300 px-5 py-10 text-center text-sm text-gray-400 dark:border-gray-700">
+      请先选择上游 MCP
+    </div>
+    <div v-else-if="loading" class="rounded-xl border border-gray-200 px-5 py-10 text-center text-sm text-gray-400 dark:border-gray-800">
+      加载中…
+    </div>
+    <div v-else-if="rules.length === 0" class="rounded-xl border border-dashed border-gray-300 px-5 py-10 text-center text-sm text-gray-400 dark:border-gray-700">
+      暂无别名规则，点击「新建别名规则」开始添加
+    </div>
+    <div v-else class="grid grid-cols-1 gap-3 md:grid-cols-2">
+      <div
+        v-for="(rule, index) in rules"
+        :key="rule.id"
+        class="flex flex-col rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-white/[0.03]"
+      >
+        <div class="mb-2 flex items-start justify-between gap-2">
+          <code class="min-w-0 flex-1 truncate rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-800 dark:bg-gray-800 dark:text-gray-200" :title="rule.pattern">{{ rule.pattern }}</code>
+          <span
+            class="shrink-0 inline-flex items-center rounded-full px-2 py-0.5 text-xs"
+            :class="rule.isRegex
+              ? 'bg-brand-50 text-brand-600 dark:bg-brand-500/10 dark:text-brand-400'
+              : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300'"
           >
-            <td class="px-5 py-4">
-              <code class="rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-800 dark:bg-gray-800 dark:text-gray-200">{{ rule.pattern }}</code>
-            </td>
-            <td class="px-5 py-4">
-              <span
-                class="inline-flex items-center rounded-full px-2.5 py-1 text-xs"
-                :class="rule.isRegex
-                  ? 'bg-brand-50 text-brand-600 dark:bg-brand-500/10 dark:text-brand-400'
-                  : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300'"
-              >
-                {{ rule.isRegex ? '正则' : '精确' }}
-              </span>
-            </td>
-            <td class="px-5 py-4">
-              <div v-if="rule.targetName" class="font-medium text-gray-800 dark:text-white/90">{{ rule.targetName }}</div>
-              <div v-if="rule.targetDesc" class="mt-0.5 max-w-xs truncate text-xs text-gray-500 dark:text-gray-400" :title="rule.targetDesc">
-                {{ rule.targetDesc }}
-              </div>
-            </td>
-            <td class="px-5 py-4">
-              <div class="flex items-center gap-1">
-                <button
-                  type="button"
-                  class="rounded-md border border-gray-200 p-1 text-gray-500 hover:bg-gray-50 disabled:opacity-40 dark:border-gray-700 dark:hover:bg-gray-800"
-                  :disabled="index === 0"
-                  aria-label="上移"
-                  @click="move(rule, -1)"
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M6 15l6-6 6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></svg>
-                </button>
-                <button
-                  type="button"
-                  class="rounded-md border border-gray-200 p-1 text-gray-500 hover:bg-gray-50 disabled:opacity-40 dark:border-gray-700 dark:hover:bg-gray-800"
-                  :disabled="index === rules.length - 1"
-                  aria-label="下移"
-                  @click="move(rule, 1)"
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></svg>
-                </button>
-              </div>
-            </td>
-            <td class="px-5 py-4">
-              <div class="flex items-center justify-end gap-1.5">
-                <button
-                  type="button"
-                  class="rounded-lg px-2.5 py-1.5 text-xs font-medium text-brand-600 hover:bg-brand-50 dark:text-brand-400 dark:hover:bg-brand-500/10"
-                  @click="openEdit(rule)"
-                >
-                  编辑
-                </button>
-                <button
-                  type="button"
-                  class="rounded-lg px-2.5 py-1.5 text-xs font-medium text-error-600 hover:bg-error-50 dark:text-error-400 dark:hover:bg-error-500/10"
-                  @click="askDelete(rule)"
-                >
-                  删除
-                </button>
-              </div>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+            {{ rule.isRegex ? '正则' : '精确' }}
+          </span>
+        </div>
+        <div class="mb-3">
+          <div v-if="rule.targetName" class="text-sm font-medium text-gray-800 dark:text-white/90">→ {{ rule.targetName }}</div>
+          <div v-if="rule.targetDesc" class="mt-0.5 truncate text-xs text-gray-500 dark:text-gray-400" :title="rule.targetDesc">
+            {{ rule.targetDesc }}
+          </div>
+        </div>
+        <div class="mt-auto flex items-center justify-between border-t border-gray-100 pt-2.5 dark:border-gray-800">
+          <div class="flex items-center gap-1">
+            <button
+              type="button"
+              class="rounded-md border border-gray-200 p-1 text-gray-500 hover:bg-gray-50 disabled:opacity-40 dark:border-gray-700 dark:hover:bg-gray-800"
+              :disabled="index === 0"
+              aria-label="上移"
+              @click="move(rule, -1)"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M6 15l6-6 6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></svg>
+            </button>
+            <button
+              type="button"
+              class="rounded-md border border-gray-200 p-1 text-gray-500 hover:bg-gray-50 disabled:opacity-40 dark:border-gray-700 dark:hover:bg-gray-800"
+              :disabled="index === rules.length - 1"
+              aria-label="下移"
+              @click="move(rule, 1)"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></svg>
+            </button>
+          </div>
+          <div class="flex items-center gap-1.5">
+            <button
+              type="button"
+              class="rounded-lg px-2.5 py-1.5 text-xs font-medium text-brand-600 hover:bg-brand-50 dark:text-brand-400 dark:hover:bg-brand-500/10"
+              @click="openEdit(rule)"
+            >
+              编辑
+            </button>
+            <button
+              type="button"
+              class="rounded-lg px-2.5 py-1.5 text-xs font-medium text-error-600 hover:bg-error-50 dark:text-error-400 dark:hover:bg-error-500/10"
+              @click="askDelete(rule)"
+            >
+              删除
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- 创建/编辑模态框 -->

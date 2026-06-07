@@ -293,145 +293,137 @@ function globalIndex(up: Upstream): number {
       {{ toast }}
     </p>
 
-    <!-- 列表卡片 -->
-    <div
-      class="rounded-2xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03]"
-    >
+    <!-- 列表：卡片网格（响应式，移动端友好，替代表格） -->
+    <div>
       <p
         v-if="errorMessage !== ''"
-        class="m-4 rounded-lg bg-error-50 px-4 py-2.5 text-sm text-error-600 dark:bg-error-500/10 dark:text-error-400"
+        class="mb-4 rounded-lg bg-error-50 px-4 py-2.5 text-sm text-error-600 dark:bg-error-500/10 dark:text-error-400"
       >
         {{ errorMessage }}
       </p>
 
-      <div class="max-w-full overflow-x-auto">
-        <table class="min-w-full">
-          <thead>
-            <tr class="border-b border-gray-200 text-left text-xs font-medium text-gray-500 uppercase dark:border-gray-800 dark:text-gray-400">
-              <th class="px-5 py-3.5">名称</th>
-              <th class="px-5 py-3.5">传输类型</th>
-              <th class="px-5 py-3.5">启用</th>
-              <th class="px-5 py-3.5">连接状态</th>
-              <th class="px-5 py-3.5">排序</th>
-              <th class="px-5 py-3.5 text-right">操作</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-gray-100 dark:divide-gray-800">
-            <tr v-if="loading">
-              <td colspan="6" class="px-5 py-10 text-center text-sm text-gray-400">加载中…</td>
-            </tr>
-            <tr v-else-if="upstreams.length === 0">
-              <td colspan="6" class="px-5 py-10 text-center text-sm text-gray-400">
-                暂无上游 MCP 服务，点击「新建上游」或「模板市场」开始接入
-              </td>
-            </tr>
-            <tr
-              v-for="up in pagedUpstreams"
-              v-else
-              :key="up.id"
-              class="text-sm text-gray-700 dark:text-gray-300"
-            >
-              <!-- 名称 -->
-              <td class="px-5 py-4">
-                <div class="font-medium text-gray-800 dark:text-white/90">{{ up.config.name }}</div>
-                <div v-if="up.lastError" class="mt-0.5 max-w-xs truncate text-xs text-error-500" :title="up.lastError">
-                  {{ up.lastError }}
-                </div>
-              </td>
-              <!-- 传输类型徽章 -->
-              <td class="px-5 py-4">
-                <span class="inline-flex items-center rounded-full bg-gray-100 px-2.5 py-1 text-xs text-gray-600 dark:bg-gray-800 dark:text-gray-300">
+      <div
+        v-if="loading"
+        class="rounded-2xl border border-gray-200 bg-white px-5 py-12 text-center text-sm text-gray-400 dark:border-gray-800 dark:bg-white/[0.03]"
+      >
+        加载中…
+      </div>
+      <div
+        v-else-if="upstreams.length === 0"
+        class="rounded-2xl border border-dashed border-gray-300 bg-white px-5 py-12 text-center text-sm text-gray-400 dark:border-gray-700 dark:bg-white/[0.03]"
+      >
+        暂无上游 MCP 服务，点击「新建上游」或「模板市场」开始接入
+      </div>
+
+      <div v-else class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        <div
+          v-for="up in pagedUpstreams"
+          :key="up.id"
+          class="flex flex-col rounded-2xl border border-gray-200 bg-white p-5 shadow-sm transition hover:shadow-md dark:border-gray-800 dark:bg-white/[0.03]"
+        >
+          <!-- 头部：名称 + 启停 -->
+          <div class="mb-3 flex items-start justify-between gap-3">
+            <div class="min-w-0">
+              <div class="truncate font-medium text-gray-800 dark:text-white/90" :title="up.config.name">
+                {{ up.config.name }}
+              </div>
+              <div class="mt-1 flex flex-wrap items-center gap-1.5">
+                <span class="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-600 dark:bg-gray-800 dark:text-gray-300">
                   {{ transportLabel(up.config.transport) }}
                 </span>
-              </td>
-              <!-- 启用开关 -->
-              <td class="px-5 py-4">
-                <button
-                  type="button"
-                  role="switch"
-                  :aria-checked="up.config.enabled"
-                  :disabled="isBusy(up.id, 'toggle')"
-                  class="relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition disabled:opacity-60"
-                  :class="up.config.enabled ? 'bg-brand-500' : 'bg-gray-300 dark:bg-gray-700'"
-                  @click="toggleEnabled(up)"
-                >
-                  <span
-                    class="inline-block h-4 w-4 transform rounded-full bg-white transition"
-                    :class="up.config.enabled ? 'translate-x-6' : 'translate-x-1'"
-                  ></span>
-                </button>
-              </td>
-              <!-- 连接状态徽章 -->
-              <td class="px-5 py-4">
                 <ConnStateBadge :state="up.state" />
-              </td>
-              <!-- 排序（上移/下移） -->
-              <td class="px-5 py-4">
-                <div class="flex items-center gap-1">
-                  <button
-                    type="button"
-                    class="rounded-md border border-gray-200 p-1 text-gray-500 hover:bg-gray-50 disabled:opacity-40 dark:border-gray-700 dark:hover:bg-gray-800"
-                    :disabled="globalIndex(up) === 0"
-                    aria-label="上移"
-                    @click="move(up, -1)"
-                  >
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M6 15l6-6 6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></svg>
-                  </button>
-                  <button
-                    type="button"
-                    class="rounded-md border border-gray-200 p-1 text-gray-500 hover:bg-gray-50 disabled:opacity-40 dark:border-gray-700 dark:hover:bg-gray-800"
-                    :disabled="globalIndex(up) === upstreams.length - 1"
-                    aria-label="下移"
-                    @click="move(up, 1)"
-                  >
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></svg>
-                  </button>
-                </div>
-              </td>
-              <!-- 操作 -->
-              <td class="px-5 py-4">
-                <div class="flex items-center justify-end gap-1.5">
-                  <button
-                    type="button"
-                    class="rounded-lg px-2.5 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-100 disabled:opacity-50 dark:text-gray-300 dark:hover:bg-gray-800"
-                    :disabled="isBusy(up.id, 'refresh')"
-                    @click="refresh(up)"
-                  >
-                    {{ isBusy(up.id, 'refresh') ? '刷新中…' : '刷新' }}
-                  </button>
-                  <button
-                    type="button"
-                    class="rounded-lg px-2.5 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-100 disabled:opacity-50 dark:text-gray-300 dark:hover:bg-gray-800"
-                    :disabled="isBusy(up.id, 'reconnect')"
-                    @click="reconnect(up)"
-                  >
-                    {{ isBusy(up.id, 'reconnect') ? '重连中…' : '重连' }}
-                  </button>
-                  <button
-                    type="button"
-                    class="rounded-lg px-2.5 py-1.5 text-xs font-medium text-brand-600 hover:bg-brand-50 dark:text-brand-400 dark:hover:bg-brand-500/10"
-                    @click="openEdit(up)"
-                  >
-                    编辑
-                  </button>
-                  <button
-                    type="button"
-                    class="rounded-lg px-2.5 py-1.5 text-xs font-medium text-error-600 hover:bg-error-50 dark:text-error-400 dark:hover:bg-error-500/10"
-                    @click="askDelete(up)"
-                  >
-                    删除
-                  </button>
-                </div>
-              </td>
-            </tr>
-          </tbody>
-        </table>
+              </div>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              :aria-checked="up.config.enabled"
+              :disabled="isBusy(up.id, 'toggle')"
+              class="relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition disabled:opacity-60"
+              :class="up.config.enabled ? 'bg-brand-500' : 'bg-gray-300 dark:bg-gray-700'"
+              @click="toggleEnabled(up)"
+            >
+              <span
+                class="inline-block h-4 w-4 transform rounded-full bg-white transition"
+                :class="up.config.enabled ? 'translate-x-6' : 'translate-x-1'"
+              ></span>
+            </button>
+          </div>
+
+          <!-- 最近错误（如有） -->
+          <p
+            v-if="up.lastError"
+            class="mb-3 truncate rounded-lg bg-error-50 px-3 py-1.5 text-xs text-error-600 dark:bg-error-500/10 dark:text-error-400"
+            :title="up.lastError"
+          >
+            {{ up.lastError }}
+          </p>
+
+          <!-- 排序 -->
+          <div class="mb-4 flex items-center gap-2 text-xs text-gray-400">
+            <span>排序</span>
+            <div class="flex items-center gap-1">
+              <button
+                type="button"
+                class="rounded-md border border-gray-200 p-1 text-gray-500 hover:bg-gray-50 disabled:opacity-40 dark:border-gray-700 dark:hover:bg-gray-800"
+                :disabled="globalIndex(up) === 0"
+                aria-label="上移"
+                @click="move(up, -1)"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M6 15l6-6 6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></svg>
+              </button>
+              <button
+                type="button"
+                class="rounded-md border border-gray-200 p-1 text-gray-500 hover:bg-gray-50 disabled:opacity-40 dark:border-gray-700 dark:hover:bg-gray-800"
+                :disabled="globalIndex(up) === upstreams.length - 1"
+                aria-label="下移"
+                @click="move(up, 1)"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></svg>
+              </button>
+            </div>
+          </div>
+
+          <!-- 操作 -->
+          <div class="mt-auto flex flex-wrap items-center justify-end gap-1.5 border-t border-gray-100 pt-3 dark:border-gray-800">
+            <button
+              type="button"
+              class="rounded-lg px-2.5 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-100 disabled:opacity-50 dark:text-gray-300 dark:hover:bg-gray-800"
+              :disabled="isBusy(up.id, 'refresh')"
+              @click="refresh(up)"
+            >
+              {{ isBusy(up.id, 'refresh') ? '刷新中…' : '刷新' }}
+            </button>
+            <button
+              type="button"
+              class="rounded-lg px-2.5 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-100 disabled:opacity-50 dark:text-gray-300 dark:hover:bg-gray-800"
+              :disabled="isBusy(up.id, 'reconnect')"
+              @click="reconnect(up)"
+            >
+              {{ isBusy(up.id, 'reconnect') ? '重连中…' : '重连' }}
+            </button>
+            <button
+              type="button"
+              class="rounded-lg px-2.5 py-1.5 text-xs font-medium text-brand-600 hover:bg-brand-50 dark:text-brand-400 dark:hover:bg-brand-500/10"
+              @click="openEdit(up)"
+            >
+              编辑
+            </button>
+            <button
+              type="button"
+              class="rounded-lg px-2.5 py-1.5 text-xs font-medium text-error-600 hover:bg-error-50 dark:text-error-400 dark:hover:bg-error-500/10"
+              @click="askDelete(up)"
+            >
+              删除
+            </button>
+          </div>
+        </div>
       </div>
 
       <!-- 分页 -->
       <div
         v-if="totalPages > 1"
-        class="flex items-center justify-between border-t border-gray-200 px-5 py-4 dark:border-gray-800"
+        class="mt-4 flex items-center justify-between"
       >
         <span class="text-xs text-gray-500 dark:text-gray-400">
           第 {{ currentPage }} / {{ totalPages }} 页
