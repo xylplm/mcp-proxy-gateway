@@ -105,10 +105,11 @@ func TestLoadEnvConfigFailsWhenRequiredMissing(t *testing.T) {
 }
 
 // TestLoadFailsWhenRequiredEnvMissing 验证必需环境变量缺失时 Load 直接返回错误并终止，
-// 不会创建任何配置文件（Req 18.3）。
+// 不会创建任何配置文件（Req 18.3）。注：MPG_ENCRYPTION_KEY 已改为可选（缺失时回退到内置默认密钥），
+// 故此处用 MPG_PG_DSN 验证「真正必需」的环境变量缺失即触发早失败。
 func TestLoadFailsWhenRequiredEnvMissing(t *testing.T) {
 	setRequiredEnv(t)
-	t.Setenv("MPG_ENCRYPTION_KEY", "")
+	t.Setenv("MPG_PG_DSN", "")
 	dataDir := t.TempDir()
 
 	_, err := Load(nil, dataDir)

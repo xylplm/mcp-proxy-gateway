@@ -86,8 +86,9 @@ func New(ctx context.Context, logger *slog.Logger) (*App, error) {
 		return nil, err
 	}
 
-	// 2) 加密服务：启动期校验密钥长度与有效性（缺失/无效即返回错误，Req 19.4）。
-	enc, err := crypto.New(envCfg.EncryptionKey)
+	// 2) 加密服务：MPG_ENCRYPTION_KEY 留空时回退到内置默认密钥并告警，
+	//    非空时校验长度与有效性（无效即返回错误，Req 19.4）。
+	enc, err := crypto.New(envCfg.EncryptionKey, logger)
 	if err != nil {
 		return nil, err
 	}

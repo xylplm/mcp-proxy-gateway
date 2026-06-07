@@ -10,7 +10,7 @@
 # 属构建产物，不纳入版本控制（仓库仅保留最小占位 dist/index.html 以保证 go build 可编译）。
 /internal/static/dist/assets/
 /internal/static/dist/images/
-/internal/static/dist/favicon.ico
+/internal/static/dist/favicon.svg
 
 # ===== 后端 / Go =====
 # 编译产物
@@ -31,3 +31,4 @@ coverage.*
 *.log
 .DS_Store
 Thumbs.db
+.vscode/launch.json

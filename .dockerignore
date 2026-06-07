@@ -24,7 +24,7 @@ web/.vscode
 # 内嵌占位目录中的真实前端产物（由阶段二 COPY --from=web 重新生成）
 internal/static/dist/assets
 internal/static/dist/images
-internal/static/dist/favicon.ico
+internal/static/dist/favicon.svg
 
 # 文档与杂项（不参与构建）
 *.md

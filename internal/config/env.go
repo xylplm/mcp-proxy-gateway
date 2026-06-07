@@ -8,9 +8,9 @@ import (
 
 // EnvConfig 保存来自环境变量的配置：数据库与 Redis 连接、加密密钥与 data 目录。
 //
-// 数据库与 Redis 连接以及加密主密钥不进入 YAML，而是通过环境变量注入
-// （Req 18.1、19.4、23.1）。其中 PG DSN、Redis 地址与加密密钥为必需项，
-// 缺失时解析失败并终止启动（Req 18.3）。
+// 数据库与 Redis 连接通过环境变量注入（Req 18.1、23.1）。其中 PG DSN 与 Redis 地址
+// 为必需项，缺失时解析失败并终止启动（Req 18.3）；加密主密钥可选，留空时回退到内置
+// 默认密钥（见加密服务，生产环境建议显式配置）。
 type EnvConfig struct {
 	// PGDSN 为 PostgreSQL 连接串（环境变量 MPG_PG_DSN，必需）。
 	PGDSN string `env:"MPG_PG_DSN,required,notEmpty"`
@@ -18,9 +18,10 @@ type EnvConfig struct {
 	RedisAddr string `env:"MPG_REDIS_ADDR,required,notEmpty"`
 	// RedisPassword 为 Redis 访问密码（环境变量 MPG_REDIS_PASSWORD，可选）。
 	RedisPassword string `env:"MPG_REDIS_PASSWORD"`
-	// EncryptionKey 为 AES-GCM 主密钥（环境变量 MPG_ENCRYPTION_KEY，必需）。
-	// 此处仅校验其存在性，密钥长度与有效性的进一步校验由加密服务负责（Req 19.4）。
-	EncryptionKey string `env:"MPG_ENCRYPTION_KEY,required,notEmpty"`
+	// EncryptionKey 为 AES-GCM 主密钥（环境变量 MPG_ENCRYPTION_KEY，可选）。
+	// 留空时由加密服务回退到内置默认密钥（仅便于开箱即用，生产环境强烈建议显式配置）；
+	// 非空时其长度与有效性由加密服务进一步校验（Req 19.4）。
+	EncryptionKey string `env:"MPG_ENCRYPTION_KEY"`
 	// DataDir 为 data 目录路径（环境变量 MPG_DATA_DIR，默认 /data）。
 	DataDir string `env:"MPG_DATA_DIR" envDefault:"/data"`
 }

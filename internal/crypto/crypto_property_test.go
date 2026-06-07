@@ -21,7 +21,7 @@ const testKey = "0123456789abcdef0123456789abcdef"
 //   - 密文不等于明文（已被加密变换，且前置 nonce 使长度增加）；
 //   - 对同一明文两次加密的输出互不相同（每次使用新的随机 nonce）。
 func TestProperty17CredentialEncryptDecryptRoundTrip(t *testing.T) {
-	svc, err := New(testKey)
+	svc, err := New(testKey, nil)
 	if err != nil {
 		t.Fatalf("构造加密服务失败：%v", err)
 	}

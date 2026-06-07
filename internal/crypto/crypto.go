@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"io"
+	"log/slog"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
 )
@@ -70,18 +71,37 @@ func decodeKey(key string) ([]byte, bool) {
 	return nil, false
 }
 
+// defaultEncryptionKey 是 MPG_ENCRYPTION_KEY 留空时使用的内置默认密钥（32 字节 AES-256）。
+//
+// 设计取舍：为开箱即用，密钥不再强制要求由部署方显式配置；缺失时由 New 回退到本默认值。
+// 但默认密钥固定且公开，存在以下严肃风险，因此**仅适合本地/演示**：
+//   - 任何拿到镜像的人都可以解密本实例存储的上游凭证；
+//   - 多实例之间使用同一默认密钥，存在跨实例数据互通解密风险。
+//
+// 生产环境请务必通过 MPG_ENCRYPTION_KEY 显式注入随机密钥（见 README）。回退发生时
+// New 会用 slog 打印明显告警。
+const defaultEncryptionKey = "mpg-default-aes-256-key__change!"
+
 // New 使用环境变量 MPG_ENCRYPTION_KEY 提供的密钥串构造加密服务，并在此完成
 // 启动期密钥校验（Req 19.4）。
 //
-// 校验规则：密钥不可为空；其按上文「密钥编码方案」解码后必须为 16、24 或 32
-// 字节（推荐 32 字节即 AES-256）。任一条件不满足时返回 VALIDATION 类错误，
-// 调用方（启动流程）应据此用 slog 记录错误并终止启动。
-func New(key string) (*Service, error) {
+// 校验规则：密钥可为空（此时回退到内置默认密钥并打印告警）；非空时按上文「密钥编码方案」
+// 解码后必须为 16、24 或 32 字节（推荐 32 字节即 AES-256）。配置了非法密钥时返回
+// VALIDATION 类错误，调用方（启动流程）应据此用 slog 记录错误并终止启动。
+//
+// logger 仅用于在回退到默认密钥时发出告警，可为 nil（则使用 slog.Default）。
+func New(key string, logger *slog.Logger) (*Service, error) {
 	if key == "" {
-		return nil, domain.NewError(
-			domain.CodeValidation,
-			"加密密钥缺失：环境变量 MPG_ENCRYPTION_KEY 未设置或为空",
+		// 留空：回退到内置默认密钥并发出明显告警，提示生产环境必须显式配置。
+		if logger == nil {
+			logger = slog.Default()
+		}
+		logger.Warn(
+			"MPG_ENCRYPTION_KEY 未设置，已回退到内置默认密钥；该默认密钥对所有部署相同，"+
+				"仅适合本地/演示，生产环境请务必显式配置 MPG_ENCRYPTION_KEY",
+			"keyBytes", len(defaultEncryptionKey),
 		)
+		key = defaultEncryptionKey
 	}
 
 	rawKey, ok := decodeKey(key)
