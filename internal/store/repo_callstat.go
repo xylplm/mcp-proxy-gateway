@@ -200,7 +200,7 @@ func (r *CallStatRepo) TopTools(ctx context.Context, start, end time.Time, limit
 //   - 同时补建上一个月分区，避免边界时刻（如月初）写入落空到默认分区。
 //
 // 分区创建失败立即返回错误；调用方可据此告警，但不应因此阻断主流程的统计写入
-//（写入失败本就静默降级，Req 16.9）。
+// （写入失败本就静默降级，Req 16.9）。
 func (r *CallStatRepo) EnsurePartitions(ctx context.Context, now time.Time, ahead int) error {
 	if ahead < 0 {
 		ahead = 0

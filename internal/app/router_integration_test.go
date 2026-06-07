@@ -144,7 +144,7 @@ func TestSPAFallbackServesIndexForClientRoutes(t *testing.T) {
 }
 
 // TestSPAFallbackDoesNotServeIndexForUnknownAPIPath 验证 SPA fallback 不遮蔽 API 语义
-//（Req 17.2）：未注册的 /api/... 路径不应被兜底为 index.html，而应返回 404（非 HTML 入口页）。
+// （Req 17.2）：未注册的 /api/... 路径不应被兜底为 index.html，而应返回 404（非 HTML 入口页）。
 func TestSPAFallbackDoesNotServeIndexForUnknownAPIPath(t *testing.T) {
 	engine := newIntegrationRouter(t)
 
@@ -201,7 +201,7 @@ func TestMCPAPIRejectedWithoutAPIKey(t *testing.T) {
 //   - 携带 API Key 访问 /api/admin/upstreams 仍被 JWT 链拒绝（API Key 不能换得管理访问）。
 //
 // 二者都返回 401，证明 JWT 链只挂在 /api/admin、API Key 链只挂在 /mcp，前缀与中间件互不交叉
-//（Req 11.8、17.5）。
+// （Req 11.8、17.5）。
 func TestMiddlewareChainsAreIsolated(t *testing.T) {
 	engine := newIntegrationRouter(t)
 

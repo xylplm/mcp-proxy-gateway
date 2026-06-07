@@ -57,7 +57,7 @@ func New() (*Server, error) {
 }
 
 // newFromFS 由给定的根文件系统（其下含 dist/ 子目录）构造 Server，既是内嵌产物
-//（embed.FS 根下含 dist/）的构造路径，也便于单测注入自定义 FS。
+// （embed.FS 根下含 dist/）的构造路径，也便于单测注入自定义 FS。
 //
 // 经 fs.Sub 去除 dist/ 前缀后，content 的顶层即应包含 index.html；构造时校验其存在，
 // 尽早暴露「dist 未构建/未同步」的装配错误。Server 内部只依赖 fs.FS 抽象内容来源，

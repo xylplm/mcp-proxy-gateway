@@ -8,7 +8,7 @@ import (
 //
 // 它实现「传输类型支持判定」「连接参数校验」以及「具体会话构造」三项职责：
 // 校验通过后，按 cfg.Transport 构造对应传输类型的具体上游会话
-//（stdio/SSE/Streamable-HTTP/WebSocket，任务 8.3-8.6）。
+// （stdio/SSE/Streamable-HTTP/WebSocket，任务 8.3-8.6）。
 type factory struct{}
 
 // NewFactory 构造默认传输工厂实例。

@@ -284,7 +284,7 @@ func TestIntegration_ReconnectsAfterDisconnect(t *testing.T) {
 
 // TestIntegration_ReconnectsAfterInitialFailureWithBackoffPolicy 验证：当首次连接建立失败
 // （接入点尚未就绪）时，连接器按注入的指数退避策略持续重连，待接入点就绪后成功建立连接
-//（Req 15.4 的「连接建立失败」分支，并真实驱动 backoffReconnector 退避计算）。
+// （Req 15.4 的「连接建立失败」分支，并真实驱动 backoffReconnector 退避计算）。
 func TestIntegration_ReconnectsAfterInitialFailureWithBackoffPolicy(t *testing.T) {
 	agg := &fakeAggregation{tools: []domain.ToolDef{{OriginalName: "raw_a", Name: "alias_a"}}}
 

@@ -15,7 +15,7 @@ import (
 const p22BaseMillis int64 = 1_704_067_200_000
 
 // inClosedRange 复刻仓储层 SQL 谓词 `called_at >= start AND called_at <= end` 的闭区间语义
-//（Req 16.5），作为统计时间过滤的纯函数内存模型，使该判定脱离真实数据库可被属性测试验证。
+// （Req 16.5），作为统计时间过滤的纯函数内存模型，使该判定脱离真实数据库可被属性测试验证。
 //
 // 仓储层 CountByUpstream / CountByAPIKey / TopTools 均以同一谓词筛选记录，故本模型即三者
 // 统计计入条件的统一抽象：仅当 called_at 落在闭区间 [start, end]（含两端点）内才计入。

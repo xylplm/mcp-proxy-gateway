@@ -4,8 +4,8 @@
 //
 // 这些用例需要一个真实可用的 PostgreSQL 实例，通过环境变量 MPG_TEST_PG_DSN 提供连接串。
 // 采用双重门控，确保在无数据库环境下默认 `go test ./...` 始终为绿：
-//   1. 文件以 `//go:build integration` 构建标签门控，默认构建不编译本文件；
-//   2. 即便携带 -tags integration 运行，若未设置 MPG_TEST_PG_DSN 也会 t.Skip 而非失败。
+//  1. 文件以 `//go:build integration` 构建标签门控，默认构建不编译本文件；
+//  2. 即便携带 -tags integration 运行，若未设置 MPG_TEST_PG_DSN 也会 t.Skip 而非失败。
 //
 // 运行方式（示例）：
 //

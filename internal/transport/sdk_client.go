@@ -166,7 +166,7 @@ func (c *sdkClientConn) close() error {
 //
 // 约定（Req 6）：OriginalName 取上游原始工具名、Name 初始等于 OriginalName（后续可被别名/去重改写）、
 // Description 直接透传、InputSchema 序列化为 json.RawMessage。UpstreamID 与 Order 由上层
-//（Sync_Service/聚合管线）在已知上游归属时填充，传输层不感知，故此处留空。
+// （Sync_Service/聚合管线）在已知上游归属时填充，传输层不感知，故此处留空。
 func toToolDef(t *mcp.Tool) (domain.ToolDef, error) {
 	if t == nil {
 		return domain.ToolDef{}, domain.NewError(domain.CodeUpstreamUnavailable, "上游 MCP 返回了空的工具定义")
