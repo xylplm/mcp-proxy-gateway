@@ -2,11 +2,11 @@
  * 鉴权相关 API 封装
  *
  * 设计要点（对应 design.md「鉴权中间件」与 Req 1.4 / 17.6）：
- * - 管理员登录：POST /api/admin/auth/login，请求体 { username, password }；
+ * - 管理员登录：POST /api/auth/login（公开端点，无需 JWT），请求体 { username, password }；
  * - 登录成功后端返回管理员 JWT，后续请求经 Axios 请求拦截器注入 Authorization: Bearer。
  *
- * 请求/响应契约（与后端任务 19.2 约定，后端尚未实现时前端按此契约编写）：
- * - 请求：POST `${ADMIN_API_BASE_URL}/auth/login`，body: { username: string, password: string }
+ * 请求/响应契约：
+ * - 请求：POST /api/auth/login，body: { username: string, password: string }
  * - 响应：返回 JWT，兼容两种包装形式：
  *     1) 直接返回 `{ token: string }`
  *     2) 统一信封返回 `{ data: { token: string } }`
@@ -40,7 +40,10 @@ interface LoginResponseBody {
  * @throws 当后端拒绝登录（如 401 鉴权失败，Req 1.5）或响应不含令牌时抛出错误
  */
 export async function login(payload: LoginRequest): Promise<string> {
-  const response = await request.post<LoginResponseBody>('/auth/login', payload)
+  // 公开端点 /api/auth/login 与 axios baseURL `/api/admin` 不同前缀，需显式覆盖。
+  const response = await request.post<LoginResponseBody>('/auth/login', payload, {
+    baseURL: '/api',
+  })
   const body = response.data
   // 兼容 { token } 与 { data: { token } } 两种契约形态
   const token = body?.token ?? body?.data?.token
