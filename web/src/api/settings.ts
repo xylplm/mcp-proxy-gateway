@@ -168,7 +168,7 @@ export async function updateSettings(payload: YAMLConfig): Promise<YAMLConfig> {
 export interface ChangePasswordRequest {
   /** 当前密码，校验匹配后方可改密。 */
   currentPassword: string
-  /** 新密码，长度需在 8 至 128 个字符之间。 */
+  /** 新密码，长度需在 6 至 128 个字符之间。 */
   newPassword: string
 }
 

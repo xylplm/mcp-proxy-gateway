@@ -28,7 +28,7 @@ import (
 type authCredentialsRequest struct {
 	// Username 为管理员用户名，长度需在 3 至 32 个字符之间。
 	Username string `json:"username"`
-	// Password 为管理员密码，长度需在 8 至 128 个字符之间。
+	// Password 为管理员密码，长度需在 6 至 128 个字符之间。
 	Password string `json:"password"`
 }
 
@@ -36,7 +36,7 @@ type authCredentialsRequest struct {
 type changePasswordRequest struct {
 	// CurrentPassword 为当前密码，校验匹配后方可改密。
 	CurrentPassword string `json:"currentPassword"`
-	// NewPassword 为新密码，长度需在 8 至 128 个字符之间。
+	// NewPassword 为新密码，长度需在 6 至 128 个字符之间。
 	NewPassword string `json:"newPassword"`
 }
 
@@ -82,12 +82,16 @@ func (r *Router) currentAdmin(c *gin.Context) {
 // authStatus 报告是否已完成管理员初始化（Req 1.1）。
 //
 // initialized 为 false 时前端应展示注册入口，否则展示登录入口。
+// 同时返回离线密码重置的标记文件名，供前端「忘记密码」弹窗动态展示，避免前后端文案脱节。
 func (r *Router) authStatus(c *gin.Context) {
 	if r.auth == nil {
 		respondServiceUnavailable(c, "认证服务未就绪")
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"initialized": r.auth.IsInitialized()})
+	c.JSON(http.StatusOK, gin.H{
+		"initialized":     r.auth.IsInitialized(),
+		"resetMarkerFile": auth.ResetMarkerFileName(),
+	})
 }
 
 // register 注册唯一管理员账号并完成首次初始化（Req 1.2、1.3、1.9）。

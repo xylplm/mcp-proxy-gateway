@@ -32,6 +32,16 @@ const router = createRouter({
       },
     },
     {
+      // 首次初始化（注册）页：公开访问；未初始化时由登录页自动跳来，此处独立路由便于直接访问。
+      path: '/register',
+      name: 'register',
+      component: () => import('../views/RegisterView.vue'),
+      meta: {
+        title: '初始化',
+        requiresAuth: false,
+      },
+    },
+    {
       path: '/',
       name: 'Dashboard',
       component: () => import('../views/DashboardView.vue'),
@@ -143,8 +153,8 @@ router.beforeEach((to) => {
     }
   }
 
-  // 已认证用户访问登录页 → 重定向到 Dashboard
-  if (to.name === 'login' && session.isAuthenticated) {
+  // 已认证用户访问登录/注册页 → 重定向到 Dashboard，避免重复操作
+  if ((to.name === 'login' || to.name === 'register') && session.isAuthenticated) {
     return { name: 'Dashboard' }
   }
 

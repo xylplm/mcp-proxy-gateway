@@ -109,6 +109,12 @@ func (a *App) build(enc *crypto.Service, envCfg config.EnvConfig) error {
 	rateLimiter := apikey.NewRateLimiter(apikey.NewRedisRateCounter(a.rdb), a.logger)
 
 	// --- 认证服务（Auth_Service）+ 管理员 JWT 中间件 ---
+	// 装配前先检查离线密码重置标记（data/.reset-admin）：存在即生成随机新密码、写回 YAML、
+	// 在 stderr 打印一次性新密码并删除标记文件；不存在则 no-op。该机制供管理员忘记密码时
+	// 通过本地文件触发重置，不引入远程攻击面。
+	if err := auth.MaybeResetAdminPassword(a.cfg, envCfg.DataDir, a.logger); err != nil {
+		return err
+	}
 	authSvc, err := auth.New(a.cfg, signingKey(envCfg.EncryptionKey))
 	if err != nil {
 		return err

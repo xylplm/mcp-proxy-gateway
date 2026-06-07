@@ -176,13 +176,13 @@ func TestRegisterValidatesLengths(t *testing.T) {
 	}
 }
 
-// TestRegisterAcceptsBoundaryLengths 验证边界长度（3/32 用户名、8/128 密码）被接受（Req 1.2）。
+// TestRegisterAcceptsBoundaryLengths 验证边界长度（3/32 用户名、6/128 密码）被接受（Req 1.2）。
 func TestRegisterAcceptsBoundaryLengths(t *testing.T) {
 	cases := []struct {
 		username string
 		password string
 	}{
-		{"abc", "12345678"}, // 下界
+		{"abc", "123456"}, // 下界
 		{strings.Repeat("u", 32), strings.Repeat("p", 128)}, // 上界
 	}
 	for _, c := range cases {

@@ -130,9 +130,9 @@ async function submitChangePassword(): Promise<void> {
   if (pwdSaving.value) return
   clearPwdErrors()
 
-  // 前端轻量校验：新密码长度 8-128，且与确认一致。
-  if (pwd.newPassword.length < 8 || pwd.newPassword.length > 128) {
-    pwdFieldErrors.newPassword = '新密码长度需在 8 至 128 个字符之间'
+  // 前端轻量校验：新密码长度 6-128，且与确认一致。
+  if (pwd.newPassword.length < 6 || pwd.newPassword.length > 128) {
+    pwdFieldErrors.newPassword = '新密码长度需在 6 至 128 个字符之间'
     return
   }
   if (pwd.newPassword !== pwd.confirmPassword) {

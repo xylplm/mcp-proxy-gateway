@@ -7,11 +7,11 @@ import (
 	"pgregory.net/rapid"
 )
 
-// genValidPassword 生成符合管理员密码长度约束（8-128 个 Unicode 字符）的任意密码。
+// genValidPassword 生成符合管理员密码长度约束（6-128 个 Unicode 字符）的任意密码。
 //
 // 长度以 rune 计，与实现中 utf8.RuneCountInString 的计数口径一致，从而覆盖含多字节
 // 字符的合法密码；不限制字节长度（maxLen 取 -1），以验证 SHA-256+base64 预处理能
-// 突破 bcrypt 72 字节上限、完整覆盖 8-128 字符的全部合法密码。
+// 突破 bcrypt 72 字节上限、完整覆盖 6-128 字符的全部合法密码。
 func genValidPassword() *rapid.Generator[string] {
 	return rapid.StringN(minPasswordLen, maxPasswordLen, -1)
 }
@@ -22,7 +22,7 @@ func genValidPassword() *rapid.Generator[string] {
 //
 // 针对密码哈希逻辑（hashPassword / comparePassword，含 SHA-256+base64 预处理 + bcrypt）
 // 验证三条不变量：
-//   - 往返成功：对任意合法密码（8-128 字符）哈希后，用相同密码校验通过（Req 1.2、1.5）；
+//   - 往返成功：对任意合法密码（6-128 字符）哈希后，用相同密码校验通过（Req 1.2、1.5）；
 //   - 错误密码失败：用任意不同的密码校验必然失败，不被误判为匹配（Req 1.5）；
 //   - 哈希非明文：bcrypt 输出不等于明文密码，确保不以明文形态存储凭证（Req 1.2）。
 //

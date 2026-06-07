@@ -21,7 +21,7 @@ const (
 	// maxUsernameLen 为管理员用户名的最大字符数。
 	maxUsernameLen = 32
 	// minPasswordLen 为管理员密码的最小字符数。
-	minPasswordLen = 8
+	minPasswordLen = 6
 	// maxPasswordLen 为管理员密码的最大字符数。
 	maxPasswordLen = 128
 )
@@ -88,7 +88,7 @@ func (s *Service) IsInitialized() bool {
 // Register 注册唯一的管理员账号并完成首次初始化（Req 1.2、1.3、1.9）。
 //
 // 流程：若已存在管理员则拒绝以保持单用户（Req 1.3）→ 校验用户名长度（3-32）与
-// 密码长度（8-128，Req 1.9）→ 以 bcrypt 加盐哈希写入 YAML 配置并置初始化标志（Req 1.2）。
+// 密码长度（6-128，Req 1.9）→ 以 bcrypt 加盐哈希写入 YAML 配置并置初始化标志（Req 1.2）。
 //
 // 错误语义：
 //   - 已存在管理员账号：返回 CONFLICT，保留现有账号不变（Req 1.3）。
@@ -145,7 +145,7 @@ func (s *Service) Login(username, password string) (token string, expiresAt time
 
 // ChangePassword 校验当前密码与新密码长度后更新密码哈希（Req 1.8、1.10）。
 //
-// 流程：校验当前密码是否与已存储哈希匹配（Req 1.10）→ 校验新密码长度（8-128，Req 1.10）
+// 流程：校验当前密码是否与已存储哈希匹配（Req 1.10）→ 校验新密码长度（6-128，Req 1.10）
 // → 以新密码的 bcrypt 哈希更新并写入 YAML 配置（Req 1.8）。
 //
 // 错误语义：
@@ -165,7 +165,7 @@ func (s *Service) ChangePassword(currentPassword, newPassword string) error {
 	// 再校验新密码长度（Req 1.10）。
 	if n := utf8.RuneCountInString(newPassword); n < minPasswordLen || n > maxPasswordLen {
 		return domain.NewValidationError("密码修改失败", map[string]string{
-			"newPassword": "新密码长度需在 8 至 128 个字符之间",
+			"newPassword": "新密码长度需在 6 至 128 个字符之间",
 		})
 	}
 
@@ -232,7 +232,7 @@ func (s *Service) issueToken(username string, timeout time.Duration) (string, ti
 	return signed, expiresAt, nil
 }
 
-// validateCredentials 校验注册时的用户名（3-32）与密码（8-128）长度（按 Unicode 字符计数）。
+// validateCredentials 校验注册时的用户名（3-32）与密码（6-128）长度（按 Unicode 字符计数）。
 //
 // 不通过时返回携带字段级说明的 VALIDATION 错误，调用方据此可定位每个无效字段（Req 1.9）。
 func validateCredentials(username, password string) error {
@@ -241,7 +241,7 @@ func validateCredentials(username, password string) error {
 		fields["username"] = "用户名长度需在 3 至 32 个字符之间"
 	}
 	if n := utf8.RuneCountInString(password); n < minPasswordLen || n > maxPasswordLen {
-		fields["password"] = "密码长度需在 8 至 128 个字符之间"
+		fields["password"] = "密码长度需在 6 至 128 个字符之间"
 	}
 	if len(fields) > 0 {
 		return domain.NewValidationError("管理员注册校验失败", fields)
@@ -255,7 +255,7 @@ func validateCredentials(username, password string) error {
 // （ASCII 即 128 字节，多字节字符更长，均可能超过 72 字节并被 bcrypt 拒绝或截断），
 // 因此先以 SHA-256 将任意长度密码归一为定长摘要、再做 base64 编码（44 字节，<72），
 // 最后交由 bcrypt 加盐哈希。如此既保留 bcrypt 的加盐慢哈希优势，又能完整覆盖
-// 8-128 字符的全部合法密码而不丢失任何熵。
+// 6-128 字符的全部合法密码而不丢失任何熵。
 func hashPassword(password string) (string, error) {
 	prepared := prehash(password)
 	hash, err := bcrypt.GenerateFromPassword(prepared, bcrypt.DefaultCost)

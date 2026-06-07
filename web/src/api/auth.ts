@@ -18,7 +18,7 @@ import request from '@/api/request'
 export interface LoginRequest {
   /** 管理员用户名（长度 3-32，校验由后端负责，Req 1.2/1.9） */
   username: string
-  /** 管理员密码（长度 8-128，校验由后端负责，Req 1.2/1.9） */
+  /** 管理员密码（长度 6-128，校验由后端负责，Req 1.2/1.9） */
   password: string
 }
 
@@ -67,4 +67,38 @@ export interface CurrentAdmin {
 export async function getCurrentAdmin(): Promise<CurrentAdmin> {
   const response = await request.get<CurrentAdmin>('/auth/me')
   return { username: response.data?.username ?? '' }
+}
+
+/** 认证状态响应：是否已完成首次初始化 + 离线密码重置标记文件名（Req 1.1） */
+export interface AuthStatus {
+  /** 是否已完成管理员首次初始化；为 false 时前端应展示注册入口。 */
+  initialized: boolean
+  /** 离线密码重置标记文件名，前端「忘记密码」弹窗据此提示用户。 */
+  resetMarkerFile: string
+}
+
+/**
+ * 获取认证初始化状态（公开端点，无需鉴权）。
+ *
+ * 失败时统一返回安全默认值（按已初始化处理）以避免在网络异常时无意暴露注册入口。
+ */
+export async function getAuthStatus(): Promise<AuthStatus> {
+  // 公开端点 /api/auth/status 与 baseURL `/api/admin` 不同前缀，使用 baseURL 反推。
+  const response = await request.get<AuthStatus>('/auth/status', { baseURL: '/api' })
+  return {
+    initialized: response.data?.initialized ?? true,
+    resetMarkerFile: response.data?.resetMarkerFile ?? '.reset-admin',
+  }
+}
+
+/** 注册请求体（首次初始化），与登录复用相同的字段定义。 */
+export type RegisterRequest = LoginRequest
+
+/**
+ * 首次初始化：注册唯一管理员账号（Req 1.2、1.3）。
+ *
+ * 公开端点 POST /api/auth/register，已初始化时后端返回 CONFLICT。
+ */
+export async function register(payload: RegisterRequest): Promise<void> {
+  await request.post('/auth/register', payload, { baseURL: '/api' })
 }
