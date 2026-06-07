@@ -33,13 +33,17 @@ import request from '@/api/request'
 
 /**
  * API Key 元数据视图（与后端 apikey.Metadata 对齐）。
- * 永不含完整明文密钥；仅暴露展示用前缀 keyPrefix 与名称、启停状态、有效期等元数据。
+ *
+ * 自部署场景下允许二次查看：plaintextKey 携带完整明文密钥，供管理台查看/复制；
+ * keyPrefix 仍保留用于列表紧凑展示。
  */
 export interface APIKey {
   /** API Key 唯一标识。 */
   id: string
   /** 名称（长度 1-100）。 */
   name: string
+  /** 完整明文密钥，供管理台二次查看/复制（自部署场景）。 */
+  plaintextKey: string
   /** 展示用前缀（明文的前若干字符），用于区分不同 Key。 */
   keyPrefix: string
   /** 是否启用。 */
@@ -55,13 +59,12 @@ export interface APIKey {
 }
 
 /**
- * 创建 API Key 的结果，是唯一携带一次性明文密钥的返回结构（与后端 apikey.Created 对齐）。
- * plaintextKey 仅本次返回一次，此后任何 List/Get 都无法再取得；前端须提示用户立即保存（Req 12.3）。
+ * 创建 API Key 的结果（与后端 apikey.Created 对齐）。
+ *
+ * 由于 APIKey 已含 plaintextKey，创建结果结构与列表项一致；保留该类型名以表达
+ * "刚创建的 Key"语义。
  */
-export interface CreatedAPIKey extends APIKey {
-  /** 完整明文密钥，仅本次创建返回一次。 */
-  plaintextKey: string
-}
+export type CreatedAPIKey = APIKey
 
 /** 创建 API Key 的请求体（与后端 apiKeyCreateRequest 对齐）。 */
 export interface CreateAPIKeyRequest {

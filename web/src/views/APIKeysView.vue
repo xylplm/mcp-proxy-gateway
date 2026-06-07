@@ -18,6 +18,7 @@ import APIKeyCreateModal from '@/components/apikeys/APIKeyCreateModal.vue'
 import PlaintextKeyModal from '@/components/apikeys/PlaintextKeyModal.vue'
 import APIKeyConfigModal from '@/components/apikeys/APIKeyConfigModal.vue'
 import { useBreakpoint } from '@/composables/useBreakpoint'
+import { useClipboard } from '@/composables/useClipboard'
 import {
   listAPIKeys,
   setAPIKeyEnabled,
@@ -27,6 +28,7 @@ import {
 } from '@/api/apikeys'
 
 const { pageSize } = useBreakpoint()
+const { copy } = useClipboard()
 
 /** 全量 API Key 列表（按创建时间倒序）。 */
 const apiKeys = ref<APIKey[]>([])
@@ -35,6 +37,9 @@ const errorMessage = ref('')
 /** 行级操作进行中标记（key = id:action）。 */
 const busy = ref<Set<string>>(new Set())
 const toast = ref('')
+
+/** 已展开明文的 Key 标识集合（小眼睛切换；默认全部隐藏）。 */
+const revealed = ref<Set<string>>(new Set())
 
 /** 分页：当前页（1 起）。 */
 const currentPage = ref(1)
@@ -152,6 +157,38 @@ function goPage(p: number): void {
 function isExpired(key: APIKey): boolean {
   return key.expiresAt !== undefined && new Date(key.expiresAt).getTime() < Date.now()
 }
+
+/** 切换某个 Key 的明文显隐（小眼睛）。 */
+function toggleReveal(id: string): void {
+  const next = new Set(revealed.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  revealed.value = next
+}
+
+/** 该 Key 的明文当前是否处于展开状态。 */
+function isRevealed(id: string): boolean {
+  return revealed.value.has(id)
+}
+
+/** 掩码展示：保留前缀，其余以圆点遮挡，避免肩窥。 */
+function maskKey(key: APIKey): string {
+  const plain = key.plaintextKey ?? ''
+  if (plain === '') return `${key.keyPrefix}…`
+  const head = plain.slice(0, 8)
+  return `${head}${'•'.repeat(18)}`
+}
+
+/** 复制某个 Key 的完整明文到剪贴板。 */
+async function copyKey(key: APIKey): Promise<void> {
+  const plain = key.plaintextKey ?? ''
+  if (plain === '') {
+    showToast('该 Key 无可复制的明文')
+    return
+  }
+  const ok = await copy(plain)
+  showToast(ok ? '已复制到剪贴板' : '复制失败，请手动选择复制')
+}
 </script>
 
 <template>
@@ -194,119 +231,154 @@ function isExpired(key: APIKey): boolean {
       {{ toast }}
     </p>
 
-    <!-- 列表卡片 -->
-    <div class="rounded-2xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03]">
+    <!-- 列表：卡片网格（响应式，移动端友好，替代表格） -->
+    <div>
       <p
         v-if="errorMessage !== ''"
-        class="m-4 rounded-lg bg-error-50 px-4 py-2.5 text-sm text-error-600 dark:bg-error-500/10 dark:text-error-400"
+        class="mb-4 rounded-lg bg-error-50 px-4 py-2.5 text-sm text-error-600 dark:bg-error-500/10 dark:text-error-400"
       >
         {{ errorMessage }}
       </p>
 
-      <div class="max-w-full overflow-x-auto">
-        <table class="min-w-full">
-          <thead>
-            <tr class="border-b border-gray-200 text-left text-xs font-medium text-gray-500 uppercase dark:border-gray-800 dark:text-gray-400">
-              <th class="px-5 py-3.5">名称</th>
-              <th class="px-5 py-3.5">前缀</th>
-              <th class="px-5 py-3.5">启用</th>
-              <th class="px-5 py-3.5">有效期</th>
-              <th class="px-5 py-3.5">创建时间</th>
-              <th class="px-5 py-3.5 text-right">操作</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-gray-100 dark:divide-gray-800">
-            <tr v-if="loading">
-              <td colspan="6" class="px-5 py-10 text-center text-sm text-gray-400">加载中…</td>
-            </tr>
-            <tr v-else-if="apiKeys.length === 0">
-              <td colspan="6" class="px-5 py-10 text-center text-sm text-gray-400">
-                暂无 API Key，点击「新建 API Key」开始创建
-              </td>
-            </tr>
-            <tr
-              v-for="key in pagedKeys"
-              v-else
-              :key="key.id"
-              class="text-sm text-gray-700 dark:text-gray-300"
-            >
-              <!-- 名称 -->
-              <td class="px-5 py-4">
-                <div class="font-medium text-gray-800 dark:text-white/90">{{ key.name }}</div>
-                <div v-if="key.rateLimit && key.rateWindowS" class="mt-0.5 text-xs text-gray-400">
-                  限流 {{ key.rateLimit }} 次 / {{ key.rateWindowS }} 秒
-                </div>
-              </td>
-              <!-- 前缀 -->
-              <td class="px-5 py-4">
-                <span class="font-mono text-xs text-gray-500 dark:text-gray-400">
-                  {{ key.keyPrefix }}…
-                </span>
-              </td>
-              <!-- 启用开关 -->
-              <td class="px-5 py-4">
-                <button
-                  type="button"
-                  role="switch"
-                  :aria-checked="key.enabled"
-                  :disabled="isBusy(key.id, 'toggle')"
-                  class="relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition disabled:opacity-60"
-                  :class="key.enabled ? 'bg-brand-500' : 'bg-gray-300 dark:bg-gray-700'"
-                  @click="toggleEnabled(key)"
+      <!-- 加载 / 空态 -->
+      <div
+        v-if="loading"
+        class="rounded-2xl border border-gray-200 bg-white px-5 py-12 text-center text-sm text-gray-400 dark:border-gray-800 dark:bg-white/[0.03]"
+      >
+        加载中…
+      </div>
+      <div
+        v-else-if="apiKeys.length === 0"
+        class="rounded-2xl border border-dashed border-gray-300 bg-white px-5 py-12 text-center text-sm text-gray-400 dark:border-gray-700 dark:bg-white/[0.03]"
+      >
+        暂无 API Key，点击「新建 API Key」开始创建
+      </div>
+
+      <!-- 卡片网格：手机 1 列、平板 2 列、桌面 3 列 -->
+      <div v-else class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        <div
+          v-for="key in pagedKeys"
+          :key="key.id"
+          class="flex flex-col rounded-2xl border border-gray-200 bg-white p-5 shadow-sm transition hover:shadow-md dark:border-gray-800 dark:bg-white/[0.03]"
+        >
+          <!-- 头部：名称 + 启停 -->
+          <div class="mb-3 flex items-start justify-between gap-3">
+            <div class="min-w-0">
+              <div class="truncate font-medium text-gray-800 dark:text-white/90" :title="key.name">
+                {{ key.name }}
+              </div>
+              <div class="mt-1 flex flex-wrap items-center gap-1.5">
+                <span
+                  class="inline-flex items-center rounded-full px-2 py-0.5 text-xs"
+                  :class="
+                    key.enabled
+                      ? 'bg-success-50 text-success-600 dark:bg-success-500/10 dark:text-success-400'
+                      : 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400'
+                  "
                 >
-                  <span
-                    class="inline-block h-4 w-4 transform rounded-full bg-white transition"
-                    :class="key.enabled ? 'translate-x-6' : 'translate-x-1'"
-                  ></span>
-                </button>
-              </td>
-              <!-- 有效期 -->
-              <td class="px-5 py-4">
-                <span v-if="key.expiresAt === undefined" class="text-xs text-gray-400">永不过期</span>
+                  {{ key.enabled ? '已启用' : '已停用' }}
+                </span>
+                <span
+                  v-if="key.rateLimit && key.rateWindowS"
+                  class="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-500 dark:bg-gray-800 dark:text-gray-400"
+                >
+                  限流 {{ key.rateLimit }}/{{ key.rateWindowS }}s
+                </span>
+              </div>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              :aria-checked="key.enabled"
+              :disabled="isBusy(key.id, 'toggle')"
+              class="relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition disabled:opacity-60"
+              :class="key.enabled ? 'bg-brand-500' : 'bg-gray-300 dark:bg-gray-700'"
+              @click="toggleEnabled(key)"
+            >
+              <span
+                class="inline-block h-4 w-4 transform rounded-full bg-white transition"
+                :class="key.enabled ? 'translate-x-6' : 'translate-x-1'"
+              ></span>
+            </button>
+          </div>
+
+          <!-- 密钥行：掩码/明文 + 小眼睛 + 复制 -->
+          <div class="mb-3 flex items-center gap-2 rounded-lg bg-gray-50 px-3 py-2 dark:bg-gray-800/50">
+            <code class="min-w-0 flex-1 truncate font-mono text-xs text-gray-700 dark:text-gray-300">
+              {{ isRevealed(key.id) ? key.plaintextKey : maskKey(key) }}
+            </code>
+            <button
+              type="button"
+              class="shrink-0 rounded-md p-1.5 text-gray-500 transition hover:bg-gray-200 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+              :title="isRevealed(key.id) ? '隐藏' : '查看'"
+              @click="toggleReveal(key.id)"
+            >
+              <!-- 眼睛（显示）/ 斜杠眼睛（隐藏） -->
+              <svg v-if="!isRevealed(key.id)" width="16" height="16" viewBox="0 0 24 24" fill="none">
+                <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" stroke="currentColor" stroke-width="1.6" />
+                <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.6" />
+              </svg>
+              <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none">
+                <path d="M3 3l18 18M10.6 10.6a3 3 0 0 0 4.2 4.2M9.9 4.2A9.9 9.9 0 0 1 12 4c6.5 0 10 7 10 7a17.6 17.6 0 0 1-3.3 4M6.1 6.1A17.6 17.6 0 0 0 2 11s3.5 7 10 7a9.8 9.8 0 0 0 3-.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              class="shrink-0 rounded-md p-1.5 text-gray-500 transition hover:bg-gray-200 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+              title="复制"
+              @click="copyKey(key)"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                <rect x="9" y="9" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.6" />
+                <path d="M5 15V5a2 2 0 0 1 2-2h8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+              </svg>
+            </button>
+          </div>
+
+          <!-- 元信息：有效期 + 创建时间 -->
+          <dl class="mb-4 space-y-1.5 text-xs">
+            <div class="flex items-center justify-between gap-2">
+              <dt class="text-gray-400">有效期</dt>
+              <dd>
+                <span v-if="key.expiresAt === undefined" class="text-gray-500 dark:text-gray-400">永不过期</span>
                 <span
                   v-else
-                  class="inline-flex items-center rounded-full px-2.5 py-1 text-xs"
-                  :class="
-                    isExpired(key)
-                      ? 'bg-error-50 text-error-600 dark:bg-error-500/10 dark:text-error-400'
-                      : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300'
-                  "
+                  :class="isExpired(key) ? 'text-error-600 dark:text-error-400' : 'text-gray-600 dark:text-gray-300'"
                 >
                   {{ isExpired(key) ? '已过期 · ' : '' }}{{ formatTime(key.expiresAt) }}
                 </span>
-              </td>
-              <!-- 创建时间 -->
-              <td class="px-5 py-4 text-xs text-gray-500 dark:text-gray-400">
-                {{ formatTime(key.createdAt) }}
-              </td>
-              <!-- 操作 -->
-              <td class="px-5 py-4">
-                <div class="flex items-center justify-end gap-1.5">
-                  <button
-                    type="button"
-                    class="rounded-lg px-2.5 py-1.5 text-xs font-medium text-brand-600 hover:bg-brand-50 dark:text-brand-400 dark:hover:bg-brand-500/10"
-                    @click="configuring = key"
-                  >
-                    配置
-                  </button>
-                  <button
-                    type="button"
-                    class="rounded-lg px-2.5 py-1.5 text-xs font-medium text-error-600 hover:bg-error-50 dark:text-error-400 dark:hover:bg-error-500/10"
-                    @click="askDelete(key)"
-                  >
-                    删除
-                  </button>
-                </div>
-              </td>
-            </tr>
-          </tbody>
-        </table>
+              </dd>
+            </div>
+            <div class="flex items-center justify-between gap-2">
+              <dt class="text-gray-400">创建时间</dt>
+              <dd class="text-gray-600 dark:text-gray-300">{{ formatTime(key.createdAt) }}</dd>
+            </div>
+          </dl>
+
+          <!-- 操作 -->
+          <div class="mt-auto flex items-center justify-end gap-1.5 border-t border-gray-100 pt-3 dark:border-gray-800">
+            <button
+              type="button"
+              class="rounded-lg px-2.5 py-1.5 text-xs font-medium text-brand-600 hover:bg-brand-50 dark:text-brand-400 dark:hover:bg-brand-500/10"
+              @click="configuring = key"
+            >
+              配置
+            </button>
+            <button
+              type="button"
+              class="rounded-lg px-2.5 py-1.5 text-xs font-medium text-error-600 hover:bg-error-50 dark:text-error-400 dark:hover:bg-error-500/10"
+              @click="askDelete(key)"
+            >
+              删除
+            </button>
+          </div>
+        </div>
       </div>
 
       <!-- 分页 -->
       <div
         v-if="totalPages > 1"
-        class="flex items-center justify-between border-t border-gray-200 px-5 py-4 dark:border-gray-800"
+        class="mt-4 flex items-center justify-between"
       >
         <span class="text-xs text-gray-500 dark:text-gray-400">
           第 {{ currentPage }} / {{ totalPages }} 页

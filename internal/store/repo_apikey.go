@@ -13,7 +13,8 @@ import (
 
 // APIKey 是 API Key 元数据（api_key 表）的持久层表示。
 //
-// 系统仅存储密钥哈希（KeyHash）与展示用前缀（KeyPrefix），永不存储明文（Req 12.3）。
+// 鉴权仅使用密钥哈希（KeyHash）等值比对；KeyPlain 为明文密钥，仅用于管理台二次查看/复制
+// （自部署场景，Req 12 扩展），不参与鉴权。KeyPrefix 为展示用前缀。
 // RateLimit 与 RateWindowS 为可选速率上限配置（Req 21）；ExpiresAt 为可选有效期（Req 12.6）。
 type APIKey struct {
 	// ID 为 API Key 唯一标识。
@@ -22,6 +23,8 @@ type APIKey struct {
 	Name string
 	// KeyHash 为密钥的哈希字节，用于鉴权时比对。
 	KeyHash []byte
+	// KeyPlain 为明文密钥，仅供管理台查看/复制（自部署场景），不参与鉴权。
+	KeyPlain string
 	// KeyPrefix 为展示用前缀（明文的前若干字符）。
 	KeyPrefix string
 	// Enabled 表示该 Key 是否启用。
@@ -51,12 +54,12 @@ func (r *APIKeyRepo) Create(ctx context.Context, key APIKey) (APIKey, error) {
 	id := newUUID()
 	const q = `
 		INSERT INTO api_key
-			(id, name, key_hash, key_prefix, enabled, expires_at, rate_limit, rate_window_s)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+			(id, name, key_hash, key_plain, key_prefix, enabled, expires_at, rate_limit, rate_window_s)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		RETURNING created_at`
 	var createdAt time.Time
 	err := r.pool.QueryRow(ctx, q,
-		id, key.Name, key.KeyHash, key.KeyPrefix, key.Enabled,
+		id, key.Name, key.KeyHash, key.KeyPlain, key.KeyPrefix, key.Enabled,
 		nullableTime(key.ExpiresAt), nullableInt(key.RateLimit), nullableInt(key.RateWindowS),
 	).Scan(&createdAt)
 	if err != nil {
@@ -74,7 +77,7 @@ func (r *APIKeyRepo) Get(ctx context.Context, id string) (APIKey, error) {
 		return APIKey{}, err
 	}
 	const q = `
-		SELECT id, name, key_hash, key_prefix, enabled, expires_at, rate_limit, rate_window_s, created_at
+		SELECT id, name, key_hash, key_plain, key_prefix, enabled, expires_at, rate_limit, rate_window_s, created_at
 		FROM api_key
 		WHERE id = $1`
 	key, err := scanAPIKey(r.pool.QueryRow(ctx, q, uid))
@@ -87,7 +90,7 @@ func (r *APIKeyRepo) Get(ctx context.Context, id string) (APIKey, error) {
 // GetByHash 按密钥哈希查询单条 API Key，供鉴权中间件比对使用；不存在返回 CodeNotFound。
 func (r *APIKeyRepo) GetByHash(ctx context.Context, keyHash []byte) (APIKey, error) {
 	const q = `
-		SELECT id, name, key_hash, key_prefix, enabled, expires_at, rate_limit, rate_window_s, created_at
+		SELECT id, name, key_hash, key_plain, key_prefix, enabled, expires_at, rate_limit, rate_window_s, created_at
 		FROM api_key
 		WHERE key_hash = $1`
 	key, err := scanAPIKey(r.pool.QueryRow(ctx, q, keyHash))
@@ -102,7 +105,7 @@ func (r *APIKeyRepo) GetByHash(ctx context.Context, keyHash []byte) (APIKey, err
 // 注意：仓储不返回明文密钥（明文从不持久化），仅返回哈希、前缀与元数据。
 func (r *APIKeyRepo) List(ctx context.Context) ([]APIKey, error) {
 	const q = `
-		SELECT id, name, key_hash, key_prefix, enabled, expires_at, rate_limit, rate_window_s, created_at
+		SELECT id, name, key_hash, key_plain, key_prefix, enabled, expires_at, rate_limit, rate_window_s, created_at
 		FROM api_key
 		ORDER BY created_at DESC`
 	rows, err := r.pool.Query(ctx, q)
@@ -137,16 +140,17 @@ func (r *APIKeyRepo) Update(ctx context.Context, key APIKey) (APIKey, error) {
 		UPDATE api_key
 		SET name = $2, enabled = $3, expires_at = $4, rate_limit = $5, rate_window_s = $6
 		WHERE id = $1
-		RETURNING key_hash, key_prefix, created_at`
+		RETURNING key_hash, key_plain, key_prefix, created_at`
 	var (
 		keyHash   []byte
+		keyPlain  string
 		keyPrefix string
 		createdAt time.Time
 	)
 	err = r.pool.QueryRow(ctx, q,
 		uid, key.Name, key.Enabled,
 		nullableTime(key.ExpiresAt), nullableInt(key.RateLimit), nullableInt(key.RateWindowS),
-	).Scan(&keyHash, &keyPrefix, &createdAt)
+	).Scan(&keyHash, &keyPlain, &keyPrefix, &createdAt)
 	if err != nil {
 		if e := notFoundIfNoRows(err, "API Key 不存在"); e != err {
 			return APIKey{}, e
@@ -154,6 +158,7 @@ func (r *APIKeyRepo) Update(ctx context.Context, key APIKey) (APIKey, error) {
 		return APIKey{}, classifyWrite(err, "API Key 名称已存在："+key.Name, "API Key 不存在")
 	}
 	key.KeyHash = keyHash
+	key.KeyPlain = keyPlain
 	key.KeyPrefix = keyPrefix
 	key.CreatedAt = createdAt
 	return key, nil
@@ -200,6 +205,7 @@ func scanAPIKey(row pgx.Row) (APIKey, error) {
 		id          pgtype.UUID
 		name        string
 		keyHash     []byte
+		keyPlain    string
 		keyPrefix   string
 		enabled     bool
 		expiresAt   pgtype.Timestamptz
@@ -207,7 +213,7 @@ func scanAPIKey(row pgx.Row) (APIKey, error) {
 		rateWindowS pgtype.Int4
 		createdAt   time.Time
 	)
-	if err := row.Scan(&id, &name, &keyHash, &keyPrefix, &enabled,
+	if err := row.Scan(&id, &name, &keyHash, &keyPlain, &keyPrefix, &enabled,
 		&expiresAt, &rateLimit, &rateWindowS, &createdAt); err != nil {
 		return APIKey{}, err
 	}
@@ -215,6 +221,7 @@ func scanAPIKey(row pgx.Row) (APIKey, error) {
 		ID:          uuidString(id),
 		Name:        name,
 		KeyHash:     keyHash,
+		KeyPlain:    keyPlain,
 		KeyPrefix:   keyPrefix,
 		Enabled:     enabled,
 		ExpiresAt:   timePtr(expiresAt),

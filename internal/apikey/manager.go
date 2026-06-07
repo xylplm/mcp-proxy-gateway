@@ -52,13 +52,15 @@ type APIKeyRepository interface {
 
 // Metadata 为 API Key 的对外元数据视图。
 //
-// 该视图永不包含完整明文密钥（Req 12.3）：仅暴露展示用前缀 KeyPrefix 与名称、
-// 启停状态、有效期等元数据。List 与 Get 均返回此视图。
+// 自部署场景下允许二次查看明文：PlaintextKey 携带完整明文密钥，供管理台查看/复制。
+// List 与 Get 均返回此视图（含明文）。鉴权仍走哈希等值查询，明文不参与鉴权。
 type Metadata struct {
 	// ID 为 API Key 唯一标识。
 	ID string `json:"id"`
 	// Name 为名称。
 	Name string `json:"name"`
+	// PlaintextKey 为完整明文密钥，供管理台二次查看/复制（自部署场景）。
+	PlaintextKey string `json:"plaintextKey"`
 	// KeyPrefix 为展示用前缀（明文的前若干字符），用于在界面上区分不同 Key。
 	KeyPrefix string `json:"keyPrefix"`
 	// Enabled 表示该 Key 是否启用。
@@ -89,15 +91,12 @@ func (m Metadata) Usable(now time.Time) bool {
 	return m.Enabled && !m.IsExpired(now)
 }
 
-// Created 为创建 API Key 的结果，是唯一携带完整明文密钥的返回结构。
+// Created 为创建 API Key 的结果。
 //
-// PlaintextKey 仅在创建那一刻返回一次（Req 12.1、12.3）：系统只持久化哈希与前缀，
-// 永不存储明文，故此后任何 List/Get 查询都无法再次取得完整明文。调用方（前端）
-// 须提示用户立即妥善保存。
+// 由于 Metadata 现已携带明文密钥（PlaintextKey），Created 直接复用 Metadata 即可；
+// 保留该类型名以兼容既有调用方语义（"刚创建的 Key，含明文"）。
 type Created struct {
 	Metadata
-	// PlaintextKey 为完整明文密钥，仅本次返回一次。
-	PlaintextKey string `json:"plaintextKey"`
 }
 
 // CreateInput 为创建 API Key 的输入参数。
@@ -145,6 +144,7 @@ func (m *Manager) Create(ctx context.Context, in CreateInput) (Created, error) {
 	row, err := m.repo.Create(ctx, store.APIKey{
 		Name:      in.Name,
 		KeyHash:   hash,
+		KeyPlain:  plaintext,
 		KeyPrefix: prefix,
 		Enabled:   true, // 初始启用（Req 12.1）。
 		ExpiresAt: in.ExpiresAt,
@@ -153,10 +153,7 @@ func (m *Manager) Create(ctx context.Context, in CreateInput) (Created, error) {
 		return Created{}, err
 	}
 
-	return Created{
-		Metadata:     toMetadata(row),
-		PlaintextKey: plaintext,
-	}, nil
+	return Created{Metadata: toMetadata(row)}, nil
 }
 
 // Get 按标识返回单个 API Key 的元数据（不含明文，Req 12.3）；不存在返回 NOT_FOUND（Req 12.7）。
@@ -236,16 +233,20 @@ func generateKey() (plaintext string, hash []byte, prefix string, err error) {
 	return plaintext, sum[:], prefix, nil
 }
 
-// toMetadata 将仓储行映射为对外元数据视图，刻意丢弃 KeyHash，确保哈希与明文都不外泄。
+// toMetadata 将仓储行映射为对外元数据视图。
+//
+// 携带明文密钥（PlaintextKey）以支持管理台二次查看/复制（自部署场景）；刻意丢弃 KeyHash，
+// 避免哈希外泄。
 func toMetadata(row store.APIKey) Metadata {
 	return Metadata{
-		ID:          row.ID,
-		Name:        row.Name,
-		KeyPrefix:   row.KeyPrefix,
-		Enabled:     row.Enabled,
-		ExpiresAt:   row.ExpiresAt,
-		RateLimit:   row.RateLimit,
-		RateWindowS: row.RateWindowS,
-		CreatedAt:   row.CreatedAt,
+		ID:           row.ID,
+		Name:         row.Name,
+		PlaintextKey: row.KeyPlain,
+		KeyPrefix:    row.KeyPrefix,
+		Enabled:      row.Enabled,
+		ExpiresAt:    row.ExpiresAt,
+		RateLimit:    row.RateLimit,
+		RateWindowS:  row.RateWindowS,
+		CreatedAt:    row.CreatedAt,
 	}
 }

@@ -2,9 +2,8 @@
 /**
  * 一次性明文密钥展示弹窗（任务 26.3，Req 12.3）。
  *
- * 创建 API Key 成功后，后端仅此刻返回一次完整明文密钥（plaintextKey）。
- * 本弹窗以醒目警示提示用户「立即复制并妥善保存，关闭后将无法再次查看」，
- * 并提供一键复制按钮。关闭即视为用户已知晓且不再展示明文。
+ * 创建 API Key 成功后展示完整明文密钥（plaintextKey）并提供一键复制。
+ * 自部署场景下密钥支持二次查看，故此弹窗仅作创建后的便捷展示，关闭后仍可在列表中查看。
  */
 import { ref } from 'vue'
 import type { CreatedAPIKey } from '@/api/apikeys'
@@ -68,8 +67,8 @@ function close(): void {
             <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">
               API Key 创建成功
             </h3>
-            <p class="mt-1 text-sm text-warning-600 dark:text-warning-400">
-              请立即复制并妥善保存，关闭此窗口后将无法再次查看完整密钥。
+            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+              请妥善保存。你也可以稍后在列表中通过「查看」随时复制该密钥。
             </p>
           </div>
         </div>

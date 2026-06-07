@@ -35,8 +35,7 @@ func (f *fakeAPIKeys) Create(_ context.Context, in apikey.CreateInput) (apikey.C
 		return apikey.Created{}, f.createErr
 	}
 	f.created = apikey.Created{
-		Metadata:     apikey.Metadata{ID: "key-new", Name: in.Name, Enabled: true},
-		PlaintextKey: "mpg_secret_plaintext",
+		Metadata: apikey.Metadata{ID: "key-new", Name: in.Name, Enabled: true, PlaintextKey: "mpg_secret_plaintext"},
 	}
 	return f.created, nil
 }
