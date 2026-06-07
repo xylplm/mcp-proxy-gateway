@@ -1,0 +1,48 @@
+# 强制以 LF 存入仓库，避免 Windows 下 CRLF 导致 gofmt / 跨平台工具报错。
+# 默认对未匹配类型按 git 自动判定（text=auto 仅对纯文本生效）。
+
+* text=auto eol=lf
+
+# Go / 配置 / 脚本 / Web 源码：必须是 LF
+*.go        text eol=lf
+*.mod       text eol=lf
+*.sum       text eol=lf
+*.yaml      text eol=lf
+*.yml       text eol=lf
+*.json      text eol=lf
+*.toml      text eol=lf
+*.md        text eol=lf
+*.sh        text eol=lf
+*.proto     text eol=lf
+*.ts        text eol=lf
+*.tsx       text eol=lf
+*.js        text eol=lf
+*.jsx       text eol=lf
+*.cjs       text eol=lf
+*.mjs       text eol=lf
+*.vue       text eol=lf
+*.css       text eol=lf
+*.scss      text eol=lf
+*.html      text eol=lf
+Dockerfile  text eol=lf
+
+# Windows 平台脚本保持 CRLF
+*.bat       text eol=crlf
+*.cmd       text eol=crlf
+*.ps1       text eol=crlf
+
+# 二进制：禁用 EOL 转换
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.gif       binary
+*.ico       binary
+*.svg       text eol=lf
+*.woff      binary
+*.woff2     binary
+*.ttf       binary
+*.eot       binary
+*.zip       binary
+*.gz        binary
+*.tar       binary
+*.exe       binary
