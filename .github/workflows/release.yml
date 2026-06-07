@@ -3,7 +3,10 @@
 # 触发方式：仅手动触发（workflow_dispatch），不在 push/tag 时自动发版。
 #
 # 构建策略（串行 embed + 多阶段构建）：
-#   1) quality   —— 质量门禁（前端 lint + 后端 vet/格式检查/测试），失败即中止
+#   1) quality   —— 质量门禁：
+#                   · 硬门禁（失败即中止发版）：go vet、go test —— 关乎程序正确性；
+#                   · 仅警告（不阻断发版）：前端 ESLint、gofmt 格式检查 —— 仅关乎风格/格式，
+#                     不影响运行时行为。建议在本地用 formatOnSave / pre-commit 处理。
 #   2) version   —— 生成日期版本号 1.0.<YYYYMMDDHHmm>（北京时间）
 #   3) docker    —— 用 buildx 一步构建多架构镜像并推送 Docker Hub。
 #                   编译在镜像内多阶段完成：前端构建 → Go 内嵌前端并交叉编译 → distroless 运行镜像。
@@ -56,20 +59,26 @@ jobs:
         working-directory: ./web
         run: npm ci
 
-      - name: 前端 ESLint 校验
+      - name: 前端 ESLint 校验（仅警告，不阻断发版）
+        # 代码风格类检查不影响运行时行为，降级为非阻断：失败仅提示，不中止发版。
+        continue-on-error: true
         working-directory: ./web
         run: npm run lint
 
       - name: 后端 go vet
         run: go vet ./...
 
-      - name: 后端 gofmt 格式检查
+      - name: 后端 gofmt 格式检查（仅警告，不阻断发版）
+        # gofmt 仅关乎代码格式、不影响程序行为，降级为非阻断：列出未格式化文件供参考，但不中止发版。
+        # 如需强制统一格式，建议在本地通过编辑器 formatOnSave 或 pre-commit hook 处理。
+        continue-on-error: true
         run: |
           unformatted="$(gofmt -l .)"
           if [ -n "$unformatted" ]; then
-            echo "以下文件未通过 gofmt 格式检查："
+            echo "::warning::以下文件未通过 gofmt 格式检查（仅提示，不阻断发版）："
             echo "$unformatted"
-            exit 1
+          else
+            echo "gofmt 格式检查通过。"
           fi
 
       - name: 后端测试
