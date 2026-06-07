@@ -1,8 +1,6 @@
 package httpapi
 
 import (
-	"net/http"
-
 	"github.com/gin-gonic/gin"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/auth"
@@ -76,7 +74,7 @@ func (r *Router) currentAdmin(c *gin.Context) {
 		respondError(c, domain.NewError(domain.CodeUnauthorized, "未获取到当前登录会话信息"))
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"username": claims.Username})
+	respondOK(c, gin.H{"username": claims.Username})
 }
 
 // authStatus 报告是否已完成管理员初始化（Req 1.1）。
@@ -88,7 +86,7 @@ func (r *Router) authStatus(c *gin.Context) {
 		respondServiceUnavailable(c, "认证服务未就绪")
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
+	respondOK(c, gin.H{
 		"initialized":     r.auth.IsInitialized(),
 		"resetMarkerFile": auth.ResetMarkerFileName(),
 	})
@@ -110,7 +108,7 @@ func (r *Router) register(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
-	c.JSON(http.StatusCreated, gin.H{"username": req.Username, "initialized": true})
+	respondCreated(c, gin.H{"username": req.Username, "initialized": true})
 }
 
 // login 校验管理员凭证并签发会话令牌（Req 1.4、1.5）。
@@ -130,7 +128,7 @@ func (r *Router) login(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, loginResponse{
+	respondOK(c, loginResponse{
 		Token:     token,
 		ExpiresAt: expiresAt.Format(timeLayout),
 	})
@@ -153,5 +151,5 @@ func (r *Router) changePassword(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"changed": true})
+	respondOK(c, gin.H{"changed": true})
 }

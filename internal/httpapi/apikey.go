@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -126,7 +125,7 @@ func (r *Router) listAPIKeys(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"apiKeys": keys})
+	respondOK(c, gin.H{"apiKeys": keys})
 }
 
 // createAPIKey 创建一个 API Key（Req 12.1）。
@@ -149,7 +148,7 @@ func (r *Router) createAPIKey(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
-	c.JSON(http.StatusCreated, created)
+	respondCreated(c, created)
 }
 
 // getAPIKey 查询单个 API Key 的元数据（不含明文，Req 12.3、12.7）。
@@ -163,7 +162,7 @@ func (r *Router) getAPIKey(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, key)
+	respondOK(c, key)
 }
 
 // enableAPIKey 启用某个 API Key（Req 12.4）。
@@ -186,7 +185,7 @@ func (r *Router) setAPIKeyEnabled(c *gin.Context, enabled bool) {
 		respondError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"id": c.Param("id"), "enabled": enabled})
+	respondOK(c, gin.H{"id": c.Param("id"), "enabled": enabled})
 }
 
 // deleteAPIKey 删除某个 API Key 并级联清理其屏蔽规则与 ACL（Req 12.2）。
@@ -199,7 +198,7 @@ func (r *Router) deleteAPIKey(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
-	c.Status(http.StatusNoContent)
+	respondNoContent(c)
 }
 
 // listAPIKeyFilters 返回某 API Key 的全部屏蔽规则（Req 13.1）。
@@ -213,7 +212,7 @@ func (r *Router) listAPIKeyFilters(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"filters": filters})
+	respondOK(c, gin.H{"filters": filters})
 }
 
 // createAPIKeyFilter 在某 API Key 上创建一条屏蔽规则（Req 13.1、13.4）。
@@ -238,7 +237,7 @@ func (r *Router) createAPIKeyFilter(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
-	c.JSON(http.StatusCreated, created)
+	respondCreated(c, created)
 }
 
 // enableAPIKeyFilter 启用一条 API Key 级屏蔽规则（Req 13.8）。
@@ -261,7 +260,7 @@ func (r *Router) setAPIKeyFilterEnabled(c *gin.Context, enabled bool) {
 		respondError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"id": c.Param("ruleId"), "enabled": enabled})
+	respondOK(c, gin.H{"id": c.Param("ruleId"), "enabled": enabled})
 }
 
 // deleteAPIKeyFilter 删除一条 API Key 级屏蔽规则（Req 13.1）。
@@ -274,7 +273,7 @@ func (r *Router) deleteAPIKeyFilter(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
-	c.Status(http.StatusNoContent)
+	respondNoContent(c)
 }
 
 // listACL 返回某 API Key 的全部来源白名单（Req 13.9）。
@@ -288,7 +287,7 @@ func (r *Router) listACL(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"acl": entries})
+	respondOK(c, gin.H{"acl": entries})
 }
 
 // createACL 为某 API Key 新增一条来源白名单（Req 13.9）。
@@ -311,7 +310,7 @@ func (r *Router) createACL(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
-	c.JSON(http.StatusCreated, created)
+	respondCreated(c, created)
 }
 
 // deleteACL 删除一条来源白名单记录（Req 13.9）。
@@ -324,7 +323,7 @@ func (r *Router) deleteACL(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
-	c.Status(http.StatusNoContent)
+	respondNoContent(c)
 }
 
 // getRateLimit 读取某 API Key 的限流配置（Req 21）。
@@ -338,7 +337,7 @@ func (r *Router) getRateLimit(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, rateLimitConfigResponse{
+	respondOK(c, rateLimitConfigResponse{
 		ID:          key.ID,
 		RateLimit:   key.RateLimit,
 		RateWindowS: key.RateWindowS,
@@ -370,7 +369,7 @@ func (r *Router) updateRateLimit(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, rateLimitConfigResponse{
+	respondOK(c, rateLimitConfigResponse{
 		ID:          updated.ID,
 		RateLimit:   updated.RateLimit,
 		RateWindowS: updated.RateWindowS,

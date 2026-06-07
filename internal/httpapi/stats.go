@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"net/http"
 	"strconv"
 	"time"
 
@@ -79,7 +78,7 @@ func (r *Router) statsByUpstream(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"counts": counts})
+	respondOK(c, gin.H{"counts": counts})
 }
 
 // statsByAPIKey 返回各 API Key 在区间内的调用条数（Req 16.4）。
@@ -98,7 +97,7 @@ func (r *Router) statsByAPIKey(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"counts": counts})
+	respondOK(c, gin.H{"counts": counts})
 }
 
 // statsTopTools 返回区间内按调用次数降序的工具排行（Req 16.3）。
@@ -131,5 +130,5 @@ func (r *Router) statsTopTools(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"tools": ranks})
+	respondOK(c, gin.H{"tools": ranks})
 }

@@ -1,8 +1,6 @@
 package httpapi
 
 import (
-	"net/http"
-
 	"github.com/gin-gonic/gin"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
@@ -82,7 +80,7 @@ func (r *Router) listAliases(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"aliases": rules})
+	respondOK(c, gin.H{"aliases": rules})
 }
 
 // createAlias 在某上游 MCP 上创建一条别名规则（Req 8.1、8.9）。
@@ -115,7 +113,7 @@ func (r *Router) createAlias(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
-	c.JSON(http.StatusCreated, created)
+	respondCreated(c, created)
 }
 
 // updateAlias 更新一条别名规则（Req 8.1、8.9）。
@@ -153,7 +151,7 @@ func (r *Router) updateAlias(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, updated)
+	respondOK(c, updated)
 }
 
 // deleteAlias 删除一条别名规则（Req 8.1）。
@@ -166,7 +164,7 @@ func (r *Router) deleteAlias(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
-	c.Status(http.StatusNoContent)
+	respondNoContent(c)
 }
 
 // listMCPFilters 返回某上游 MCP 的全部屏蔽规则（Req 9.1）。
@@ -180,7 +178,7 @@ func (r *Router) listMCPFilters(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"filters": rows})
+	respondOK(c, gin.H{"filters": rows})
 }
 
 // createMCPFilter 在某上游 MCP 上创建一条屏蔽规则（Req 9.1、9.2、9.9）。
@@ -227,7 +225,7 @@ func (r *Router) createMCPFilter(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
-	c.JSON(http.StatusCreated, created)
+	respondCreated(c, created)
 }
 
 // updateMCPFilter 更新一条 MCP 级屏蔽规则（Req 9.1、9.7、9.8）。
@@ -266,7 +264,7 @@ func (r *Router) updateMCPFilter(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, updated)
+	respondOK(c, updated)
 }
 
 // enableMCPFilter 启用一条 MCP 级屏蔽规则（Req 9.11）。
@@ -289,7 +287,7 @@ func (r *Router) setMCPFilterEnabled(c *gin.Context, enabled bool) {
 		respondError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"id": c.Param("ruleId"), "enabled": enabled})
+	respondOK(c, gin.H{"id": c.Param("ruleId"), "enabled": enabled})
 }
 
 // deleteMCPFilter 删除一条 MCP 级屏蔽规则（Req 9.1）。
@@ -302,5 +300,5 @@ func (r *Router) deleteMCPFilter(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
-	c.Status(http.StatusNoContent)
+	respondNoContent(c)
 }

@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -54,9 +53,7 @@ func TestCurrentAdminReturnsUsernameFromContext(t *testing.T) {
 	var got struct {
 		Username string `json:"username"`
 	}
-	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
-		t.Fatalf("解析响应失败：%v", err)
-	}
+	unmarshalData(t, w, &got)
 	if got.Username != "alice" {
 		t.Errorf("期望返回用户名 alice，实际 %q", got.Username)
 	}

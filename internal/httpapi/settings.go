@@ -1,8 +1,6 @@
 package httpapi
 
 import (
-	"net/http"
-
 	"github.com/gin-gonic/gin"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/config"
@@ -46,7 +44,7 @@ func (r *Router) getSettings(c *gin.Context) {
 	}
 	cfg := r.settings.Config()
 	cfg.Admin = config.AdminConfig{Initialized: cfg.Admin.Initialized}
-	c.JSON(http.StatusOK, settingsResponse{Settings: cfg})
+	respondOK(c, settingsResponse{Settings: cfg})
 }
 
 // updateSettings 校验并回写常规配置（Req 7.3、7.4、18.4）。
@@ -83,7 +81,7 @@ func (r *Router) updateSettings(c *gin.Context) {
 
 	saved := r.settings.Config()
 	saved.Admin = config.AdminConfig{Initialized: saved.Admin.Initialized}
-	c.JSON(http.StatusOK, settingsResponse{Settings: saved})
+	respondOK(c, settingsResponse{Settings: saved})
 }
 
 // wrapCronError 将 cron 校验错误归一为携带字段定位的 VALIDATION 错误。

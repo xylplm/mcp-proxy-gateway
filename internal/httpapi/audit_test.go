@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"testing"
 
@@ -52,9 +51,7 @@ func TestQueryAuditReturnsPage(t *testing.T) {
 		PageSize int                 `json:"pageSize"`
 		Total    int64               `json:"total"`
 	}
-	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
-		t.Fatalf("解析响应失败：%v", err)
-	}
+	unmarshalData(t, w, &got)
 	if len(got.Records) != 2 || got.Total != 2 {
 		t.Errorf("分页结果不符：%+v", got)
 	}

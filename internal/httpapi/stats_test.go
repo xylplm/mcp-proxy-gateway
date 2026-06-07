@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"testing"
 	"time"
@@ -62,9 +61,7 @@ func TestStatsByUpstream(t *testing.T) {
 	var got struct {
 		Counts []store.DimensionCount `json:"counts"`
 	}
-	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
-		t.Fatalf("解析响应失败：%v", err)
-	}
+	unmarshalData(t, w, &got)
 	if len(got.Counts) != 1 || got.Counts[0].ID != "up-1" {
 		t.Errorf("统计结果不符：%+v", got.Counts)
 	}
@@ -85,9 +82,7 @@ func TestStatsByAPIKey(t *testing.T) {
 	var got struct {
 		Counts []store.DimensionCount `json:"counts"`
 	}
-	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
-		t.Fatalf("解析响应失败：%v", err)
-	}
+	unmarshalData(t, w, &got)
 	if len(got.Counts) != 1 || got.Counts[0].Count != 9 {
 		t.Errorf("统计结果不符：%+v", got.Counts)
 	}
@@ -108,9 +103,7 @@ func TestStatsTopToolsParsesLimit(t *testing.T) {
 	var got struct {
 		Tools []store.ToolRank `json:"tools"`
 	}
-	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
-		t.Fatalf("解析响应失败：%v", err)
-	}
+	unmarshalData(t, w, &got)
 	if len(got.Tools) != 1 {
 		t.Errorf("排行结果不符：%+v", got.Tools)
 	}

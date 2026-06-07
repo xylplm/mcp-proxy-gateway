@@ -88,7 +88,7 @@ func (r *Router) listUpstreams(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"upstreams": ups})
+	respondOK(c, gin.H{"upstreams": ups})
 }
 
 // createUpstream 创建上游 MCP 服务（Req 2.1）。
@@ -106,7 +106,7 @@ func (r *Router) createUpstream(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
-	c.JSON(http.StatusCreated, up)
+	respondCreated(c, up)
 }
 
 // updateUpstream 更新某个已存在的上游 MCP 配置（Req 2.4）。
@@ -124,7 +124,7 @@ func (r *Router) updateUpstream(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, up)
+	respondOK(c, up)
 }
 
 // deleteUpstream 删除某个上游 MCP 服务并级联清理（Req 2.5）。
@@ -137,7 +137,7 @@ func (r *Router) deleteUpstream(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
-	c.Status(http.StatusNoContent)
+	respondNoContent(c)
 }
 
 // enableUpstream 启用某个上游 MCP 服务（Req 3.1）。
@@ -160,7 +160,7 @@ func (r *Router) setUpstreamEnabled(c *gin.Context, enabled bool) {
 		respondError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"id": c.Param("id"), "enabled": enabled})
+	respondOK(c, gin.H{"id": c.Param("id"), "enabled": enabled})
 }
 
 // reorderUpstreams 重排序上游 MCP（Req 3.4、3.5）。
@@ -177,7 +177,7 @@ func (r *Router) reorderUpstreams(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"orderedIds": req.OrderedIDs})
+	respondOK(c, gin.H{"orderedIds": req.OrderedIDs})
 }
 
 // reconnectUpstream 由管理员手动发起重连（Req 5.6）。
@@ -190,7 +190,7 @@ func (r *Router) reconnectUpstream(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"id": c.Param("id"), "status": "reconnecting"})
+	respondOK(c, gin.H{"id": c.Param("id"), "status": "reconnecting"})
 }
 
 // refreshUpstream 手动刷新某上游 MCP 的工具列表（Req 6.4、6.5）。
@@ -204,11 +204,14 @@ func (r *Router) refreshUpstream(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"id": c.Param("id"), "tools": tools, "count": len(tools)})
+	respondOK(c, gin.H{"id": c.Param("id"), "tools": tools, "count": len(tools)})
 }
 
 // respondServiceUnavailable 以 503 返回服务未就绪错误，用于依赖未接线时的防御性拒绝。
 func respondServiceUnavailable(c *gin.Context, message string) {
-	c.AbortWithStatusJSON(http.StatusServiceUnavailable,
-		domain.NewError(domain.ErrorCode("SERVICE_UNAVAILABLE"), message))
+	c.AbortWithStatusJSON(http.StatusServiceUnavailable, envelope{
+		Code:    50300,
+		Message: message,
+		Data:    nil,
+	})
 }

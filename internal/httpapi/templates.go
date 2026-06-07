@@ -1,8 +1,6 @@
 package httpapi
 
 import (
-	"net/http"
-
 	"github.com/gin-gonic/gin"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/template"
@@ -59,7 +57,7 @@ func (r *Router) listTemplates(c *gin.Context) {
 		list = r.templates.List()
 	}
 
-	c.JSON(http.StatusOK, gin.H{"templates": ensureTemplates(list)})
+	respondOK(c, gin.H{"templates": ensureTemplates(list)})
 }
 
 // listTemplateCategories 返回按分类组织的模板视图，用于分类导航浏览（Req 14.2）。
@@ -68,7 +66,7 @@ func (r *Router) listTemplateCategories(c *gin.Context) {
 		respondServiceUnavailable(c, "模板市场服务未就绪")
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"categories": r.templates.ListByCategories()})
+	respondOK(c, gin.H{"categories": r.templates.ListByCategories()})
 }
 
 // getTemplate 返回模板详情（Req 14.6）；模板不存在时由服务返回 NOT_FOUND（映射 404）。
@@ -82,7 +80,7 @@ func (r *Router) getTemplate(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, tpl)
+	respondOK(c, tpl)
 }
 
 // prefillTemplate 返回基于模板的表单预填充数据（Req 14.7）；模板不存在时映射 404。
@@ -96,7 +94,7 @@ func (r *Router) prefillTemplate(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, form)
+	respondOK(c, form)
 }
 
 // filterByCategory 从模板切片中筛选出指定分类的模板，返回非 nil 切片（无匹配为空切片）。

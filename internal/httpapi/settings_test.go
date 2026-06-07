@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 	"testing"
@@ -44,9 +43,7 @@ func TestGetSettingsHidesAdminCredentials(t *testing.T) {
 		t.Fatalf("期望 HTTP 200，实际 %d", w.Code)
 	}
 	var got settingsResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
-		t.Fatalf("解析响应失败：%v", err)
-	}
+	unmarshalData(t, w, &got)
 	if got.Settings.Admin.PasswordHash != "" || got.Settings.Admin.Username != "" {
 		t.Errorf("读取设置不应泄露管理员凭证：%+v", got.Settings.Admin)
 	}
@@ -113,12 +110,9 @@ func TestUpdateSettingsWrapsPlainCronError(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("期望 HTTP 400，实际 %d", w.Code)
 	}
-	var apiErr domain.APIError
-	if err := json.Unmarshal(w.Body.Bytes(), &apiErr); err != nil {
-		t.Fatalf("解析错误响应失败：%v", err)
-	}
-	if apiErr.Code != domain.CodeValidation || apiErr.Fields["sync.cron"] == "" {
-		t.Errorf("期望字段级 VALIDATION 错误指向 sync.cron，实际 %+v", apiErr)
+	code, _, fields := parseErrorEnvelope(t, w)
+	if code != 40000 || fields["sync.cron"] == "" {
+		t.Errorf("期望字段级 VALIDATION(40000) 错误指向 sync.cron，实际 code=%d fields=%+v", code, fields)
 	}
 }
 

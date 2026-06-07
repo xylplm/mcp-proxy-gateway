@@ -152,6 +152,52 @@ func doJSON(e *gin.Engine, method, path, body string) *httptest.ResponseRecorder
 
 func intPtr(v int) *int { return &v }
 
+// envelopeData 解包统一响应信封 { code, message, data }，返回 data 段的原始 JSON 字节。
+//
+// 批 1 后所有管理端点响应均为信封结构，测试经此辅助取出 data 再断言，避免每处重复解包。
+func envelopeData(t *testing.T, w *httptest.ResponseRecorder) []byte {
+	t.Helper()
+	var env struct {
+		Code    int             `json:"code"`
+		Message string          `json:"message"`
+		Data    json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+		t.Fatalf("解析响应信封失败：%v，响应体 %s", err, w.Body.String())
+	}
+	return env.Data
+}
+
+// unmarshalData 解包信封并将其 data 段反序列化到 dst。
+func unmarshalData(t *testing.T, w *httptest.ResponseRecorder, dst any) {
+	t.Helper()
+	data := envelopeData(t, w)
+	if err := json.Unmarshal(data, dst); err != nil {
+		t.Fatalf("解析响应 data 失败：%v，data 段 %s", err, string(data))
+	}
+}
+
+// parseErrorEnvelope 解包错误响应信封，返回数字业务码、message 与字段级校验明细（data.fields）。
+//
+// 失败响应的 data 形如 null 或 {"fields": {...}}；无 fields 时返回空 map，便于调用方直接索引。
+func parseErrorEnvelope(t *testing.T, w *httptest.ResponseRecorder) (code int, message string, fields map[string]string) {
+	t.Helper()
+	var env struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+		Data    struct {
+			Fields map[string]string `json:"fields"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+		t.Fatalf("解析错误响应信封失败：%v，响应体 %s", err, w.Body.String())
+	}
+	if env.Data.Fields == nil {
+		env.Data.Fields = map[string]string{}
+	}
+	return env.Code, env.Message, env.Data.Fields
+}
+
 // TestCreateAPIKeyReturnsPlaintextOnce 验证创建端点返回一次性明文密钥（Req 12.1）。
 func TestCreateAPIKeyReturnsPlaintextOnce(t *testing.T) {
 	keys := &fakeAPIKeys{}
@@ -162,9 +208,7 @@ func TestCreateAPIKeyReturnsPlaintextOnce(t *testing.T) {
 		t.Fatalf("期望 HTTP 201，实际 %d，响应体 %s", w.Code, w.Body.String())
 	}
 	var got apikey.Created
-	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
-		t.Fatalf("解析响应失败：%v", err)
-	}
+	unmarshalData(t, w, &got)
 	if got.PlaintextKey != "mpg_secret_plaintext" {
 		t.Errorf("期望返回一次性明文密钥，实际 %q", got.PlaintextKey)
 	}
@@ -185,9 +229,7 @@ func TestListAPIKeysWrapsInEnvelope(t *testing.T) {
 	var env struct {
 		APIKeys []apikey.Metadata `json:"apiKeys"`
 	}
-	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
-		t.Fatalf("解析响应失败：%v", err)
-	}
+	unmarshalData(t, w, &env)
 	if len(env.APIKeys) != 2 {
 		t.Errorf("期望返回 2 个 API Key，实际 %d", len(env.APIKeys))
 	}
@@ -207,14 +249,14 @@ func TestEnableDisableAPIKey(t *testing.T) {
 	}
 }
 
-// TestDeleteAPIKeyReturnsNoContent 验证删除端点返回 204。
+// TestDeleteAPIKeyReturnsNoContent 验证删除端点成功（信封 data 为 null，HTTP 200）。
 func TestDeleteAPIKeyReturnsNoContent(t *testing.T) {
 	keys := &fakeAPIKeys{}
 	e := newTestEngine(Deps{APIKeys: keys})
 
 	w := doJSON(e, http.MethodDelete, "/api/admin/apikeys/key-3", "")
-	if w.Code != http.StatusNoContent {
-		t.Fatalf("期望 HTTP 204，实际 %d", w.Code)
+	if w.Code != http.StatusOK {
+		t.Fatalf("期望 HTTP 200，实际 %d", w.Code)
 	}
 	if keys.deleted != "key-3" {
 		t.Errorf("期望删除 key-3，实际 %q", keys.deleted)
@@ -312,9 +354,7 @@ func TestGetRateLimit(t *testing.T) {
 		t.Fatalf("期望 HTTP 200，实际 %d", w.Code)
 	}
 	var got rateLimitConfigResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
-		t.Fatalf("解析响应失败：%v", err)
-	}
+	unmarshalData(t, w, &got)
 	if got.ID != "key-8" || got.RateLimit == nil || *got.RateLimit != 50 {
 		t.Errorf("限流配置读取不符：%+v", got)
 	}

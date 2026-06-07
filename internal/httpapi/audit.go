@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"net/http"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
@@ -43,7 +42,7 @@ func (r *Router) queryAudit(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
+	respondOK(c, gin.H{
 		"records":  result.Records,
 		"page":     result.Page,
 		"pageSize": result.PageSize,

@@ -22,9 +22,7 @@ func TestListTemplatesWrapsInEnvelope(t *testing.T) {
 	var env struct {
 		Templates []template.Template `json:"templates"`
 	}
-	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
-		t.Fatalf("解析响应失败：%v", err)
-	}
+	unmarshalData(t, w, &env)
 	if len(env.Templates) == 0 {
 		t.Fatalf("期望返回内置模板列表，实际为空")
 	}
@@ -41,9 +39,7 @@ func TestListTemplatesByCategory(t *testing.T) {
 	var env struct {
 		Templates []template.Template `json:"templates"`
 	}
-	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
-		t.Fatalf("解析响应失败：%v", err)
-	}
+	unmarshalData(t, w, &env)
 	if len(env.Templates) == 0 {
 		t.Fatalf("期望返回 search 分类模板，实际为空")
 	}
@@ -66,9 +62,7 @@ func TestListTemplatesByCategoryAndKeyword(t *testing.T) {
 	var env struct {
 		Templates []template.Template `json:"templates"`
 	}
-	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
-		t.Fatalf("解析响应失败：%v", err)
-	}
+	unmarshalData(t, w, &env)
 	for _, tpl := range env.Templates {
 		if tpl.Category != template.CategorySearch {
 			t.Errorf("叠加过滤后期望仅 search 分类，实际 %q", tpl.Category)
@@ -82,7 +76,7 @@ func TestListTemplatesByCategoryAndKeyword(t *testing.T) {
 	}
 	// 验证序列化为 [] 而非 null（前端契约 Req 14.5、14.13）。
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(w2.Body.Bytes(), &raw); err != nil {
+	if err := json.Unmarshal(envelopeData(t, w2), &raw); err != nil {
 		t.Fatalf("解析响应失败：%v", err)
 	}
 	if string(raw["templates"]) != "[]" {
@@ -101,9 +95,7 @@ func TestListTemplateCategories(t *testing.T) {
 	var env struct {
 		Categories []template.CategoryView `json:"categories"`
 	}
-	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
-		t.Fatalf("解析响应失败：%v", err)
-	}
+	unmarshalData(t, w, &env)
 	if len(env.Categories) != len(template.Categories()) {
 		t.Fatalf("期望返回 %d 个分类视图，实际 %d", len(template.Categories()), len(env.Categories))
 	}
@@ -124,7 +116,7 @@ func TestGetTemplateByID(t *testing.T) {
 	}
 	// 直接断言原始 json key，确认与前端 TS 类型逐字段对齐（camelCase）。
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(w.Body.Bytes(), &raw); err != nil {
+	if err := json.Unmarshal(envelopeData(t, w), &raw); err != nil {
 		t.Fatalf("解析响应失败：%v", err)
 	}
 	for _, key := range []string{"id", "name", "category", "summary", "docUrl", "transport", "presetParams", "placeholders"} {
@@ -133,9 +125,7 @@ func TestGetTemplateByID(t *testing.T) {
 		}
 	}
 	var tpl template.Template
-	if err := json.Unmarshal(w.Body.Bytes(), &tpl); err != nil {
-		t.Fatalf("解析模板失败：%v", err)
-	}
+	unmarshalData(t, w, &tpl)
 	if tpl.ID != "tavily-search" {
 		t.Errorf("期望返回 tavily-search，实际 %q", tpl.ID)
 	}
@@ -160,7 +150,7 @@ func TestPrefillTemplate(t *testing.T) {
 		t.Fatalf("期望 HTTP 200，实际 %d，响应体 %s", w.Code, w.Body.String())
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(w.Body.Bytes(), &raw); err != nil {
+	if err := json.Unmarshal(envelopeData(t, w), &raw); err != nil {
 		t.Fatalf("解析响应失败：%v", err)
 	}
 	for _, key := range []string{"templateId", "name", "transport", "presetParams", "placeholders"} {
@@ -169,9 +159,7 @@ func TestPrefillTemplate(t *testing.T) {
 		}
 	}
 	var form template.PrefillForm
-	if err := json.Unmarshal(w.Body.Bytes(), &form); err != nil {
-		t.Fatalf("解析预填充表单失败：%v", err)
-	}
+	unmarshalData(t, w, &form)
 	if form.TemplateID != "tavily-search" {
 		t.Errorf("期望预填充来源为 tavily-search，实际 %q", form.TemplateID)
 	}
