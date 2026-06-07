@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="web/public/images/logo/auth-logo.svg" alt="MCP Proxy Gateway" width="280" />
+
 # MCP Proxy Gateway
 
 **通用的 MCP（Model Context Protocol）聚合与代理网关**

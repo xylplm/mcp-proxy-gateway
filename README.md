@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="web/public/images/logo/auth-logo.svg" alt="MCP Proxy Gateway" width="280" />
+
 # MCP Proxy Gateway
 
 **A universal aggregation & proxy gateway for MCP (Model Context Protocol)**
