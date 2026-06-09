@@ -102,12 +102,30 @@ const router = createRouter({
       },
     },
     {
+      path: '/api-service',
+      name: 'APIService',
+      component: () => import('../views/APIServiceView.vue'),
+      meta: {
+        title: 'API 服务',
+        requiresAuth: true,
+      },
+    },
+    {
       path: '/settings',
       name: 'Settings',
       component: () => import('../views/SettingsView.vue'),
       // 受保护页面：需登录后访问（Req 17.4）
       meta: {
         title: '系统设置',
+        requiresAuth: true,
+      },
+    },
+    {
+      path: '/about',
+      name: 'About',
+      component: () => import('../views/AboutView.vue'),
+      meta: {
+        title: '关于',
         requiresAuth: true,
       },
     },

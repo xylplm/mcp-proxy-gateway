@@ -31,6 +31,7 @@ import {
 import { listUpstreams } from '@/api/upstreams'
 import { listAPIKeys } from '@/api/apikeys'
 import { statsByUpstream } from '@/api/stats'
+import { getSettings, updateSettings, type MCPMode, type YAMLConfig } from '@/api/settings'
 
 const loading = ref(true)
 const loadError = ref('')
@@ -46,6 +47,11 @@ const apiKeyEnabled = ref(0)
 
 // 最近 7 天调用量
 const recentCalls = ref(0)
+
+const settings = ref<YAMLConfig | null>(null)
+const modeSaving = ref(false)
+const modeError = ref('')
+const modeToast = ref('')
 
 /** 指标卡描述。 */
 interface MetricCard {
@@ -83,12 +89,45 @@ const cards = computed<MetricCard[]>(() => [
 /** 快速入口项。 */
 const quickLinks: ReadonlyArray<{ to: string; label: string; desc: string; icon: Component }> = [
   { to: '/upstreams', label: '上游 MCP 管理', desc: '配置与连接上游服务', icon: PlugInIcon },
+  { to: '/api-service', label: 'API 服务', desc: '查看接入地址与服务状态', icon: BoxCubeIcon },
   { to: '/apikeys', label: 'API Key 管理', desc: '签发与管控访问密钥', icon: UserGroupIcon },
   { to: '/rules', label: '规则管理', desc: '工具屏蔽与别名规则', icon: ListIcon },
   { to: '/statistics', label: '调用统计', desc: '查看调用排行与趋势', icon: BarChartIcon },
   { to: '/audit', label: '审计日志', desc: '追溯关键操作记录', icon: BoxCubeIcon },
   { to: '/settings', label: '系统设置', desc: '调整网关运行参数', icon: SettingsIcon },
 ]
+
+const modeOptions: ReadonlyArray<{
+  value: MCPMode
+  title: string
+  desc: string
+  note: string
+}> = [
+  {
+    value: 'smart',
+    title: '智能模式',
+    desc: '客户端先看到少量网关工具，再按需查找和调用具体工具。',
+    note: '适合工具较多、希望节省上下文的客户端',
+  },
+  {
+    value: 'full',
+    title: '全量模式',
+    desc: '客户端连接后直接拿到当前可见的全部工具。',
+    note: '适合工具数量较少、客户端需要完整工具清单的场景',
+  },
+]
+
+const currentMode = computed<MCPMode | null>(() => settings.value?.mcp_api.mode ?? null)
+const currentModeLabel = computed(() => {
+  if (currentMode.value === null) return '加载中'
+  return currentMode.value === 'full' ? '全量模式' : '智能模式'
+})
+const currentModeClass = computed(() => {
+  if (currentMode.value === null) return 'bg-gray-100 text-gray-600 dark:bg-white/5 dark:text-gray-400'
+  return currentMode.value === 'full'
+    ? 'bg-warning-50 text-warning-700 dark:bg-warning-500/10 dark:text-warning-400'
+    : 'bg-success-50 text-success-700 dark:bg-success-500/10 dark:text-success-400'
+})
 
 /** 计算最近 7 天的 RFC3339 起点（当前时刻向前 7 天）。 */
 function sevenDaysAgoRFC3339(): string {
@@ -105,11 +144,13 @@ function errorMessage(err: unknown): string {
 async function loadOverview(): Promise<void> {
   loading.value = true
   loadError.value = ''
+  modeError.value = ''
   try {
-    const [upstreams, apiKeys, counts] = await Promise.all([
+    const [upstreams, apiKeys, counts, cfg] = await Promise.all([
       listUpstreams(),
       listAPIKeys(),
       statsByUpstream({ start: sevenDaysAgoRFC3339() }),
+      getSettings(),
     ])
 
     upstreamTotal.value = upstreams.length
@@ -120,10 +161,39 @@ async function loadOverview(): Promise<void> {
     apiKeyEnabled.value = apiKeys.filter((k) => k.enabled).length
 
     recentCalls.value = counts.reduce((sum, c) => sum + c.Count, 0)
+    settings.value = cfg
   } catch (err) {
     loadError.value = errorMessage(err)
   } finally {
     loading.value = false
+  }
+}
+
+function showModeToast(msg: string): void {
+  modeToast.value = msg
+  setTimeout(() => {
+    if (modeToast.value === msg) modeToast.value = ''
+  }, 2500)
+}
+
+async function switchMode(mode: MCPMode): Promise<void> {
+  if (settings.value === null || modeSaving.value || currentMode.value === mode) return
+  modeError.value = ''
+  modeSaving.value = true
+  const next: YAMLConfig = {
+    ...settings.value,
+    mcp_api: {
+      ...settings.value.mcp_api,
+      mode,
+    },
+  }
+  try {
+    settings.value = await updateSettings(next)
+    showModeToast('对外服务模式已更新')
+  } catch (err) {
+    modeError.value = errorMessage(err)
+  } finally {
+    modeSaving.value = false
   }
 }
 
@@ -172,6 +242,75 @@ const cardClass =
         </div>
       </div>
     </div>
+
+    <!-- 对外服务模式 -->
+    <section :class="cardClass" class="mt-6">
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">对外 MCP 模式</h3>
+          <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+            控制外部客户端连接网关后看到工具的方式。
+          </p>
+        </div>
+        <span
+          class="rounded-full px-2.5 py-1 text-xs font-medium"
+          :class="currentModeClass"
+        >
+          {{ currentModeLabel }}
+        </span>
+      </div>
+
+      <p
+        v-if="modeToast !== ''"
+        class="mt-4 rounded-lg bg-success-50 px-4 py-2.5 text-sm text-success-700 dark:bg-success-500/10 dark:text-success-400"
+      >
+        {{ modeToast }}
+      </p>
+      <p
+        v-if="modeError !== ''"
+        class="mt-4 rounded-lg bg-error-50 px-4 py-2.5 text-sm text-error-600 dark:bg-error-500/10 dark:text-error-400"
+      >
+        {{ modeError }}
+      </p>
+
+      <div class="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <button
+          v-for="mode in modeOptions"
+          :key="mode.value"
+          type="button"
+          class="group flex min-h-36 flex-col rounded-xl border p-4 text-left transition disabled:cursor-not-allowed disabled:opacity-70"
+          :class="
+            currentMode === mode.value
+              ? 'border-brand-300 bg-brand-50/60 shadow-theme-sm dark:border-brand-500/50 dark:bg-brand-500/[0.08]'
+              : 'border-gray-200 bg-white hover:border-brand-300 hover:bg-brand-50/40 dark:border-gray-800 dark:bg-white/[0.02] dark:hover:border-brand-500/40 dark:hover:bg-brand-500/[0.06]'
+          "
+          :disabled="loading || settings === null || modeSaving"
+          @click="switchMode(mode.value)"
+        >
+          <span class="flex items-center justify-between gap-3">
+            <span class="text-sm font-semibold text-gray-800 dark:text-white/90">
+              {{ mode.title }}
+            </span>
+            <span
+              class="flex h-5 w-5 items-center justify-center rounded-full border transition"
+              :class="
+                currentMode === mode.value
+                  ? 'border-brand-500 bg-brand-500 text-white'
+                  : 'border-gray-300 text-transparent dark:border-gray-700'
+              "
+            >
+              <span class="h-2 w-2 rounded-full bg-current"></span>
+            </span>
+          </span>
+          <span class="mt-3 text-sm leading-6 text-gray-600 dark:text-gray-300">
+            {{ mode.desc }}
+          </span>
+          <span class="mt-auto pt-4 text-xs text-gray-400 dark:text-gray-500">
+            {{ mode.note }}
+          </span>
+        </button>
+      </div>
+    </section>
 
     <!-- 快速入口 -->
     <section :class="cardClass" class="mt-6">

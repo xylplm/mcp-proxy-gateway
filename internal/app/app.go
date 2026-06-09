@@ -25,6 +25,7 @@ import (
 	"github.com/myGithub/mcp-proxy-gateway/internal/crypto"
 	"github.com/myGithub/mcp-proxy-gateway/internal/health"
 	"github.com/myGithub/mcp-proxy-gateway/internal/manager"
+	"github.com/myGithub/mcp-proxy-gateway/internal/mcpapi"
 	"github.com/myGithub/mcp-proxy-gateway/internal/stats"
 	"github.com/myGithub/mcp-proxy-gateway/internal/store"
 	syncsvc "github.com/myGithub/mcp-proxy-gateway/internal/sync"
@@ -55,6 +56,7 @@ type App struct {
 	statCleaner  *stats.Cleaner
 	auditSvc     *audit.Service
 	xiaozhiConn  *xiaozhi.Connector
+	mcpService   *mcpapi.Service
 	mgr          *manager.Manager
 	dialer       *sessionDialer
 

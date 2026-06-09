@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+
+	"github.com/myGithub/mcp-proxy-gateway/internal/config"
 )
 
 // Run 先做启动连通性探测（Req 20.1），随后启动后台服务与 HTTP 服务对外提供服务，
@@ -79,6 +81,41 @@ func (a *App) startBackground(ctx context.Context) {
 			a.logger.Error("启动小智接入连接失败", "error", err)
 		}
 	}
+}
+
+// ApplySettings 将已保存的 YAML 配置应用到当前运行中的进程组件。
+//
+// 配置落盘由 config.Manager 负责；此处只处理需要即时影响运行态的部分：
+// 对外 MCP 模式影响后续新建连接，小智接入需要按新配置启停或重连。
+func (a *App) ApplySettings(cfg config.YAMLConfig) error {
+	if a.mcpService != nil {
+		a.mcpService.Reconfigure(cfg.MCPAPI.Mode, cfg.MCPAPI.SmartDiscoveryLimit)
+	}
+
+	if a.xiaozhiConn == nil {
+		return nil
+	}
+	wasEnabled := a.xiaozhiConn.Enabled()
+	wasEndpoint := a.xiaozhiConn.Endpoint()
+	running := a.xiaozhiConn.Running()
+	restart := running && cfg.XiaoZhi.Enabled && cfg.XiaoZhi.Endpoint != wasEndpoint
+	stop := running && (!cfg.XiaoZhi.Enabled || cfg.XiaoZhi.Endpoint != wasEndpoint)
+
+	if stop {
+		a.xiaozhiConn.Stop()
+		running = false
+	}
+
+	if err := a.xiaozhiConn.Reconfigure(cfg.XiaoZhi.Endpoint, cfg.XiaoZhi.Enabled); err != nil {
+		return err
+	}
+
+	if cfg.XiaoZhi.Enabled && (!running || !wasEnabled || restart) {
+		if err := a.xiaozhiConn.Start(context.Background()); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // startAuditRetention 启动审计保留期清理循环：立即清理一次，随后每 24 小时清理一次（Req 22.5）。

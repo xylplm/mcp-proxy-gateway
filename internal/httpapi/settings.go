@@ -78,6 +78,12 @@ func (r *Router) updateSettings(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
+	if r.settingsRuntime != nil {
+		if err := r.settingsRuntime.ApplySettings(req); err != nil {
+			respondError(c, err)
+			return
+		}
+	}
 
 	saved := r.settings.Config()
 	saved.Admin = config.AdminConfig{Initialized: saved.Admin.Initialized}

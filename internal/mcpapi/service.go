@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sync"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -39,6 +40,10 @@ const (
 // BuildServer 各自构建一次性的 *mcp.Server。可见性始终以聚合服务 BuildToolSet/InvokeTool
 // 为唯一来源，保证三种传输与两种模式的可见性一致，差异仅在「暴露方式」。
 type Service struct {
+	mu sync.RWMutex
+
+	// agg 为聚合服务接口，重载对外模式时复用它重新构造模式处理器。
+	agg domain.Aggregation_Service
 	// mode 为对外模式（ModeSmart/ModeFull）；非 ModeFull 一律按智能模式处理（默认智能）。
 	mode string
 	// full 为全量模式编排核心，仅在全量模式下用于构建工具集合与路由调用。
@@ -59,19 +64,42 @@ func NewService(agg domain.Aggregation_Service, mode string, discoveryLimit int,
 	if logger == nil {
 		logger = slog.Default()
 	}
-	if mode != ModeFull {
-		mode = ModeSmart
-	}
-	return &Service{
-		mode:   mode,
-		full:   NewFullModeHandler(agg),
-		smart:  NewSmartModeHandler(agg, discoveryLimit),
+	s := &Service{
+		agg:    agg,
 		logger: logger,
 	}
+	s.Reconfigure(mode, discoveryLimit)
+	return s
 }
 
 // Mode 返回当前对外模式（ModeSmart/ModeFull）。
-func (s *Service) Mode() string { return s.mode }
+func (s *Service) Mode() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.mode
+}
+
+// Reconfigure 在运行时切换对外 MCP 模式与智能发现上限。
+//
+// 新建连接会立即使用新的模式；已建立连接是否感知变化取决于对应传输的生命周期。
+// 处理器本身不持有传输状态，因此可在管理端保存配置后安全调用。
+func (s *Service) Reconfigure(mode string, discoveryLimit int) {
+	if mode != ModeFull {
+		mode = ModeSmart
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.mode = mode
+	s.full = NewFullModeHandler(s.agg)
+	s.smart = NewSmartModeHandler(s.agg, discoveryLimit)
+}
+
+func (s *Service) snapshot() (string, *FullModeHandler, *SmartModeHandler) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.mode, s.full, s.smart
+}
 
 // BuildServer 据当前模式与 API Key 视角构建一个对外 MCP 服务端实例（Req 11.2、11.3）。
 //
@@ -84,20 +112,21 @@ func (s *Service) Mode() string { return s.mode }
 // apiKeyID 为已鉴权 API Key 的标识（由传输层在 API Key 校验通过后传入）；为空表示全局视角。
 // 每条对外连接应各调用一次本方法，得到独立的 *mcp.Server。
 func (s *Service) BuildServer(ctx context.Context, apiKeyID string) (*mcp.Server, error) {
+	mode, full, smart := s.snapshot()
 	srv := mcp.NewServer(
 		&mcp.Implementation{Name: apiServerName, Version: apiServerVersion},
 		// 始终通告 tools 能力，即使当前可见集合为空（空集合是合法状态，Req 10.7）。
 		&mcp.ServerOptions{Capabilities: &mcp.ServerCapabilities{Tools: &mcp.ToolCapabilities{ListChanged: true}}},
 	)
 
-	if s.mode == ModeFull {
-		if err := s.registerFullTools(ctx, srv, apiKeyID); err != nil {
+	if mode == ModeFull {
+		if err := s.registerFullTools(ctx, srv, apiKeyID, full); err != nil {
 			return nil, err
 		}
 		return srv, nil
 	}
 
-	s.registerGatewayTools(srv, apiKeyID)
+	s.registerGatewayTools(srv, apiKeyID, smart)
 	return srv, nil
 }
 
@@ -105,21 +134,21 @@ func (s *Service) BuildServer(ctx context.Context, apiKeyID string) (*mcp.Server
 //
 // 工具定义由聚合管线产出（已完成屏蔽、别名重写与同名去重）；每个工具注册的低层处理器以原始
 // 字节透传入参、经全量模式编排核心路由到上游并原样回传结果（Req 10.3、10.4、11.7）。
-func (s *Service) registerFullTools(ctx context.Context, srv *mcp.Server, apiKeyID string) error {
-	tools, err := s.full.ListTools(ctx, apiKeyID)
+func (s *Service) registerFullTools(ctx context.Context, srv *mcp.Server, apiKeyID string, full *FullModeHandler) error {
+	tools, err := full.ListTools(ctx, apiKeyID)
 	if err != nil {
 		return fmt.Errorf("构建全量工具集合失败：%w", err)
 	}
 	for _, t := range tools {
-		srv.AddTool(t, s.fullCallHandler(apiKeyID, t.Name))
+		srv.AddTool(t, s.fullCallHandler(apiKeyID, t.Name, full))
 	}
 	return nil
 }
 
 // fullCallHandler 返回把指定对外工具名的调用经全量模式编排核心路由到上游的低层处理器。
-func (s *Service) fullCallHandler(apiKeyID, exposedName string) mcp.ToolHandler {
+func (s *Service) fullCallHandler(apiKeyID, exposedName string, full *FullModeHandler) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		return s.full.CallTool(ctx, apiKeyID, exposedName, callArguments(req))
+		return full.CallTool(ctx, apiKeyID, exposedName, callArguments(req))
 	}
 }
 
@@ -139,25 +168,25 @@ func callArguments(req *mcp.CallToolRequest) json.RawMessage {
 //
 // 各网关工具的发现型结果（工具摘要/分页/单工具定义）以 JSON 文本 content 回传；call_tool
 // 直接透传聚合服务返回的 MCP 调用结果（Req 10.3）。
-func (s *Service) registerGatewayTools(srv *mcp.Server, apiKeyID string) {
-	for _, gt := range s.smart.GatewayTools() {
-		srv.AddTool(gt, s.gatewayHandler(apiKeyID, gt.Name))
+func (s *Service) registerGatewayTools(srv *mcp.Server, apiKeyID string, smart *SmartModeHandler) {
+	for _, gt := range smart.GatewayTools() {
+		srv.AddTool(gt, s.gatewayHandler(apiKeyID, gt.Name, smart))
 	}
 }
 
 // gatewayHandler 返回处理指定网关工具调用的低层处理器，按网关工具名分派到智能模式编排核心。
-func (s *Service) gatewayHandler(apiKeyID, gatewayName string) mcp.ToolHandler {
+func (s *Service) gatewayHandler(apiKeyID, gatewayName string, smart *SmartModeHandler) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args := callArguments(req)
 		switch gatewayName {
 		case GatewayToolListTools:
-			return s.handleGatewayListTools(ctx, apiKeyID, args)
+			return s.handleGatewayListTools(ctx, apiKeyID, args, smart)
 		case GatewayToolSearchTools:
-			return s.handleGatewaySearchTools(ctx, apiKeyID, args)
+			return s.handleGatewaySearchTools(ctx, apiKeyID, args, smart)
 		case GatewayToolGetTool:
-			return s.handleGatewayGetTool(ctx, apiKeyID, args)
+			return s.handleGatewayGetTool(ctx, apiKeyID, args, smart)
 		case GatewayToolCallTool:
-			return s.handleGatewayCallTool(ctx, apiKeyID, args)
+			return s.handleGatewayCallTool(ctx, apiKeyID, args, smart)
 		default:
 			// 仅注册了四个网关工具，正常不会到达此分支；防御性返回工具不存在。
 			return nil, domain.NewError(domain.CodeToolNotFound, "未知的网关工具")
@@ -189,12 +218,12 @@ type callToolArgs struct {
 }
 
 // handleGatewayListTools 处理 list_tools：解析分页入参 → 智能模式分页 → JSON 结果回传。
-func (s *Service) handleGatewayListTools(ctx context.Context, apiKeyID string, raw json.RawMessage) (*mcp.CallToolResult, error) {
+func (s *Service) handleGatewayListTools(ctx context.Context, apiKeyID string, raw json.RawMessage, smart *SmartModeHandler) (*mcp.CallToolResult, error) {
 	args, err := decodeGatewayArgs[listToolsArgs](raw)
 	if err != nil {
 		return nil, err
 	}
-	page, err := s.smart.ListTools(ctx, apiKeyID, args.Cursor, args.Limit)
+	page, err := smart.ListTools(ctx, apiKeyID, args.Cursor, args.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -202,12 +231,12 @@ func (s *Service) handleGatewayListTools(ctx context.Context, apiKeyID string, r
 }
 
 // handleGatewaySearchTools 处理 search_tools：解析检索入参 → 智能模式过滤 → JSON 结果回传。
-func (s *Service) handleGatewaySearchTools(ctx context.Context, apiKeyID string, raw json.RawMessage) (*mcp.CallToolResult, error) {
+func (s *Service) handleGatewaySearchTools(ctx context.Context, apiKeyID string, raw json.RawMessage, smart *SmartModeHandler) (*mcp.CallToolResult, error) {
 	args, err := decodeGatewayArgs[searchToolsArgs](raw)
 	if err != nil {
 		return nil, err
 	}
-	tools, err := s.smart.SearchTools(ctx, apiKeyID, args.Query, args.Limit)
+	tools, err := smart.SearchTools(ctx, apiKeyID, args.Query, args.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -218,12 +247,12 @@ func (s *Service) handleGatewaySearchTools(ctx context.Context, apiKeyID string,
 }
 
 // handleGatewayGetTool 处理 get_tool：解析目标名 → 智能模式查找 → 完整定义 JSON 回传。
-func (s *Service) handleGatewayGetTool(ctx context.Context, apiKeyID string, raw json.RawMessage) (*mcp.CallToolResult, error) {
+func (s *Service) handleGatewayGetTool(ctx context.Context, apiKeyID string, raw json.RawMessage, smart *SmartModeHandler) (*mcp.CallToolResult, error) {
 	args, err := decodeGatewayArgs[nameArg](raw)
 	if err != nil {
 		return nil, err
 	}
-	tool, err := s.smart.GetTool(ctx, apiKeyID, args.Name)
+	tool, err := smart.GetTool(ctx, apiKeyID, args.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -234,12 +263,12 @@ func (s *Service) handleGatewayGetTool(ctx context.Context, apiKeyID string, raw
 //
 // 不可见工具由聚合服务返回 TOOL_NOT_FOUND 且不向上游转发（Req 11.6、11.7）；该错误原样上抛
 // 由 SDK 映射为 MCP 错误响应。
-func (s *Service) handleGatewayCallTool(ctx context.Context, apiKeyID string, raw json.RawMessage) (*mcp.CallToolResult, error) {
+func (s *Service) handleGatewayCallTool(ctx context.Context, apiKeyID string, raw json.RawMessage, smart *SmartModeHandler) (*mcp.CallToolResult, error) {
 	args, err := decodeGatewayArgs[callToolArgs](raw)
 	if err != nil {
 		return nil, err
 	}
-	return s.smart.CallTool(ctx, apiKeyID, args.Name, args.Arguments)
+	return smart.CallTool(ctx, apiKeyID, args.Name, args.Arguments)
 }
 
 // decodeGatewayArgs 将网关工具的原始入参字节反序列化为类型化入参 T。

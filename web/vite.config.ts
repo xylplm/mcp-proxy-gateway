@@ -1,4 +1,5 @@
 import { fileURLToPath, URL } from 'node:url'
+import { readFileSync } from 'node:fs'
 
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
@@ -7,10 +8,16 @@ import vueDevTools from 'vite-plugin-vue-devtools'
 
 // 后端开发地址（cmd/gateway 默认监听 :8080，可经 VITE_BACKEND_URL 覆盖）。
 const BACKEND_URL = process.env.VITE_BACKEND_URL ?? 'http://localhost:8080'
+const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf-8')) as {
+  version?: string
+}
 
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [vue(), vueJsx(), vueDevTools()],
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version ?? '0.0.0'),
+  },
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),

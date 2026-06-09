@@ -84,7 +84,17 @@
 
 <script setup lang="ts">
 import { useRoute } from 'vue-router'
-import { GridIcon, HorizontalDots, PlugInIcon, ListIcon, BoxCubeIcon, SettingsIcon, PieChartIcon, TableIcon } from '@/icons'
+import {
+  GridIcon,
+  HorizontalDots,
+  PlugInIcon,
+  ListIcon,
+  BoxCubeIcon,
+  SettingsIcon,
+  PieChartIcon,
+  TableIcon,
+  InfoCircleIcon,
+} from '@/icons'
 import { useSidebar } from '@/composables/useSidebar'
 
 const route = useRoute()
@@ -126,9 +136,19 @@ const menuGroups = [
         path: '/audit',
       },
       {
+        icon: BoxCubeIcon,
+        name: 'API 服务',
+        path: '/api-service',
+      },
+      {
         icon: SettingsIcon,
         name: '系统设置',
         path: '/settings',
+      },
+      {
+        icon: InfoCircleIcon,
+        name: '关于',
+        path: '/about',
       },
     ],
   },

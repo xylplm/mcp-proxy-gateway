@@ -126,6 +126,7 @@ func (a *App) build(enc *crypto.Service, envCfg config.EnvConfig) error {
 
 	// --- 对外 MCP API 服务（MCP_API_Service）：按模式构建 server，多传输暴露 ---
 	mcpService := mcpapi.NewService(agg, yamlCfg.MCPAPI.Mode, yamlCfg.MCPAPI.SmartDiscoveryLimit, a.logger)
+	a.mcpService = mcpService
 	mcpEndpoints := mcpapi.NewEndpoints(mcpService, resolveAPIKeyID, a.logger)
 
 	// --- 小智接入服务（XiaoZhi_Connector）：出站 WS 客户端，按配置启停 ---
@@ -156,21 +157,22 @@ func (a *App) build(enc *crypto.Service, envCfg config.EnvConfig) error {
 
 	// --- 管理 REST API 路由器（httpapi）：从各服务装配 Deps ---
 	adminRouter := httpapi.NewRouter(httpapi.Deps{
-		Upstream:       mgr,
-		Refresher:      refresher,
-		RuleValidator:  ruleEngine,
-		AliasStore:     repos.Alias,
-		FilterMCPStore: repos.FilterMCP,
-		APIKeys:        apiKeyMgr,
-		APIKeyFilters:  apiKeyFilterMgr,
-		ACLStore:       repos.ACL,
-		RateLimitStore: repos.APIKey,
-		Auth:           authSvc,
-		Settings:       a.cfg,
-		ValidateCron:   syncsvc.ValidateCron,
-		Stats:          statQuery,
-		Audit:          auditSvc,
-		Templates:      templateMarket,
+		Upstream:        mgr,
+		Refresher:       refresher,
+		RuleValidator:   ruleEngine,
+		AliasStore:      repos.Alias,
+		FilterMCPStore:  repos.FilterMCP,
+		APIKeys:         apiKeyMgr,
+		APIKeyFilters:   apiKeyFilterMgr,
+		ACLStore:        repos.ACL,
+		RateLimitStore:  repos.APIKey,
+		Auth:            authSvc,
+		Settings:        a.cfg,
+		SettingsRuntime: a,
+		ValidateCron:    syncsvc.ValidateCron,
+		Stats:           statQuery,
+		Audit:           auditSvc,
+		Templates:       templateMarket,
 	})
 
 	// --- 入站路由分面装配 ---

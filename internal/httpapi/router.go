@@ -183,6 +183,14 @@ type SettingsService interface {
 	Save(cfg config.YAMLConfig) error
 }
 
+// SettingsRuntimeApplier 将已保存的配置应用到当前进程内的运行时组件。
+//
+// 例如对外 MCP 模式、小智接入开关这类配置需要在不重启进程的情况下即时影响新连接
+// 或后台连接生命周期；具体实现由 app 装配层注入，本层只负责在设置落盘成功后调用。
+type SettingsRuntimeApplier interface {
+	ApplySettings(cfg config.YAMLConfig) error
+}
+
 // CronValidator 是同步 cron 表达式保存前校验的窄接口（Req 7.3、7.4）。
 //
 // syncsvc.ValidateCron 满足该函数签名（以函数值注入，避免本包依赖 sync 包）。
@@ -241,6 +249,8 @@ type Router struct {
 	auth AuthService
 	// settings 为系统设置读写配置管理器。
 	settings SettingsService
+	// settingsRuntime 在配置保存后同步更新当前进程内的运行时组件；可为空。
+	settingsRuntime SettingsRuntimeApplier
 	// validateCron 为同步 cron 表达式保存前校验函数；为 nil 时跳过 cron 专项校验。
 	validateCron CronValidator
 	// stats 为统计查询应用服务。
@@ -253,41 +263,43 @@ type Router struct {
 
 // Deps 聚合构造 Router 所需的全部依赖，便于装配层一次性注入。
 type Deps struct {
-	Upstream       UpstreamService
-	Refresher      ToolRefresher
-	RuleValidator  RuleValidator
-	AliasStore     AliasStore
-	FilterMCPStore FilterMCPStore
-	APIKeys        APIKeyService
-	APIKeyFilters  APIKeyFilterService
-	ACLStore       ACLStore
-	RateLimitStore RateLimitStore
-	Auth           AuthService
-	Settings       SettingsService
-	ValidateCron   CronValidator
-	Stats          StatsService
-	Audit          AuditService
-	Templates      TemplateService
+	Upstream        UpstreamService
+	Refresher       ToolRefresher
+	RuleValidator   RuleValidator
+	AliasStore      AliasStore
+	FilterMCPStore  FilterMCPStore
+	APIKeys         APIKeyService
+	APIKeyFilters   APIKeyFilterService
+	ACLStore        ACLStore
+	RateLimitStore  RateLimitStore
+	Auth            AuthService
+	Settings        SettingsService
+	SettingsRuntime SettingsRuntimeApplier
+	ValidateCron    CronValidator
+	Stats           StatsService
+	Audit           AuditService
+	Templates       TemplateService
 }
 
 // NewRouter 构造管理 REST API 路由器。
 func NewRouter(d Deps) *Router {
 	return &Router{
-		upstream:       d.Upstream,
-		refresher:      d.Refresher,
-		ruleValidator:  d.RuleValidator,
-		aliasStore:     d.AliasStore,
-		filterMCPStore: d.FilterMCPStore,
-		apiKeys:        d.APIKeys,
-		apiKeyFilters:  d.APIKeyFilters,
-		aclStore:       d.ACLStore,
-		rateLimitStore: d.RateLimitStore,
-		auth:           d.Auth,
-		settings:       d.Settings,
-		validateCron:   d.ValidateCron,
-		stats:          d.Stats,
-		audit:          d.Audit,
-		templates:      d.Templates,
+		upstream:        d.Upstream,
+		refresher:       d.Refresher,
+		ruleValidator:   d.RuleValidator,
+		aliasStore:      d.AliasStore,
+		filterMCPStore:  d.FilterMCPStore,
+		apiKeys:         d.APIKeys,
+		apiKeyFilters:   d.APIKeyFilters,
+		aclStore:        d.ACLStore,
+		rateLimitStore:  d.RateLimitStore,
+		auth:            d.Auth,
+		settings:        d.Settings,
+		settingsRuntime: d.SettingsRuntime,
+		validateCron:    d.ValidateCron,
+		stats:           d.Stats,
+		audit:           d.Audit,
+		templates:       d.Templates,
 	}
 }
 
