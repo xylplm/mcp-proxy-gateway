@@ -63,6 +63,84 @@ func builtinTemplates() []Template {
 			},
 		},
 		{
+			ID:        "brave-search",
+			Name:      "Brave Search 搜索",
+			Category:  CategorySearch,
+			Summary:   "接入 Brave Search API，提供网页搜索与本地商家检索能力，需提供 Brave Search API Key。",
+			DocURL:    "https://github.com/modelcontextprotocol/servers/tree/main/src/brave-search",
+			Transport: domain.TransportStdio,
+			PresetParams: map[string]any{
+				"command": "npx",
+				"args": []any{
+					"-y", "@modelcontextprotocol/server-brave-search",
+				},
+				"env": map[string]any{
+					"BRAVE_API_KEY": "${apiKey}",
+				},
+			},
+			Placeholders: []Placeholder{
+				{
+					Name:        "apiKey",
+					Label:       "API Key",
+					Required:    true,
+					Rule:        ParamRule{Kind: ParamSecret, MinLen: 1, MaxLen: 512},
+					Description: "在 Brave Search API 控制台生成。",
+				},
+			},
+		},
+		{
+			ID:        "firecrawl-mcp",
+			Name:      "Firecrawl 网页抓取",
+			Category:  CategorySearch,
+			Summary:   "接入 Firecrawl MCP，支持网页搜索、抓取、站点地图、批量采集与深度研究，需提供 Firecrawl API Key。",
+			DocURL:    "https://github.com/firecrawl/firecrawl-mcp-server",
+			Transport: domain.TransportStdio,
+			PresetParams: map[string]any{
+				"command": "npx",
+				"args": []any{
+					"-y", "firecrawl-mcp",
+				},
+				"env": map[string]any{
+					"FIRECRAWL_API_KEY": "${apiKey}",
+				},
+			},
+			Placeholders: []Placeholder{
+				{
+					Name:        "apiKey",
+					Label:       "API Key",
+					Required:    true,
+					Rule:        ParamRule{Kind: ParamSecret, MinLen: 1, MaxLen: 512},
+					Description: "在 Firecrawl 控制台的 API Keys 页面获取。",
+				},
+			},
+		},
+		{
+			ID:        "exa-search-mcp",
+			Name:      "Exa AI 搜索",
+			Category:  CategorySearch,
+			Summary:   "接入 Exa MCP，提供实时网页搜索、网页抓取、代码搜索与研究检索能力，需提供 Exa API Key。",
+			DocURL:    "https://docs.exa.ai/reference/exa-mcp",
+			Transport: domain.TransportStdio,
+			PresetParams: map[string]any{
+				"command": "npx",
+				"args": []any{
+					"-y", "exa-mcp-server",
+				},
+				"env": map[string]any{
+					"EXA_API_KEY": "${apiKey}",
+				},
+			},
+			Placeholders: []Placeholder{
+				{
+					Name:        "apiKey",
+					Label:       "API Key",
+					Required:    true,
+					Rule:        ParamRule{Kind: ParamSecret, MinLen: 1, MaxLen: 512},
+					Description: "在 Exa 控制台的 API Keys 页面获取。",
+				},
+			},
+		},
+		{
 			ID:        "github-mcp",
 			Name:      "GitHub 代码托管",
 			Category:  CategoryDevTools,
@@ -91,6 +169,51 @@ func builtinTemplates() []Template {
 			},
 		},
 		{
+			ID:        "playwright-mcp",
+			Name:      "Playwright 浏览器自动化",
+			Category:  CategoryDevTools,
+			Summary:   "接入 Microsoft Playwright MCP，提供浏览器导航、页面操作、截图与自动化测试能力，无需凭证。",
+			DocURL:    "https://github.com/microsoft/playwright-mcp",
+			Transport: domain.TransportStdio,
+			PresetParams: map[string]any{
+				"command": "npx",
+				"args": []any{
+					"-y", "@playwright/mcp",
+				},
+			},
+			Placeholders: []Placeholder{},
+		},
+		{
+			ID:        "puppeteer-mcp",
+			Name:      "Puppeteer 浏览器自动化",
+			Category:  CategoryDevTools,
+			Summary:   "接入 Puppeteer MCP，支持网页导航、点击、表单填充、截图与浏览器脚本执行，无需凭证。",
+			DocURL:    "https://github.com/modelcontextprotocol/servers/tree/main/src/puppeteer",
+			Transport: domain.TransportStdio,
+			PresetParams: map[string]any{
+				"command": "npx",
+				"args": []any{
+					"-y", "@modelcontextprotocol/server-puppeteer",
+				},
+			},
+			Placeholders: []Placeholder{},
+		},
+		{
+			ID:        "context7-mcp",
+			Name:      "Context7 最新文档",
+			Category:  CategoryDevTools,
+			Summary:   "接入 Context7 MCP，为代码生成和配置问题提供最新库文档与示例，无需凭证即可基础使用。",
+			DocURL:    "https://github.com/upstash/context7",
+			Transport: domain.TransportStdio,
+			PresetParams: map[string]any{
+				"command": "npx",
+				"args": []any{
+					"-y", "@upstash/context7-mcp",
+				},
+			},
+			Placeholders: []Placeholder{},
+		},
+		{
 			ID:        "postgres-mcp",
 			Name:      "PostgreSQL 数据库",
 			Category:  CategoryDatabase,
@@ -110,6 +233,29 @@ func builtinTemplates() []Template {
 					Required:    true,
 					Rule:        ParamRule{Kind: ParamString, MinLen: 1, MaxLen: 2048},
 					Description: "形如 postgresql://user:pass@host:5432/dbname 的连接串。",
+				},
+			},
+		},
+		{
+			ID:        "redis-mcp",
+			Name:      "Redis 键值数据库",
+			Category:  CategoryDatabase,
+			Summary:   "接入 Redis MCP，支持读取、写入、删除和检索 Redis 键值数据，需提供 Redis 连接地址。",
+			DocURL:    "https://github.com/modelcontextprotocol/servers/tree/main/src/redis",
+			Transport: domain.TransportStdio,
+			PresetParams: map[string]any{
+				"command": "npx",
+				"args": []any{
+					"-y", "@modelcontextprotocol/server-redis", "${redisURL}",
+				},
+			},
+			Placeholders: []Placeholder{
+				{
+					Name:        "redisURL",
+					Label:       "Redis 连接地址",
+					Required:    true,
+					Rule:        ParamRule{Kind: ParamString, MinLen: 1, MaxLen: 2048},
+					Description: "形如 redis://localhost:6379 或 redis://:password@host:6379/0。",
 				},
 			},
 		},
@@ -134,6 +280,36 @@ func builtinTemplates() []Template {
 					Rule:     ParamRule{Kind: ParamString, MinLen: 1, MaxLen: 4096},
 				},
 			},
+		},
+		{
+			ID:        "memory-mcp",
+			Name:      "知识图谱记忆",
+			Category:  CategoryAIModel,
+			Summary:   "接入 Memory MCP，为模型提供本地知识图谱式长期记忆能力，无需凭证。",
+			DocURL:    "https://github.com/modelcontextprotocol/servers/tree/main/src/memory",
+			Transport: domain.TransportStdio,
+			PresetParams: map[string]any{
+				"command": "npx",
+				"args": []any{
+					"-y", "@modelcontextprotocol/server-memory",
+				},
+			},
+			Placeholders: []Placeholder{},
+		},
+		{
+			ID:        "sequential-thinking-mcp",
+			Name:      "Sequential Thinking 推理规划",
+			Category:  CategoryAIModel,
+			Summary:   "接入 Sequential Thinking MCP，为复杂任务提供分步思考、修订与分支推理工具，无需凭证。",
+			DocURL:    "https://github.com/modelcontextprotocol/servers/tree/main/src/sequentialthinking",
+			Transport: domain.TransportStdio,
+			PresetParams: map[string]any{
+				"command": "npx",
+				"args": []any{
+					"-y", "@modelcontextprotocol/server-sequential-thinking",
+				},
+			},
+			Placeholders: []Placeholder{},
 		},
 		{
 			ID:        "openai-compatible-mcp",
@@ -195,6 +371,61 @@ func builtinTemplates() []Template {
 			},
 		},
 		{
+			ID:        "notion-mcp",
+			Name:      "Notion 工作空间",
+			Category:  CategoryCollaboration,
+			Summary:   "接入 Notion 官方 MCP，支持检索、读取和编辑已授权的页面与数据源，需提供 Notion Integration Token。",
+			DocURL:    "https://developers.notion.com/docs/mcp",
+			Transport: domain.TransportStdio,
+			PresetParams: map[string]any{
+				"command": "npx",
+				"args": []any{
+					"-y", "@notionhq/notion-mcp-server",
+				},
+				"env": map[string]any{
+					"NOTION_TOKEN": "${token}",
+				},
+			},
+			Placeholders: []Placeholder{
+				{
+					Name:        "token",
+					Label:       "Integration Token",
+					Required:    true,
+					Rule:        ParamRule{Kind: ParamSecret, MinLen: 1, MaxLen: 512},
+					Description: "在 Notion 集成设置中创建内部集成，并把需要访问的页面授权给该集成。",
+				},
+			},
+		},
+		{
+			ID:        "media-saber-mcp",
+			Name:      "Media Saber 媒体订阅",
+			Category:  CategoryAutomation,
+			Summary:   "接入 Media Saber MCP，通过自然语言订阅电影和电视剧，需提供 Media Saber 服务地址与 API KEY。",
+			DocURL:    "https://wiki.msaber.fun/usage/ai/mcp.html",
+			Transport: domain.TransportStreamableHTTP,
+			PresetParams: map[string]any{
+				"headers": map[string]any{
+					"Authorization": "Bearer ${apiKey}",
+				},
+			},
+			Placeholders: []Placeholder{
+				{
+					Name:        "url",
+					Label:       "服务地址",
+					Required:    true,
+					Rule:        ParamRule{Kind: ParamURL, MaxLen: 2048},
+					Description: "填写 Media Saber MCP 地址，通常为 http://IP:端口/message。",
+				},
+				{
+					Name:        "apiKey",
+					Label:       "API KEY",
+					Required:    true,
+					Rule:        ParamRule{Kind: ParamSecret, MinLen: 1, MaxLen: 512},
+					Description: "在 Media Saber 我的信息页面的安全配置中新增或复制 API KEY。",
+				},
+			},
+		},
+		{
 			ID:           "zapier-mcp",
 			Name:         "Zapier 自动化",
 			Category:     CategoryAutomation,
@@ -208,6 +439,32 @@ func builtinTemplates() []Template {
 					Label:    "接入地址",
 					Required: true,
 					Rule:     ParamRule{Kind: ParamURL, MaxLen: 2048},
+				},
+			},
+		},
+		{
+			ID:        "google-maps-mcp",
+			Name:      "Google Maps 地图服务",
+			Category:  CategoryAutomation,
+			Summary:   "接入 Google Maps MCP，支持地理编码、地点检索、路线、距离矩阵与海拔查询，需提供 Google Maps API Key。",
+			DocURL:    "https://github.com/modelcontextprotocol/servers/tree/main/src/google-maps",
+			Transport: domain.TransportStdio,
+			PresetParams: map[string]any{
+				"command": "npx",
+				"args": []any{
+					"-y", "@modelcontextprotocol/server-google-maps",
+				},
+				"env": map[string]any{
+					"GOOGLE_MAPS_API_KEY": "${apiKey}",
+				},
+			},
+			Placeholders: []Placeholder{
+				{
+					Name:        "apiKey",
+					Label:       "API Key",
+					Required:    true,
+					Rule:        ParamRule{Kind: ParamSecret, MinLen: 1, MaxLen: 512},
+					Description: "在 Google Cloud 控制台启用 Maps API 后生成。",
 				},
 			},
 		},

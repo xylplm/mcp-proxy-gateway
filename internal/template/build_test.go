@@ -126,6 +126,36 @@ func TestBuildUpstreamSuccessInjectsAndSetsCredential(t *testing.T) {
 	}
 }
 
+// TestBuildUpstreamMediaSaber 验证 Media Saber 模板按官方手动配置生成 streamable-http 与 Bearer Header。
+func TestBuildUpstreamMediaSaber(t *testing.T) {
+	m := New()
+	cfg, err := m.BuildUpstream("media-saber-mcp", BuildInput{
+		Values: map[string]string{
+			"url":    "http://192.168.1.100:8888/message",
+			"apiKey": "sk-media-saber",
+		},
+	})
+	if err != nil {
+		t.Fatalf("合法 Media Saber 参数不应出错：%v", err)
+	}
+	if cfg.Transport != domain.TransportStreamableHTTP {
+		t.Fatalf("Media Saber 应使用 streamable-http，got=%q", cfg.Transport)
+	}
+	if cfg.ConnParams["url"] != "http://192.168.1.100:8888/message" {
+		t.Fatalf("url 未正确注入，got=%v", cfg.ConnParams["url"])
+	}
+	headers, ok := cfg.ConnParams["headers"].(map[string]any)
+	if !ok {
+		t.Fatalf("headers 应为 map，got=%T", cfg.ConnParams["headers"])
+	}
+	if headers["Authorization"] != "Bearer sk-media-saber" {
+		t.Fatalf("Authorization 未正确注入，got=%v", headers["Authorization"])
+	}
+	if cfg.Credential != "sk-media-saber" {
+		t.Fatalf("API KEY 应作为凭证保存，got=%q", cfg.Credential)
+	}
+}
+
 // TestBuildUpstreamNameFallsBackToTemplate 验证名称为空时回退到模板名称。
 func TestBuildUpstreamNameFallsBackToTemplate(t *testing.T) {
 	m := New()

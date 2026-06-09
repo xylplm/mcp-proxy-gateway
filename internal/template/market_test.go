@@ -183,7 +183,12 @@ func TestBuiltinMarket_CoversAtLeastEightCategories(t *testing.T) {
 	for _, c := range orderedCategories {
 		supported[c] = true
 	}
+	seenIDs := make(map[string]bool, len(all))
 	for _, tm := range all {
+		if seenIDs[tm.ID] {
+			t.Errorf("内置模板 ID 重复：%s", tm.ID)
+		}
+		seenIDs[tm.ID] = true
 		if !supported[tm.Category] {
 			t.Errorf("模板 %s 使用了未受支持的分类 %s", tm.ID, tm.Category)
 		}
