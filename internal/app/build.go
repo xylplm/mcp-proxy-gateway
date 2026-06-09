@@ -159,6 +159,8 @@ func (a *App) build(enc *crypto.Service, envCfg config.EnvConfig) error {
 	adminRouter := httpapi.NewRouter(httpapi.Deps{
 		Upstream:        mgr,
 		Refresher:       refresher,
+		ToolCache:       toolCache,
+		Aggregation:     agg,
 		RuleValidator:   ruleEngine,
 		AliasStore:      repos.Alias,
 		FilterMCPStore:  repos.FilterMCP,

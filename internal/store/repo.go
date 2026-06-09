@@ -102,6 +102,14 @@ func nullableText(s string) pgtype.Text {
 	return pgtype.Text{String: s, Valid: s != ""}
 }
 
+// nullableJSON 将 JSON 原始字节转为可空 JSONB 参数：空切片编码为 SQL NULL。
+func nullableJSON(raw []byte) any {
+	if len(raw) == 0 {
+		return nil
+	}
+	return raw
+}
+
 // nullableInt 将 *int 转为可空整型参数：nil 编码为 SQL NULL。
 func nullableInt(p *int) pgtype.Int4 {
 	if p == nil {

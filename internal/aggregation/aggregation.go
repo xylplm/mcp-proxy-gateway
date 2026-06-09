@@ -175,7 +175,7 @@ func (s *Service) InvokeTool(ctx context.Context, apiKeyID, exposedName string, 
 
 	// 步骤 5：异步采集调用统计（Req 16.1、16.8、16.9）。
 	// 以非阻塞方式提交，主流程附加耗时极小且永不阻塞；记录器未注入时跳过。
-	s.recordCall(ctx, apiKeyID, exposedName, entry, startedAt, result, callErr)
+	s.recordCall(ctx, apiKeyID, exposedName, entry, startedAt, args, result, callErr)
 
 	return result, callErr
 }
@@ -186,20 +186,27 @@ func (s *Service) InvokeTool(ctx context.Context, apiKeyID, exposedName string, 
 // 对外名、所用 API Key、毫秒精度时间戳与响应耗时（毫秒）。成败判定：转发返回 error 或
 // 上游报告的错误结果（result.IsError）均记为失败，其余记为成功——与「原样透传上游结果」
 // 的语义一致（Req 10.3）。recorder 未注入时为无操作。
-func (s *Service) recordCall(ctx context.Context, apiKeyID, exposedName string, entry ReverseEntry, startedAt time.Time, result domain.ToolResult, callErr error) {
+func (s *Service) recordCall(ctx context.Context, apiKeyID, exposedName string, entry ReverseEntry, startedAt time.Time, args json.RawMessage, result domain.ToolResult, callErr error) {
 	if s.recorder == nil {
 		return
 	}
 	latencyMS := int(time.Since(startedAt).Milliseconds())
 	success := callErr == nil && !result.IsError
+	var errMsg string
+	if callErr != nil {
+		errMsg = callErr.Error()
+	}
 	s.recorder.RecordAsync(ctx, store.CallStatRecord{
-		UpstreamID:   entry.UpstreamID,
-		OriginalName: entry.OriginalName,
-		ExposedName:  exposedName,
-		APIKeyID:     apiKeyID,
-		CalledAt:     startedAt.UTC(),
-		LatencyMS:    latencyMS,
-		Success:      success,
+		UpstreamID:     entry.UpstreamID,
+		OriginalName:   entry.OriginalName,
+		ExposedName:    exposedName,
+		APIKeyID:       apiKeyID,
+		CalledAt:       startedAt.UTC(),
+		LatencyMS:      latencyMS,
+		Success:        success,
+		RequestArgs:    args,
+		ResponseResult: result.Content,
+		ErrorMessage:   errMsg,
 	})
 }
 

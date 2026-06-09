@@ -82,6 +82,7 @@ func (r *Router) registerUpstreamRoutes(g *gin.RouterGroup) {
 	ups.POST("/reorder", r.reorderUpstreams)
 	ups.POST("/:id/reconnect", r.reconnectUpstream)
 	ups.POST("/:id/refresh", r.refreshUpstream)
+	ups.GET("/:id/tools", r.listUpstreamTools)
 }
 
 // listUpstreams 返回全部上游 MCP 及其当前连接状态（Req 2.3、2.8）。
@@ -221,6 +222,20 @@ func (r *Router) refreshUpstream(c *gin.Context) {
 		return
 	}
 	respondOK(c, gin.H{"id": c.Param("id"), "tools": tools, "count": len(tools)})
+}
+
+// listUpstreamTools 返回某上游当前缓存的工具列表。
+func (r *Router) listUpstreamTools(c *gin.Context) {
+	if r.toolCache == nil {
+		respondServiceUnavailable(c, "工具缓存服务未就绪")
+		return
+	}
+	tools, updatedAt, found := r.toolCache.Get(c.Request.Context(), c.Param("id"))
+	if !found {
+		respondOK(c, gin.H{"id": c.Param("id"), "tools": []domain.ToolDef{}, "count": 0, "updatedAt": nil})
+		return
+	}
+	respondOK(c, gin.H{"id": c.Param("id"), "tools": tools, "count": len(tools), "updatedAt": updatedAt})
 }
 
 // respondServiceUnavailable 以 503 返回服务未就绪错误，用于依赖未接线时的防御性拒绝。

@@ -21,11 +21,16 @@ type fakeStats struct {
 	summary        store.StatsSummary
 	daily          []store.DailyCount
 	topErrors      []store.ToolErrorRank
+	callRecords    []store.CallRecordView
+	callRecord     store.CallRecordView
 	err            error
 
-	gotStart time.Time
-	gotEnd   time.Time
-	gotLimit int
+	gotStart    time.Time
+	gotEnd      time.Time
+	gotLimit    int
+	gotAfterID  int64
+	gotAfterAt  time.Time
+	gotRecordID int64
 }
 
 func (f *fakeStats) CountByUpstream(_ context.Context, start, end time.Time) ([]store.DimensionCount, error) {
@@ -74,6 +79,22 @@ func (f *fakeStats) TopToolErrors(_ context.Context, start, end time.Time, limit
 		return nil, f.err
 	}
 	return f.topErrors, nil
+}
+
+func (f *fakeStats) ListRecords(_ context.Context, limit int, afterID int64, afterAt time.Time) ([]store.CallRecordView, error) {
+	f.gotLimit, f.gotAfterID, f.gotAfterAt = limit, afterID, afterAt
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.callRecords, nil
+}
+
+func (f *fakeStats) GetRecord(_ context.Context, id int64) (store.CallRecordView, error) {
+	f.gotRecordID = id
+	if f.err != nil {
+		return store.CallRecordView{}, f.err
+	}
+	return f.callRecord, nil
 }
 
 // TestStatsByUpstream 验证按上游统计端点返回计数并解析时间区间。
@@ -202,6 +223,52 @@ func TestStatsTopToolErrorsParsesLimit(t *testing.T) {
 	unmarshalData(t, w, &got)
 	if len(got.Tools) != 1 || got.Tools[0].FailureCalls != 3 {
 		t.Errorf("错误排行结果不符：%+v", got.Tools)
+	}
+}
+
+func TestStatsCallRecordsParsesRealtimeCursor(t *testing.T) {
+	afterAt := "2024-05-01T10:00:00Z"
+	calledAt := time.Date(2024, 5, 1, 10, 1, 0, 0, time.UTC)
+	st := &fakeStats{callRecords: []store.CallRecordView{{ID: 12, UpstreamName: "mcp", ExposedName: "tool", CalledAt: calledAt}}}
+	e := newTestEngine(Deps{Stats: st})
+
+	w := doJSON(e, http.MethodGet, "/api/admin/stats/calls?limit=11&afterId=9&afterAt="+afterAt, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("期望 HTTP 200，实际 %d，响应体 %s", w.Code, w.Body.String())
+	}
+	if st.gotLimit != 11 || st.gotAfterID != 9 {
+		t.Fatalf("调用记录游标参数未透传：limit=%d afterID=%d", st.gotLimit, st.gotAfterID)
+	}
+	wantAfterAt, _ := time.Parse(time.RFC3339, afterAt)
+	if !st.gotAfterAt.Equal(wantAfterAt) {
+		t.Fatalf("afterAt 未正确解析：got=%v want=%v", st.gotAfterAt, wantAfterAt)
+	}
+	var got struct {
+		Records []store.CallRecordView `json:"records"`
+	}
+	unmarshalData(t, w, &got)
+	if len(got.Records) != 1 || got.Records[0].ID != 12 {
+		t.Fatalf("调用记录结果不符：%+v", got.Records)
+	}
+}
+
+func TestStatsCallRecordDetailParsesID(t *testing.T) {
+	st := &fakeStats{callRecord: store.CallRecordView{ID: 42, ExposedName: "search"}}
+	e := newTestEngine(Deps{Stats: st})
+
+	w := doJSON(e, http.MethodGet, "/api/admin/stats/calls/42", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("期望 HTTP 200，实际 %d，响应体 %s", w.Code, w.Body.String())
+	}
+	if st.gotRecordID != 42 {
+		t.Fatalf("详情 ID 未透传：%d", st.gotRecordID)
+	}
+	var got struct {
+		Record store.CallRecordView `json:"record"`
+	}
+	unmarshalData(t, w, &got)
+	if got.Record.ID != 42 || got.Record.ExposedName != "search" {
+		t.Fatalf("调用详情结果不符：%+v", got.Record)
 	}
 }
 

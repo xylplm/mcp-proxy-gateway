@@ -66,6 +66,8 @@ func (r *Router) registerStatsRoutes(g *gin.RouterGroup) {
 	st.GET("/summary", r.statsSummary)
 	st.GET("/daily", r.statsDaily)
 	st.GET("/tool-errors", r.statsTopToolErrors)
+	st.GET("/calls", r.statsCallRecords)
+	st.GET("/calls/:id", r.statsCallRecordDetail)
 }
 
 // statsByUpstream 返回各上游 MCP 在区间内的调用条数（Req 16.2）。
@@ -205,4 +207,72 @@ func (r *Router) statsTopToolErrors(c *gin.Context) {
 		return
 	}
 	respondOK(c, gin.H{"tools": ranks})
+}
+
+// statsCallRecords 按最新时间倒序返回调用记录列表，afterId/afterAt 用于实时增量追加。
+func (r *Router) statsCallRecords(c *gin.Context) {
+	if r.stats == nil {
+		respondServiceUnavailable(c, "统计查询服务未就绪")
+		return
+	}
+	limit := 30
+	if l := c.Query("limit"); l != "" {
+		n, perr := strconv.Atoi(l)
+		if perr != nil {
+			respondError(c, domain.NewValidationError("调用记录条数参数非法", map[string]string{
+				"limit": "需为整数",
+			}))
+			return
+		}
+		limit = n
+	}
+	var afterID int64
+	if v := c.Query("afterId"); v != "" {
+		n, perr := strconv.ParseInt(v, 10, 64)
+		if perr != nil || n < 0 {
+			respondError(c, domain.NewValidationError("调用记录游标参数非法", map[string]string{
+				"afterId": "需为非负整数",
+			}))
+			return
+		}
+		afterID = n
+	}
+	var afterAt time.Time
+	if v := c.Query("afterAt"); v != "" {
+		t, perr := time.Parse(timeLayout, v)
+		if perr != nil {
+			respondError(c, domain.NewValidationError("调用记录时间游标参数非法", map[string]string{
+				"afterAt": "时间格式需为 RFC3339",
+			}))
+			return
+		}
+		afterAt = t
+	}
+	records, err := r.stats.ListRecords(c.Request.Context(), limit, afterID, afterAt)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	respondOK(c, gin.H{"records": records})
+}
+
+// statsCallRecordDetail 返回单条调用记录详情。
+func (r *Router) statsCallRecordDetail(c *gin.Context) {
+	if r.stats == nil {
+		respondServiceUnavailable(c, "统计查询服务未就绪")
+		return
+	}
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		respondError(c, domain.NewValidationError("调用记录标识非法", map[string]string{
+			"id": "需为正整数",
+		}))
+		return
+	}
+	record, err := r.stats.GetRecord(c.Request.Context(), id)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	respondOK(c, gin.H{"record": record})
 }

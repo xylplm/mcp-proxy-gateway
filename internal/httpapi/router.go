@@ -63,6 +63,16 @@ type ToolRefresher interface {
 	Refresh(ctx context.Context, upstreamID string) ([]domain.ToolDef, error)
 }
 
+// ToolCacheStore 是管理台读取已缓存工具列表的窄接口。
+type ToolCacheStore interface {
+	Get(ctx context.Context, upstreamID string) (tools []domain.ToolDef, updatedAt time.Time, found bool)
+}
+
+// AggregationToolService 是管理台读取聚合后工具列表的窄接口。
+type AggregationToolService interface {
+	BuildToolSet(ctx context.Context, apiKeyID string) ([]domain.ToolDef, error)
+}
+
 // RuleValidator 是保存前校验别名/屏蔽规则的窄接口（Req 8.9、9.7、9.8、13.4）。
 //
 // *domain.engine（经 domain.NewRuleEngine 构造）满足该接口。
@@ -212,6 +222,10 @@ type StatsService interface {
 	Daily(ctx context.Context, start, end time.Time) ([]store.DailyCount, error)
 	// TopToolErrors 返回闭区间内按失败次数降序的工具错误排行。
 	TopToolErrors(ctx context.Context, start, end time.Time, limit int) ([]store.ToolErrorRank, error)
+	// ListRecords 按最新时间倒序分页返回调用记录。
+	ListRecords(ctx context.Context, limit int, afterID int64, afterAt time.Time) ([]store.CallRecordView, error)
+	// GetRecord 按 ID 返回单条调用记录详情。
+	GetRecord(ctx context.Context, id int64) (store.CallRecordView, error)
 }
 
 // AuditService 是审计日志分页查询依赖的应用服务窄接口（Req 22.4）。
@@ -231,6 +245,10 @@ type Router struct {
 	upstream UpstreamService
 	// refresher 为上游工具列表手动刷新器。
 	refresher ToolRefresher
+	// toolCache 为管理台读取上游已缓存工具列表的仓储。
+	toolCache ToolCacheStore
+	// aggregation 为管理台读取聚合后真实工具列表的服务。
+	aggregation AggregationToolService
 	// ruleValidator 为别名/屏蔽规则的保存前校验器（领域规则引擎）。
 	ruleValidator RuleValidator
 	// aliasStore 为别名规则仓储。
@@ -265,6 +283,8 @@ type Router struct {
 type Deps struct {
 	Upstream        UpstreamService
 	Refresher       ToolRefresher
+	ToolCache       ToolCacheStore
+	Aggregation     AggregationToolService
 	RuleValidator   RuleValidator
 	AliasStore      AliasStore
 	FilterMCPStore  FilterMCPStore
@@ -286,6 +306,8 @@ func NewRouter(d Deps) *Router {
 	return &Router{
 		upstream:        d.Upstream,
 		refresher:       d.Refresher,
+		toolCache:       d.ToolCache,
+		aggregation:     d.Aggregation,
 		ruleValidator:   d.RuleValidator,
 		aliasStore:      d.AliasStore,
 		filterMCPStore:  d.FilterMCPStore,
@@ -328,6 +350,7 @@ func (r *Router) Register(router gin.IRouter, adminAuth gin.HandlerFunc) {
 	r.registerRuleRoutes(admin)
 	r.registerAPIKeyRoutes(admin)
 	r.registerSettingsRoutes(admin)
+	r.registerToolRoutes(admin)
 	r.registerStatsRoutes(admin)
 	r.registerAuditRoutes(admin)
 	r.registerTemplateRoutes(admin)

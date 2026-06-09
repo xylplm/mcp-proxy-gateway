@@ -92,6 +92,14 @@ func (q *fakeQuerier) TopToolErrors(_ context.Context, start, end time.Time, lim
 	return q.topErrors, nil
 }
 
+func (q *fakeQuerier) ListRecords(_ context.Context, _ int, _ int64, _ time.Time) ([]store.CallRecordView, error) {
+	return nil, nil
+}
+
+func (q *fakeQuerier) GetRecord(_ context.Context, _ int64) (store.CallRecordView, error) {
+	return store.CallRecordView{}, nil
+}
+
 // fakeQueryCfg 是 ConfigProvider 的内存实现：返回固定的工具排行默认条数。
 type fakeQueryCfg struct {
 	topLimitDefault int

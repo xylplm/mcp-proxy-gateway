@@ -38,6 +38,10 @@ type StatQuerier interface {
 	Daily(ctx context.Context, start, end time.Time) ([]store.DailyCount, error)
 	// TopToolErrors 返回 [start, end] 闭区间内按失败次数降序排列的工具错误排行。
 	TopToolErrors(ctx context.Context, start, end time.Time, limit int) ([]store.ToolErrorRank, error)
+	// ListRecords 按最新时间倒序分页返回调用记录。
+	ListRecords(ctx context.Context, limit int, afterID int64, afterAt time.Time) ([]store.CallRecordView, error)
+	// GetRecord 按 ID 返回单条调用记录详情。
+	GetRecord(ctx context.Context, id int64) (store.CallRecordView, error)
 }
 
 // ConfigProvider 是统计查询服务读取排行默认条数配置的窄接口。
@@ -118,6 +122,16 @@ func (s *QueryService) Daily(ctx context.Context, start, end time.Time) ([]store
 // TopToolErrors 返回 [start, end] 闭区间内按失败次数降序排列的工具错误排行。
 func (s *QueryService) TopToolErrors(ctx context.Context, start, end time.Time, limit int) ([]store.ToolErrorRank, error) {
 	return s.repo.TopToolErrors(ctx, start, end, s.resolveTopLimit(limit))
+}
+
+// ListRecords 按最新时间倒序分页返回调用记录；afterID/afterAt 用于实时页面增量拉取。
+func (s *QueryService) ListRecords(ctx context.Context, limit int, afterID int64, afterAt time.Time) ([]store.CallRecordView, error) {
+	return s.repo.ListRecords(ctx, limit, afterID, afterAt)
+}
+
+// GetRecord 按 ID 返回单条调用记录详情。
+func (s *QueryService) GetRecord(ctx context.Context, id int64) (store.CallRecordView, error) {
+	return s.repo.GetRecord(ctx, id)
 }
 
 // resolveTopLimit 计算生效的工具排行返回条数（Req 16.3）。

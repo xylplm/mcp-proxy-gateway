@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -40,6 +41,29 @@ type CallStatRecord struct {
 	LatencyMS int
 	// Success 表示执行结果是否成功。
 	Success bool
+	// RequestArgs 为调用入参 JSON。
+	RequestArgs json.RawMessage
+	// ResponseResult 为调用出参 JSON。
+	ResponseResult json.RawMessage
+	// ErrorMessage 为调用失败时的错误说明。
+	ErrorMessage string
+}
+
+// CallRecordView 是管理台调用记录列表与详情使用的单条调用视图。
+type CallRecordView struct {
+	ID             int64
+	UpstreamID     string
+	UpstreamName   string
+	OriginalName   string
+	ExposedName    string
+	APIKeyID       string
+	APIKeyName     string
+	CalledAt       time.Time
+	LatencyMS      int
+	Success        bool
+	RequestArgs    json.RawMessage
+	ResponseResult json.RawMessage
+	ErrorMessage   string
 }
 
 // DimensionCount 为按某一维度（上游 MCP 或 API Key）聚合的调用条数（Req 16.2、16.4）。
@@ -111,6 +135,7 @@ func (r *CallStatRepo) Insert(ctx context.Context, records []CallStatRecord) err
 	columns := []string{
 		"upstream_id", "original_name", "exposed_name",
 		"api_key_id", "called_at", "latency_ms", "success",
+		"request_args", "response_result", "error_message",
 	}
 	rows := make([][]any, 0, len(records))
 	for _, rec := range records {
@@ -130,6 +155,9 @@ func (r *CallStatRepo) Insert(ctx context.Context, records []CallStatRecord) err
 			rec.CalledAt,
 			int32(rec.LatencyMS),
 			rec.Success,
+			nullableJSON(rec.RequestArgs),
+			nullableJSON(rec.ResponseResult),
+			nullableText(rec.ErrorMessage),
 		})
 	}
 
@@ -138,6 +166,89 @@ func (r *CallStatRepo) Insert(ctx context.Context, records []CallStatRecord) err
 		return err
 	}
 	return nil
+}
+
+// ListRecords 按调用时间倒序分页返回调用记录。afterAt/afterID 用于前端停留页面时增量追加最新调用。
+func (r *CallStatRepo) ListRecords(ctx context.Context, limit int, afterID int64, afterAt time.Time) ([]CallRecordView, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	const q = `
+		SELECT
+			cs.id,
+			cs.upstream_id,
+			coalesce(up.name, ''),
+			cs.original_name,
+			coalesce(cs.exposed_name, ''),
+			cs.api_key_id,
+			coalesce(ak.name, ''),
+			cs.called_at,
+			cs.latency_ms,
+			cs.success,
+			coalesce(cs.request_args, 'null'::jsonb),
+			coalesce(cs.response_result, 'null'::jsonb),
+			coalesce(cs.error_message, '')
+		FROM call_stat cs
+		LEFT JOIN upstream_mcp up ON up.id = cs.upstream_id
+		LEFT JOIN api_key ak ON ak.id = cs.api_key_id
+		WHERE (
+			($1::bigint = 0 AND $2::timestamptz IS NULL)
+			OR cs.id > $1
+			OR ($2::timestamptz IS NOT NULL AND (cs.called_at > $2 OR (cs.called_at = $2 AND cs.id > $1)))
+		)
+		ORDER BY cs.called_at DESC, cs.id DESC
+		LIMIT $3`
+	var afterAtParam any
+	if !afterAt.IsZero() {
+		afterAtParam = afterAt
+	}
+	rows, err := r.pool.Query(ctx, q, afterID, afterAtParam, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanCallRecordViews(rows)
+}
+
+// GetRecord 按 ID 读取单条调用记录详情。
+func (r *CallStatRepo) GetRecord(ctx context.Context, id int64) (CallRecordView, error) {
+	const q = `
+		SELECT
+			cs.id,
+			cs.upstream_id,
+			coalesce(up.name, ''),
+			cs.original_name,
+			coalesce(cs.exposed_name, ''),
+			cs.api_key_id,
+			coalesce(ak.name, ''),
+			cs.called_at,
+			cs.latency_ms,
+			cs.success,
+			coalesce(cs.request_args, 'null'::jsonb),
+			coalesce(cs.response_result, 'null'::jsonb),
+			coalesce(cs.error_message, '')
+		FROM call_stat cs
+		LEFT JOIN upstream_mcp up ON up.id = cs.upstream_id
+		LEFT JOIN api_key ak ON ak.id = cs.api_key_id
+		WHERE cs.id = $1
+		ORDER BY cs.called_at DESC
+		LIMIT 1`
+	rows, err := r.pool.Query(ctx, q, id)
+	if err != nil {
+		return CallRecordView{}, err
+	}
+	defer rows.Close()
+	records, err := scanCallRecordViews(rows)
+	if err != nil {
+		return CallRecordView{}, err
+	}
+	if len(records) == 0 {
+		return CallRecordView{}, domain.NewError(domain.CodeNotFound, "调用记录不存在")
+	}
+	return records[0], nil
 }
 
 // CountByUpstream 统计 [start, end] 闭区间内各上游 MCP 的调用条数（含成功失败）（Req 16.2、16.5）。
@@ -513,6 +624,45 @@ func (r *CallStatRepo) queryDimensionCounts(ctx context.Context, q string, start
 			return nil, err
 		}
 		result = append(result, DimensionCount{ID: uuidString(id), Count: count})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func scanCallRecordViews(rows pgx.Rows) ([]CallRecordView, error) {
+	result := make([]CallRecordView, 0)
+	for rows.Next() {
+		var (
+			upstreamID pgtype.UUID
+			apiKeyID   pgtype.UUID
+			request    []byte
+			response   []byte
+			item       CallRecordView
+		)
+		if err := rows.Scan(
+			&item.ID,
+			&upstreamID,
+			&item.UpstreamName,
+			&item.OriginalName,
+			&item.ExposedName,
+			&apiKeyID,
+			&item.APIKeyName,
+			&item.CalledAt,
+			&item.LatencyMS,
+			&item.Success,
+			&request,
+			&response,
+			&item.ErrorMessage,
+		); err != nil {
+			return nil, err
+		}
+		item.UpstreamID = uuidString(upstreamID)
+		item.APIKeyID = uuidString(apiKeyID)
+		item.RequestArgs = json.RawMessage(request)
+		item.ResponseResult = json.RawMessage(response)
+		result = append(result, item)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
