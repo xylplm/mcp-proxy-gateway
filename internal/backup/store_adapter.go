@@ -3,16 +3,16 @@ package backup
 import (
 	"context"
 
+	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
 	"github.com/myGithub/mcp-proxy-gateway/internal/store"
 )
 
 // StoreAdapter 基于 PostgreSQL 仓储实现 BusinessStore：导出读取全部业务配置，
 // 导入以「整体替换」语义重建业务配置（Req 23.4、23.5）。
 //
-// 导入采用「先删除现有上游/API Key（外键级联清理其从属规则与白名单），再按备份
-// 内容重建」的策略。重建时由仓储生成新的标识，并在内存中维护「备份中旧标识 → 新
-// 标识」的映射，以保证父子归属关系正确落库；备份的父子嵌套结构使该映射无需依赖
-// 旧标识本身的稳定性，导入后得到与备份结构等价的业务配置。
+// 导入采用「先删除现有上游/API Key/独立规则，再按备份内容重建」的策略。重建时由
+// 仓储生成新的上游/API Key 标识，并在内存中维护「备份中旧标识 → 新标识」的映射，
+// 以保证规则作用范围和 API Key 从属关系正确落库。
 type StoreAdapter struct {
 	repos *store.Repositories
 }
@@ -32,24 +32,27 @@ func (a *StoreAdapter) ExportBusiness(ctx context.Context) (BusinessConfig, erro
 	}
 	bc.Upstreams = make([]UpstreamEntry, 0, len(upstreams))
 	for _, u := range upstreams {
-		aliases, err := a.repos.Alias.ListByUpstream(ctx, u.ID)
-		if err != nil {
-			return BusinessConfig{}, err
-		}
-		filterRows, err := a.repos.FilterMCP.ListByUpstream(ctx, u.ID)
-		if err != nil {
-			return BusinessConfig{}, err
-		}
 		entry := UpstreamEntry{
 			ID:            u.ID,
 			Config:        u.Config,
 			CredentialEnc: u.CredentialEnc,
-			AliasRules:    aliases,
-		}
-		for _, fr := range filterRows {
-			entry.FilterRules = append(entry.FilterRules, fr.FilterRule)
 		}
 		bc.Upstreams = append(bc.Upstreams, entry)
+	}
+
+	aliases, err := a.repos.Alias.List(ctx)
+	if err != nil {
+		return BusinessConfig{}, err
+	}
+	bc.AliasRules = aliases
+
+	filterRows, err := a.repos.FilterMCP.List(ctx)
+	if err != nil {
+		return BusinessConfig{}, err
+	}
+	bc.MCPFilterRules = make([]domain.FilterRule, 0, len(filterRows))
+	for _, fr := range filterRows {
+		bc.MCPFilterRules = append(bc.MCPFilterRules, fr.FilterRule)
 	}
 
 	keys, err := a.repos.APIKey.List(ctx)
@@ -84,8 +87,25 @@ func (a *StoreAdapter) ExportBusiness(ctx context.Context) (BusinessConfig, erro
 // 注意：当前实现非单一事务，逐条写入；若中途失败可能产生部分应用。调用方应在
 // 调用前完成全部校验（Service.Import 已保证仅在校验通过后才进入本方法）。
 func (a *StoreAdapter) ImportBusiness(ctx context.Context, bc BusinessConfig) error {
-	// 1. 清空现有业务配置：删除全部上游（级联其别名/屏蔽规则）与全部 API Key
-	//    （级联其屏蔽规则与白名单）。
+	// 1. 清空现有业务配置：删除全部独立规则、上游与 API Key。
+	existingAliases, err := a.repos.Alias.List(ctx)
+	if err != nil {
+		return err
+	}
+	for _, ar := range existingAliases {
+		if err := a.repos.Alias.Delete(ctx, ar.ID); err != nil {
+			return err
+		}
+	}
+	existingFilters, err := a.repos.FilterMCP.List(ctx)
+	if err != nil {
+		return err
+	}
+	for _, fr := range existingFilters {
+		if err := a.repos.FilterMCP.Delete(ctx, fr.ID); err != nil {
+			return err
+		}
+	}
 	existingUpstreams, err := a.repos.Upstream.List(ctx)
 	if err != nil {
 		return err
@@ -105,29 +125,33 @@ func (a *StoreAdapter) ImportBusiness(ctx context.Context, bc BusinessConfig) er
 		}
 	}
 
-	// 2. 重建上游及其从属规则。
+	// 2. 重建上游并记录旧标识到新标识的映射。
+	upstreamIDMap := make(map[string]string, len(bc.Upstreams))
 	for _, ue := range bc.Upstreams {
 		created, err := a.repos.Upstream.Create(ctx, ue.Config, ue.CredentialEnc)
 		if err != nil {
 			return err
 		}
-		for _, ar := range ue.AliasRules {
-			ar.UpstreamID = created.ID
-			ar.ID = ""
-			if _, err := a.repos.Alias.Create(ctx, ar); err != nil {
-				return err
-			}
+		upstreamIDMap[ue.ID] = created.ID
+	}
+
+	// 3. 重建独立别名与 MCP 级屏蔽规则。
+	for _, ar := range bc.AliasRules {
+		ar.ID = ""
+		ar.UpstreamIDs = remapIDs(ar.UpstreamIDs, upstreamIDMap)
+		if _, err := a.repos.Alias.Create(ctx, ar); err != nil {
+			return err
 		}
-		for _, fr := range ue.FilterRules {
-			row := store.FilterMCPRow{FilterRule: fr, UpstreamID: created.ID}
-			row.ID = ""
-			if _, err := a.repos.FilterMCP.Create(ctx, row); err != nil {
-				return err
-			}
+	}
+	for _, fr := range bc.MCPFilterRules {
+		fr.ID = ""
+		fr.UpstreamIDs = remapIDs(fr.UpstreamIDs, upstreamIDMap)
+		if _, err := a.repos.FilterMCP.Create(ctx, store.FilterMCPRow{FilterRule: fr}); err != nil {
+			return err
 		}
 	}
 
-	// 3. 重建 API Key 及其从属规则与白名单。
+	// 4. 重建 API Key 及其从属规则与白名单。
 	for _, ke := range bc.APIKeys {
 		meta := ke.Meta
 		meta.ID = "" // 由仓储生成新标识
@@ -150,4 +174,17 @@ func (a *StoreAdapter) ImportBusiness(ctx context.Context, bc BusinessConfig) er
 	}
 
 	return nil
+}
+
+func remapIDs(ids []string, idMap map[string]string) []string {
+	if len(ids) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if mapped, ok := idMap[id]; ok {
+			out = append(out, mapped)
+		}
+	}
+	return out
 }

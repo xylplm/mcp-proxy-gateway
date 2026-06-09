@@ -95,12 +95,14 @@ type Upstream struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 
-// AliasRule 是绑定在某个上游 MCP 上、用于重命名工具或重写描述的别名规则。
+// AliasRule 是用于重命名工具或重写描述的规则，可作用于全部上游或指定多个上游。
 type AliasRule struct {
 	// ID 为规则唯一标识。
 	ID string `json:"id"`
-	// UpstreamID 为该规则绑定的上游 MCP 标识。
-	UpstreamID string `json:"upstreamId"`
+	// ScopeType 为规则作用范围：all 或 upstreams。
+	ScopeType string `json:"scopeType,omitempty"`
+	// UpstreamIDs 为 scopeType=upstreams 时指定的上游 MCP 标识列表。
+	UpstreamIDs []string `json:"upstreamIds,omitempty"`
 	// Pattern 为匹配模式，长度需在 1 至 200 个字符之间。
 	Pattern string `json:"pattern"`
 	// IsRegex 表示是否启用正则匹配（完整匹配）。
@@ -113,7 +115,7 @@ type AliasRule struct {
 	SortOrder int `json:"sortOrder"`
 }
 
-// FilterRule 是绑定在某个上游 MCP 或 API Key 上、用于屏蔽过滤工具的规则。
+// FilterRule 是用于屏蔽过滤工具的规则，可作用于全部上游、指定多个上游或 API Key。
 type FilterRule struct {
 	// ID 为规则唯一标识。
 	ID string `json:"id"`
@@ -125,4 +127,8 @@ type FilterRule struct {
 	Enabled bool `json:"enabled"`
 	// SortOrder 为规则排序顺序。
 	SortOrder int `json:"sortOrder"`
+	// ScopeType 为规则作用范围：all 或 upstreams。API Key 级规则由独立服务管理。
+	ScopeType string `json:"scopeType,omitempty"`
+	// UpstreamIDs 为 scopeType=upstreams 时指定的上游 MCP 标识列表。
+	UpstreamIDs []string `json:"upstreamIds,omitempty"`
 }

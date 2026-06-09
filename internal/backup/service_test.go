@@ -55,13 +55,13 @@ func sampleBusiness() BusinessConfig {
 					AutoSync:   true,
 				},
 				CredentialEnc: []byte{0x01, 0x02, 0x03},
-				AliasRules: []domain.AliasRule{
-					{ID: "a1", UpstreamID: "11111111-1111-4111-8111-111111111111", Pattern: "foo", TargetName: "bar", SortOrder: 0},
-				},
-				FilterRules: []domain.FilterRule{
-					{ID: "f1", Pattern: "secret*", IsRegex: false, Enabled: true, SortOrder: 0},
-				},
 			},
+		},
+		AliasRules: []domain.AliasRule{
+			{ID: "a1", ScopeType: "upstreams", UpstreamIDs: []string{"11111111-1111-4111-8111-111111111111"}, Pattern: "foo", TargetName: "bar", SortOrder: 0},
+		},
+		MCPFilterRules: []domain.FilterRule{
+			{ID: "f1", ScopeType: "upstreams", UpstreamIDs: []string{"11111111-1111-4111-8111-111111111111"}, Pattern: "secret*", IsRegex: false, Enabled: true, SortOrder: 0},
 		},
 		APIKeys: []APIKeyEntry{
 			{

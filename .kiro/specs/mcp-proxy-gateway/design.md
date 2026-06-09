@@ -319,10 +319,10 @@ CREATE TABLE upstream_mcp (
     updated_at    TIMESTAMPTZ  NOT NULL DEFAULT now()
 );
 
--- 别名规则（绑定上游 MCP，Req 8）
+-- 别名规则（独立规则，支持全部上游或多上游作用范围，Req 8）
 CREATE TABLE alias_rule (
     id           UUID PRIMARY KEY,
-    upstream_id  UUID NOT NULL REFERENCES upstream_mcp(id) ON DELETE CASCADE,
+  scope_type   VARCHAR(16) NOT NULL DEFAULT 'all',       -- all|upstreams
     pattern      VARCHAR(200) NOT NULL,
     is_regex     BOOLEAN NOT NULL DEFAULT false,
     target_name  VARCHAR(100),                            -- 目标名称（与描述至少一项）
@@ -331,17 +331,28 @@ CREATE TABLE alias_rule (
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- 屏蔽规则（绑定上游 MCP，Req 9）
+  CREATE TABLE alias_rule_upstream (
+    rule_id     UUID NOT NULL REFERENCES alias_rule(id) ON DELETE CASCADE,
+    upstream_id UUID NOT NULL REFERENCES upstream_mcp(id) ON DELETE CASCADE,
+    PRIMARY KEY (rule_id, upstream_id)
+  );
+
+  -- 屏蔽规则（独立规则，支持全部上游或多上游作用范围，Req 9）
 CREATE TABLE filter_rule_mcp (
     id           UUID PRIMARY KEY,
-    upstream_id  UUID NOT NULL REFERENCES upstream_mcp(id) ON DELETE CASCADE,
+    scope_type   VARCHAR(16) NOT NULL DEFAULT 'all',       -- all|upstreams
     pattern      VARCHAR(200) NOT NULL,
     is_regex     BOOLEAN NOT NULL DEFAULT false,
     enabled      BOOLEAN NOT NULL DEFAULT true,           -- 单条启停（Req 9.11）
     sort_order   INTEGER NOT NULL,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
-    -- 约束：同一 upstream_id 下最多 100 条（Req 9.2，应用层强制）
 );
+
+  CREATE TABLE filter_rule_mcp_upstream (
+    rule_id     UUID NOT NULL REFERENCES filter_rule_mcp(id) ON DELETE CASCADE,
+    upstream_id UUID NOT NULL REFERENCES upstream_mcp(id) ON DELETE CASCADE,
+    PRIMARY KEY (rule_id, upstream_id)
+  );
 
 -- API Key 元数据（Req 12）
 CREATE TABLE api_key (

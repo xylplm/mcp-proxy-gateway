@@ -12,7 +12,7 @@
 //	MPG_TEST_PG_DSN="postgres://user:pass@localhost:5432/mpg_test?sslmode=disable" \
 //	    go test -tags integration ./internal/store/...
 //
-// 覆盖需求：2.1（创建并持久化）、2.5（删除上游级联清理规则与工具缓存）、23.3（业务数据持久化到 PG）。
+// 覆盖需求：2.1（创建并持久化）、2.5（删除上游级联清理规则绑定与工具缓存）、23.3（业务数据持久化到 PG）。
 package store
 
 import (
@@ -224,7 +224,7 @@ func TestUpstreamRepoNotFound(t *testing.T) {
 	}
 }
 
-// TestUpstreamCascadeDelete 验证删除上游后，其别名规则、屏蔽规则与工具缓存被 ON DELETE CASCADE 级联清理（Req 2.5）。
+// TestUpstreamCascadeDelete 验证删除上游后，其规则绑定与工具缓存被 ON DELETE CASCADE 级联清理（Req 2.5）。
 func TestUpstreamCascadeDelete(t *testing.T) {
 	ctx, _, repos := setupRepos(t)
 
@@ -233,24 +233,29 @@ func TestUpstreamCascadeDelete(t *testing.T) {
 		t.Fatalf("创建上游失败: %v", err)
 	}
 
-	// 绑定一条别名规则。
-	if _, err := repos.Alias.Create(ctx, domain.AliasRule{
-		UpstreamID: up.ID,
-		Pattern:    "old_tool",
-		IsRegex:    false,
-		TargetName: "new_tool",
-		SortOrder:  0,
-	}); err != nil {
+	// 创建一条仅作用于该上游的别名规则。
+	alias, err := repos.Alias.Create(ctx, domain.AliasRule{
+		ScopeType:   "upstreams",
+		UpstreamIDs: []string{up.ID},
+		Pattern:     "old_tool",
+		IsRegex:     false,
+		TargetName:  "new_tool",
+		SortOrder:   0,
+	})
+	if err != nil {
 		t.Fatalf("创建别名规则失败: %v", err)
 	}
 
-	// 绑定一条 MCP 级屏蔽规则。
-	filterRow := FilterMCPRow{UpstreamID: up.ID}
+	// 创建一条仅作用于该上游的 MCP 级屏蔽规则。
+	filterRow := FilterMCPRow{}
+	filterRow.ScopeType = "upstreams"
+	filterRow.UpstreamIDs = []string{up.ID}
 	filterRow.Pattern = "secret_tool"
 	filterRow.IsRegex = false
 	filterRow.Enabled = true
 	filterRow.SortOrder = 0
-	if _, err := repos.FilterMCP.Create(ctx, filterRow); err != nil {
+	filter, err := repos.FilterMCP.Create(ctx, filterRow)
+	if err != nil {
 		t.Fatalf("创建屏蔽规则失败: %v", err)
 	}
 
@@ -260,7 +265,7 @@ func TestUpstreamCascadeDelete(t *testing.T) {
 		t.Fatalf("写入工具缓存失败: %v", err)
 	}
 
-	// 删除前确认从属数据均存在。
+	// 删除前确认绑定规则与工具缓存均存在。
 	if aliases, err := repos.Alias.ListByUpstream(ctx, up.ID); err != nil || len(aliases) != 1 {
 		t.Fatalf("删除前别名规则应为 1 条，err=%v len=%d", err, len(aliases))
 	}
@@ -276,16 +281,26 @@ func TestUpstreamCascadeDelete(t *testing.T) {
 		t.Fatalf("删除上游失败: %v", err)
 	}
 
-	// 删除后从属数据应被级联清理。
+	// 删除后绑定关系应被级联清理，独立规则定义本身保留。
 	if aliases, err := repos.Alias.ListByUpstream(ctx, up.ID); err != nil {
 		t.Fatalf("查询别名规则失败: %v", err)
 	} else if len(aliases) != 0 {
-		t.Errorf("级联删除后别名规则应为 0 条，实际 %d 条", len(aliases))
+		t.Errorf("级联删除绑定后该上游适用别名规则应为 0 条，实际 %d 条", len(aliases))
+	}
+	if alias, err := repos.Alias.Get(ctx, alias.ID); err != nil {
+		t.Fatalf("独立别名规则定义应保留: %v", err)
+	} else if len(alias.UpstreamIDs) != 0 {
+		t.Errorf("级联删除绑定后别名规则绑定应为空，实际 %d 条", len(alias.UpstreamIDs))
 	}
 	if filters, err := repos.FilterMCP.ListByUpstream(ctx, up.ID); err != nil {
 		t.Fatalf("查询屏蔽规则失败: %v", err)
 	} else if len(filters) != 0 {
-		t.Errorf("级联删除后屏蔽规则应为 0 条，实际 %d 条", len(filters))
+		t.Errorf("级联删除绑定后该上游适用屏蔽规则应为 0 条，实际 %d 条", len(filters))
+	}
+	if filter, err := repos.FilterMCP.Get(ctx, filter.ID); err != nil {
+		t.Fatalf("独立屏蔽规则定义应保留: %v", err)
+	} else if len(filter.UpstreamIDs) != 0 {
+		t.Errorf("级联删除绑定后屏蔽规则绑定应为空，实际 %d 条", len(filter.UpstreamIDs))
 	}
 	if _, _, found, err := repos.ToolCache.Get(ctx, up.ID); err != nil {
 		t.Fatalf("查询工具缓存失败: %v", err)

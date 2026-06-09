@@ -10,8 +10,7 @@ import (
 
 // validateBusiness 校验业务配置的引用完整性与字段级约束（Req 23.5、23.6）。
 //
-// 由于备份采用「父-子嵌套」结构（规则内嵌于其所属上游/API Key），归属关系天然成立；
-// 此处重点校验：标识非空且唯一、必填字段齐备、CIDR 文本合法。任一不满足返回
+// 此处重点校验：标识非空且唯一、规则作用范围引用存在、必填字段齐备、CIDR 文本合法。任一不满足返回
 // domain.CodeBackupInvalid 错误。
 func validateBusiness(bc BusinessConfig) error {
 	fields := make(map[string]string)
@@ -32,16 +31,21 @@ func validateBusiness(bc BusinessConfig) error {
 		if strings.TrimSpace(string(u.Config.Transport)) == "" {
 			fields[prefix+".config.transport"] = "上游传输类型不能为空"
 		}
-		for j, ar := range u.AliasRules {
-			if strings.TrimSpace(ar.Pattern) == "" {
-				fields[fmt.Sprintf("%s.aliasRules[%d].pattern", prefix, j)] = "别名规则匹配模式不能为空"
-			}
+	}
+
+	for i, ar := range bc.AliasRules {
+		prefix := fmt.Sprintf("aliasRules[%d]", i)
+		if strings.TrimSpace(ar.Pattern) == "" {
+			fields[prefix+".pattern"] = "别名规则匹配模式不能为空"
 		}
-		for j, fr := range u.FilterRules {
-			if strings.TrimSpace(fr.Pattern) == "" {
-				fields[fmt.Sprintf("%s.filterRules[%d].pattern", prefix, j)] = "屏蔽规则匹配模式不能为空"
-			}
+		validateRuleScope(fields, prefix, ar.ScopeType, ar.UpstreamIDs, seenUpstreamID)
+	}
+	for i, fr := range bc.MCPFilterRules {
+		prefix := fmt.Sprintf("mcpFilterRules[%d]", i)
+		if strings.TrimSpace(fr.Pattern) == "" {
+			fields[prefix+".pattern"] = "屏蔽规则匹配模式不能为空"
 		}
+		validateRuleScope(fields, prefix, fr.ScopeType, fr.UpstreamIDs, seenUpstreamID)
 	}
 
 	seenKeyID := make(map[string]struct{})
@@ -79,4 +83,23 @@ func validateBusiness(bc BusinessConfig) error {
 		}
 	}
 	return nil
+}
+
+func validateRuleScope(fields map[string]string, prefix, scopeType string, upstreamIDs []string, upstreams map[string]struct{}) {
+	switch scopeType {
+	case "", "all":
+		return
+	case "upstreams":
+		if len(upstreamIDs) == 0 {
+			fields[prefix+".upstreamIds"] = "选择指定上游时至少选择一个上游 MCP"
+			return
+		}
+		for j, id := range upstreamIDs {
+			if _, ok := upstreams[id]; !ok {
+				fields[fmt.Sprintf("%s.upstreamIds[%d]", prefix, j)] = "选择的上游 MCP 不存在：" + id
+			}
+		}
+	default:
+		fields[prefix+".scopeType"] = "作用范围只能是 all 或 upstreams"
+	}
 }

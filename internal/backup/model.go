@@ -22,18 +22,22 @@ type Backup struct {
 	Business BusinessConfig `json:"business"`
 }
 
-// BusinessConfig 是 PG 业务配置的可序列化快照，覆盖上游 MCP、其从属规则与 API Key 元数据。
+// BusinessConfig 是 PG 业务配置的可序列化快照，覆盖上游 MCP、独立规则与 API Key 元数据。
 //
 // 该结构同时用作 BusinessStore 的导出/导入载体：导出时由仓储读取填充，
 // 导入时整体替换库中现有业务配置。
 type BusinessConfig struct {
-	// Upstreams 为全部上游 MCP 及其从属的别名规则、MCP 级屏蔽规则。
+	// Upstreams 为全部上游 MCP。
 	Upstreams []UpstreamEntry `json:"upstreams"`
+	// AliasRules 为独立管理的全部别名规则，规则自身携带作用范围。
+	AliasRules []domain.AliasRule `json:"aliasRules,omitempty"`
+	// MCPFilterRules 为独立管理的全部 MCP 级屏蔽规则，规则自身携带作用范围。
+	MCPFilterRules []domain.FilterRule `json:"mcpFilterRules,omitempty"`
 	// APIKeys 为全部 API Key 元数据及其从属的屏蔽规则与来源白名单。
 	APIKeys []APIKeyEntry `json:"apiKeys"`
 }
 
-// UpstreamEntry 为单个上游 MCP 及其从属规则的备份条目。
+// UpstreamEntry 为单个上游 MCP 的备份条目。
 type UpstreamEntry struct {
 	// ID 为上游 MCP 标识；保留以维持别名/屏蔽规则的归属关系与导入导出等价性。
 	ID string `json:"id"`
@@ -41,10 +45,6 @@ type UpstreamEntry struct {
 	Config domain.UpstreamConfig `json:"config"`
 	// CredentialEnc 为加密后的鉴权凭证字节；无凭证时为 nil（JSON 中编码为 base64）。
 	CredentialEnc []byte `json:"credentialEnc,omitempty"`
-	// AliasRules 为绑定在该上游上的别名规则。
-	AliasRules []domain.AliasRule `json:"aliasRules"`
-	// FilterRules 为绑定在该上游上的 MCP 级屏蔽规则。
-	FilterRules []domain.FilterRule `json:"filterRules"`
 }
 
 // APIKeyEntry 为单个 API Key 元数据及其从属配置的备份条目。

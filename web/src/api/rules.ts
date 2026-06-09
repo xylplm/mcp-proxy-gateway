@@ -1,30 +1,9 @@
 /**
- * 规则管理 API 封装：别名/描述重写规则 + MCP 级屏蔽规则
- *
- * 设计要点（对应 design.md「路由分面」与 Req 8.1、9.1、9.2、9.9、9.11、17.5）：
- * - 全部端点挂载于管理前缀 `/api/admin`（见 internal/httpapi/rules.go）；
- * - 复用全局 Axios 实例（`@/api/request`），自动注入 JWT 并处理 401（Req 17.6）；
- * - 规则均绑定到某个上游 MCP：列表/创建按上游分组，更新/删除/启停按规则标识。
- *
- * 后端真实路由（已实现，见 internal/httpapi/rules.go）：
- *   别名规则：
- *     GET    /upstreams/:id/aliases   列出某上游的别名规则（响应 { aliases: [...] }）
- *     POST   /upstreams/:id/aliases   创建别名规则
- *     PUT    /aliases/:ruleId         更新别名规则
- *     DELETE /aliases/:ruleId         删除别名规则
- *   MCP 级屏蔽规则：
- *     GET    /upstreams/:id/filters         列出某上游的屏蔽规则（响应 { filters: [...] }）
- *     POST   /upstreams/:id/filters         创建屏蔽规则
- *     PUT    /filters/:ruleId               更新屏蔽规则
- *     POST   /filters/:ruleId/enable        启用屏蔽规则
- *     POST   /filters/:ruleId/disable       停用屏蔽规则
- *     DELETE /filters/:ruleId               删除屏蔽规则
- *
- * 说明：
- * - 别名规则不支持独立启停（无 enabled 字段）；排序通过 sortOrder 字段经 PUT 更新实现。
- * - 屏蔽规则支持单条启停（enable/disable 端点）；排序通过 sortOrder 字段经 PUT 更新实现。
+ * 规则管理 API 封装：规则独立管理，作用范围支持全部上游或指定多个上游。
  */
 import request from '@/api/request'
+
+export type RuleScopeType = 'all' | 'upstreams'
 
 /**
  * 别名/描述重写规则，与后端 domain.AliasRule 对齐。
@@ -33,8 +12,8 @@ import request from '@/api/request'
 export interface AliasRule {
   /** 规则唯一标识。 */
   id: string
-  /** 绑定的上游 MCP 标识。 */
-  upstreamId: string
+  scopeType: RuleScopeType
+  upstreamIds?: string[]
   /** 匹配模式，长度 1-200。 */
   pattern: string
   /** 是否启用正则匹配（完整匹配）。 */
@@ -49,6 +28,8 @@ export interface AliasRule {
 
 /** 创建/更新别名规则的请求体，与后端 aliasRuleRequest 对齐。 */
 export interface AliasRuleRequest {
+  scopeType: RuleScopeType
+  upstreamIds: string[]
   pattern: string
   isRegex: boolean
   targetName: string
@@ -58,7 +39,6 @@ export interface AliasRuleRequest {
 
 /**
  * MCP 级屏蔽规则，与后端 store.FilterMCPRow（内嵌 domain.FilterRule）对齐。
- * 注意：后端 UpstreamID 字段无 json tag，序列化为大写 `UpstreamID`。
  */
 export interface FilterRule {
   /** 规则唯一标识。 */
@@ -71,12 +51,14 @@ export interface FilterRule {
   enabled: boolean
   /** 规则排序顺序。 */
   sortOrder: number
-  /** 绑定的上游 MCP 标识（后端字段名为大写 UpstreamID）。 */
-  UpstreamID?: string
+  scopeType: RuleScopeType
+  upstreamIds?: string[]
 }
 
 /** 创建/更新屏蔽规则的请求体，与后端 filterRuleRequest 对齐。 */
 export interface FilterRuleRequest {
+  scopeType: RuleScopeType
+  upstreamIds: string[]
   pattern: string
   isRegex: boolean
   enabled: boolean
@@ -95,27 +77,19 @@ interface ListFiltersResponse {
 
 /* ===================== 别名/描述重写规则（Req 8.1） ===================== */
 
-/** 列出某上游 MCP 的全部别名规则。后端可能返回 null，归一化为空数组。 */
-export async function listAliases(upstreamId: string): Promise<AliasRule[]> {
-  const res = await request.get<ListAliasesResponse>(
-    `/upstreams/${encodeURIComponent(upstreamId)}/aliases`,
-  )
+/** 列出全部别名规则。后端可能返回 null，归一化为空数组。 */
+export async function listAliases(): Promise<AliasRule[]> {
+  const res = await request.get<ListAliasesResponse>('/aliases')
   return res.data?.aliases ?? []
 }
 
-/** 在某上游 MCP 上创建一条别名规则（Req 8.1、8.9）。 */
-export async function createAlias(
-  upstreamId: string,
-  payload: AliasRuleRequest,
-): Promise<AliasRule> {
-  const res = await request.post<AliasRule>(
-    `/upstreams/${encodeURIComponent(upstreamId)}/aliases`,
-    payload,
-  )
+/** 创建一条别名规则（Req 8.1、8.9）。 */
+export async function createAlias(payload: AliasRuleRequest): Promise<AliasRule> {
+  const res = await request.post<AliasRule>('/aliases', payload)
   return res.data
 }
 
-/** 更新一条别名规则（Req 8.1、8.9）。绑定上游不可变更。 */
+/** 更新一条别名规则（Req 8.1、8.9）。 */
 export async function updateAlias(ruleId: string, payload: AliasRuleRequest): Promise<AliasRule> {
   const res = await request.put<AliasRule>(`/aliases/${encodeURIComponent(ruleId)}`, payload)
   return res.data
@@ -128,27 +102,19 @@ export async function deleteAlias(ruleId: string): Promise<void> {
 
 /* ===================== MCP 级屏蔽规则（Req 9.1） ===================== */
 
-/** 列出某上游 MCP 的全部屏蔽规则。后端可能返回 null，归一化为空数组。 */
-export async function listFilters(upstreamId: string): Promise<FilterRule[]> {
-  const res = await request.get<ListFiltersResponse>(
-    `/upstreams/${encodeURIComponent(upstreamId)}/filters`,
-  )
+/** 列出全部屏蔽规则。后端可能返回 null，归一化为空数组。 */
+export async function listFilters(): Promise<FilterRule[]> {
+  const res = await request.get<ListFiltersResponse>('/filters')
   return res.data?.filters ?? []
 }
 
-/** 在某上游 MCP 上创建一条屏蔽规则（Req 9.1、9.2、9.9）。 */
-export async function createFilter(
-  upstreamId: string,
-  payload: FilterRuleRequest,
-): Promise<FilterRule> {
-  const res = await request.post<FilterRule>(
-    `/upstreams/${encodeURIComponent(upstreamId)}/filters`,
-    payload,
-  )
+/** 创建一条屏蔽规则（Req 9.1、9.2、9.9）。 */
+export async function createFilter(payload: FilterRuleRequest): Promise<FilterRule> {
+  const res = await request.post<FilterRule>('/filters', payload)
   return res.data
 }
 
-/** 更新一条屏蔽规则（Req 9.1、9.7、9.8）。绑定上游不可变更。 */
+/** 更新一条屏蔽规则（Req 9.1、9.7、9.8）。 */
 export async function updateFilter(
   ruleId: string,
   payload: FilterRuleRequest,

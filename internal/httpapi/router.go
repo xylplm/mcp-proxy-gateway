@@ -76,6 +76,7 @@ type RuleValidator interface {
 type AliasStore interface {
 	Create(ctx context.Context, rule domain.AliasRule) (domain.AliasRule, error)
 	Get(ctx context.Context, id string) (domain.AliasRule, error)
+	List(ctx context.Context) ([]domain.AliasRule, error)
 	ListByUpstream(ctx context.Context, upstreamID string) ([]domain.AliasRule, error)
 	Update(ctx context.Context, rule domain.AliasRule) (domain.AliasRule, error)
 	Delete(ctx context.Context, id string) error
@@ -87,8 +88,9 @@ type AliasStore interface {
 type FilterMCPStore interface {
 	Create(ctx context.Context, row store.FilterMCPRow) (store.FilterMCPRow, error)
 	Get(ctx context.Context, id string) (store.FilterMCPRow, error)
+	List(ctx context.Context) ([]store.FilterMCPRow, error)
 	ListByUpstream(ctx context.Context, upstreamID string) ([]store.FilterMCPRow, error)
-	CountByUpstream(ctx context.Context, upstreamID string) (int, error)
+	Count(ctx context.Context) (int, error)
 	Update(ctx context.Context, row store.FilterMCPRow) (store.FilterMCPRow, error)
 	SetEnabled(ctx context.Context, id string, enabled bool) error
 	Delete(ctx context.Context, id string) error

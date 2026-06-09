@@ -2,7 +2,7 @@
 -- 严格依据 design.md「PostgreSQL 表结构」章节定义，覆盖业务数据持久化需求 23.3，
 -- 以及统计记录按时间分区以支持保留期清理的需求 16.10。
 -- 说明：
---   * 删除上游 MCP / API Key 时通过 ON DELETE CASCADE 级联清理其从属规则、ACL 与缓存副本。
+--   * 删除上游 MCP 时通过 ON DELETE CASCADE 清理规则绑定与缓存副本；删除 API Key 时清理其从属规则与 ACL。
 --   * 规则数量上限（100 条）在应用层强制，不在数据库以触发器实现。
 --   * call_stat 使用 PostgreSQL 声明式分区（PARTITION BY RANGE (called_at)），
 --     保留期清理通过 DROP 超期分区高效完成。
@@ -21,10 +21,10 @@ CREATE TABLE upstream_mcp (
     updated_at     TIMESTAMPTZ  NOT NULL DEFAULT now()
 );
 
--- 别名规则（绑定上游 MCP，Req 8）
+-- 别名规则（独立规则，支持全部上游或多上游作用范围，Req 8）
 CREATE TABLE alias_rule (
     id           UUID PRIMARY KEY,
-    upstream_id  UUID NOT NULL REFERENCES upstream_mcp(id) ON DELETE CASCADE,
+    scope_type   VARCHAR(16) NOT NULL DEFAULT 'all',       -- all|upstreams
     pattern      VARCHAR(200) NOT NULL,
     is_regex     BOOLEAN NOT NULL DEFAULT false,
     target_name  VARCHAR(100),                            -- 目标名称（与描述至少一项）
@@ -33,15 +33,27 @@ CREATE TABLE alias_rule (
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- 屏蔽规则（绑定上游 MCP，Req 9）
+CREATE TABLE alias_rule_upstream (
+    rule_id     UUID NOT NULL REFERENCES alias_rule(id) ON DELETE CASCADE,
+    upstream_id UUID NOT NULL REFERENCES upstream_mcp(id) ON DELETE CASCADE,
+    PRIMARY KEY (rule_id, upstream_id)
+);
+
+-- 屏蔽规则（独立规则，支持全部上游或多上游作用范围，Req 9）
 CREATE TABLE filter_rule_mcp (
     id           UUID PRIMARY KEY,
-    upstream_id  UUID NOT NULL REFERENCES upstream_mcp(id) ON DELETE CASCADE,
+    scope_type   VARCHAR(16) NOT NULL DEFAULT 'all',       -- all|upstreams
     pattern      VARCHAR(200) NOT NULL,
     is_regex     BOOLEAN NOT NULL DEFAULT false,
     enabled      BOOLEAN NOT NULL DEFAULT true,           -- 单条启停（Req 9.11）
     sort_order   INTEGER NOT NULL,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE filter_rule_mcp_upstream (
+    rule_id     UUID NOT NULL REFERENCES filter_rule_mcp(id) ON DELETE CASCADE,
+    upstream_id UUID NOT NULL REFERENCES upstream_mcp(id) ON DELETE CASCADE,
+    PRIMARY KEY (rule_id, upstream_id)
 );
 
 -- API Key 元数据（Req 12）
@@ -117,8 +129,10 @@ CREATE TABLE audit_log (
 );
 
 -- 支持外键级联与按从属关系查询的索引。
-CREATE INDEX idx_alias_rule_upstream         ON alias_rule (upstream_id);
-CREATE INDEX idx_filter_rule_mcp_upstream    ON filter_rule_mcp (upstream_id);
+CREATE INDEX idx_alias_rule_scope            ON alias_rule (scope_type, sort_order);
+CREATE INDEX idx_alias_rule_upstream         ON alias_rule_upstream (upstream_id);
+CREATE INDEX idx_filter_rule_mcp_scope       ON filter_rule_mcp (scope_type, sort_order);
+CREATE INDEX idx_filter_rule_mcp_upstream    ON filter_rule_mcp_upstream (upstream_id);
 CREATE INDEX idx_filter_rule_apikey_apikey   ON filter_rule_apikey (api_key_id);
 CREATE INDEX idx_api_key_acl_apikey          ON api_key_acl (api_key_id);
 

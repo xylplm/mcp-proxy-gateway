@@ -2,6 +2,7 @@ package backup
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -23,7 +24,7 @@ import (
 //  3. 校验失败：结构可解析但内容非法（错误版本、必填字段为空、标识重复、CIDR
 //     非法、YAML 取值越界等）的备份被拒绝，返回 CodeBackupInvalid。
 //
-// 生成器约定（为保证 JSON 往返后的 reflect.DeepEqual 等价）：
+// 生成器约定（为保证 JSON 往返后语义等价）：
 //   - 字节切片只生成 nil 或长度 ≥1，规避「nil 与空切片」往返不一致；
 //   - map 只生成 nil 或非空，且值统一为字符串（避免 any 数字被解码为 float64）；
 //   - time.Time 由 time.Unix(sec,0).UTC() 构造，无单调时钟、无亚秒尾零问题。
@@ -139,26 +140,41 @@ func genValidYAMLConfig(t *rapid.T) config.YAMLConfig {
 // --- 合法业务配置生成器 -------------------------------------------------------
 
 // genValidAliasRule 生成通过 validateBusiness 字段校验的别名规则。
-func genValidAliasRule(t *rapid.T, upstreamID, label string) domain.AliasRule {
+func genValidAliasRule(t *rapid.T, upstreamIDs []string, label string) domain.AliasRule {
+	scopeType := "all"
+	ruleUpstreamIDs := []string(nil)
+	if len(upstreamIDs) > 0 && rapid.Bool().Draw(t, label+"_scoped") {
+		scopeType = "upstreams"
+		ruleUpstreamIDs = []string{rapid.SampledFrom(upstreamIDs).Draw(t, label+"_upstreamID")}
+	}
 	return domain.AliasRule{
-		ID:         genNonEmptyToken(t, label+"_id"),
-		UpstreamID: upstreamID,
-		Pattern:    genNonEmptyToken(t, label+"_pattern"),
-		IsRegex:    rapid.Bool().Draw(t, label+"_isRegex"),
-		TargetName: genNonEmptyToken(t, label+"_targetName"),
-		TargetDesc: rapid.String().Draw(t, label+"_targetDesc"),
-		SortOrder:  rapid.IntRange(0, 100).Draw(t, label+"_sortOrder"),
+		ID:          genNonEmptyToken(t, label+"_id"),
+		ScopeType:   scopeType,
+		UpstreamIDs: ruleUpstreamIDs,
+		Pattern:     genNonEmptyToken(t, label+"_pattern"),
+		IsRegex:     rapid.Bool().Draw(t, label+"_isRegex"),
+		TargetName:  genNonEmptyToken(t, label+"_targetName"),
+		TargetDesc:  rapid.String().Draw(t, label+"_targetDesc"),
+		SortOrder:   rapid.IntRange(0, 100).Draw(t, label+"_sortOrder"),
 	}
 }
 
 // genValidFilterRule 生成通过 validateBusiness 字段校验的屏蔽规则。
-func genValidFilterRule(t *rapid.T, label string) domain.FilterRule {
+func genValidFilterRule(t *rapid.T, upstreamIDs []string, label string) domain.FilterRule {
+	scopeType := "all"
+	ruleUpstreamIDs := []string(nil)
+	if len(upstreamIDs) > 0 && rapid.Bool().Draw(t, label+"_scoped") {
+		scopeType = "upstreams"
+		ruleUpstreamIDs = []string{rapid.SampledFrom(upstreamIDs).Draw(t, label+"_upstreamID")}
+	}
 	return domain.FilterRule{
-		ID:        genNonEmptyToken(t, label+"_id"),
-		Pattern:   genNonEmptyToken(t, label+"_pattern"),
-		IsRegex:   rapid.Bool().Draw(t, label+"_isRegex"),
-		Enabled:   rapid.Bool().Draw(t, label+"_enabled"),
-		SortOrder: rapid.IntRange(0, 100).Draw(t, label+"_sortOrder"),
+		ID:          genNonEmptyToken(t, label+"_id"),
+		ScopeType:   scopeType,
+		UpstreamIDs: ruleUpstreamIDs,
+		Pattern:     genNonEmptyToken(t, label+"_pattern"),
+		IsRegex:     rapid.Bool().Draw(t, label+"_isRegex"),
+		Enabled:     rapid.Bool().Draw(t, label+"_enabled"),
+		SortOrder:   rapid.IntRange(0, 100).Draw(t, label+"_sortOrder"),
 	}
 }
 
@@ -168,8 +184,10 @@ func genValidBusinessConfig(t *rapid.T) BusinessConfig {
 
 	nUp := rapid.IntRange(0, 3).Draw(t, "nUpstreams")
 	bc.Upstreams = make([]UpstreamEntry, 0, nUp)
+	upstreamIDs := make([]string, 0, nUp)
 	for i := 0; i < nUp; i++ {
 		upID := fmt.Sprintf("upstream-%d-%s", i, genNonEmptyToken(t, fmt.Sprintf("upID%d", i)))
+		upstreamIDs = append(upstreamIDs, upID)
 		entry := UpstreamEntry{
 			ID: upID,
 			Config: domain.UpstreamConfig{
@@ -182,17 +200,17 @@ func genValidBusinessConfig(t *rapid.T) BusinessConfig {
 			},
 			CredentialEnc: genOptionalBytes(t, fmt.Sprintf("upCred%d", i)),
 		}
-		nAlias := rapid.IntRange(0, 2).Draw(t, fmt.Sprintf("nAlias%d", i))
-		for j := 0; j < nAlias; j++ {
-			entry.AliasRules = append(entry.AliasRules,
-				genValidAliasRule(t, upID, fmt.Sprintf("alias%d_%d", i, j)))
-		}
-		nFilter := rapid.IntRange(0, 2).Draw(t, fmt.Sprintf("nUpFilter%d", i))
-		for j := 0; j < nFilter; j++ {
-			entry.FilterRules = append(entry.FilterRules,
-				genValidFilterRule(t, fmt.Sprintf("upFilter%d_%d", i, j)))
-		}
 		bc.Upstreams = append(bc.Upstreams, entry)
+	}
+	nAlias := rapid.IntRange(0, 4).Draw(t, "nAlias")
+	bc.AliasRules = make([]domain.AliasRule, 0, nAlias)
+	for i := 0; i < nAlias; i++ {
+		bc.AliasRules = append(bc.AliasRules, genValidAliasRule(t, upstreamIDs, fmt.Sprintf("alias%d", i)))
+	}
+	nMCPFilter := rapid.IntRange(0, 4).Draw(t, "nMCPFilter")
+	bc.MCPFilterRules = make([]domain.FilterRule, 0, nMCPFilter)
+	for i := 0; i < nMCPFilter; i++ {
+		bc.MCPFilterRules = append(bc.MCPFilterRules, genValidFilterRule(t, upstreamIDs, fmt.Sprintf("mcpFilter%d", i)))
 	}
 
 	nKey := rapid.IntRange(0, 3).Draw(t, "nKeys")
@@ -200,21 +218,19 @@ func genValidBusinessConfig(t *rapid.T) BusinessConfig {
 	for i := 0; i < nKey; i++ {
 		entry := APIKeyEntry{
 			Meta: store.APIKey{
-				ID:          fmt.Sprintf("key-%d-%s", i, genNonEmptyToken(t, fmt.Sprintf("keyID%d", i))),
-				Name:        genNonEmptyToken(t, fmt.Sprintf("keyName%d", i)),
-				KeyHash:     genOptionalBytes(t, fmt.Sprintf("keyHash%d", i)),
-				KeyPrefix:   rapid.StringMatching(`[a-zA-Z0-9_]{0,10}`).Draw(t, fmt.Sprintf("keyPrefix%d", i)),
-				Enabled:     rapid.Bool().Draw(t, fmt.Sprintf("keyEnabled%d", i)),
-				ExpiresAt:   genOptionalTime(t, fmt.Sprintf("keyExpires%d", i)),
-				RateLimit:   genOptionalInt(t, fmt.Sprintf("keyRateLimit%d", i)),
-				RateWindowS: genOptionalInt(t, fmt.Sprintf("keyRateWindow%d", i)),
-				CreatedAt:   genCleanTime(t, fmt.Sprintf("keyCreated%d", i)),
+				ID:        fmt.Sprintf("key-%d-%s", i, genNonEmptyToken(t, fmt.Sprintf("keyID%d", i))),
+				Name:      genNonEmptyToken(t, fmt.Sprintf("keyName%d", i)),
+				KeyHash:   genOptionalBytes(t, fmt.Sprintf("keyHash%d", i)),
+				KeyPrefix: rapid.StringMatching(`[a-zA-Z0-9_]{0,10}`).Draw(t, fmt.Sprintf("keyPrefix%d", i)),
+				Enabled:   rapid.Bool().Draw(t, fmt.Sprintf("keyEnabled%d", i)),
+				ExpiresAt: genOptionalTime(t, fmt.Sprintf("keyExpires%d", i)),
+				CreatedAt: genCleanTime(t, fmt.Sprintf("keyCreated%d", i)),
 			},
 		}
 		nFilter := rapid.IntRange(0, 2).Draw(t, fmt.Sprintf("nKeyFilter%d", i))
 		for j := 0; j < nFilter; j++ {
 			entry.FilterRules = append(entry.FilterRules,
-				genValidFilterRule(t, fmt.Sprintf("keyFilter%d_%d", i, j)))
+				genValidFilterRule(t, nil, fmt.Sprintf("keyFilter%d_%d", i, j)))
 		}
 		nACL := rapid.IntRange(0, 3).Draw(t, fmt.Sprintf("nACL%d", i))
 		for j := 0; j < nACL; j++ {
@@ -337,7 +353,7 @@ func assertBackupInvalidRapid(t *rapid.T, err error, desc string) {
 //
 // 对任意系统配置：
 //   - （Req 23.4/23.5）合法备份经 Marshal → ParseAndValidate 得到与原始
-//     reflect.DeepEqual 等价的备份；且经 Service.Export → Import → 再 Export
+//     JSON 语义等价的备份；且经 Service.Export → Import → 再 Export
 //     得到字节级等价、配置等价的结果（导出再导入再导出闭环稳定）。
 //   - （Req 23.6）任意非备份 / 畸形字节被 ParseAndValidate 与 Service.Import
 //     拒绝，返回 CodeBackupInvalid，且不对目标存储产生写入。
@@ -366,7 +382,11 @@ func TestProperty27ConfigBackupRoundTrip(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ParseAndValidate 合法备份失败：%v", err)
 		}
-		if !reflect.DeepEqual(orig, got) {
+		gotData, err := Marshal(got)
+		if err != nil {
+			t.Fatalf("Marshal 往返备份失败：%v", err)
+		}
+		if string(data) != string(gotData) {
 			t.Fatalf("编解码往返后备份不等价\n原始=%+v\n往返=%+v", orig, got)
 		}
 
@@ -391,7 +411,7 @@ func TestProperty27ConfigBackupRoundTrip(t *testing.T) {
 		if !reflect.DeepEqual(dstYAML.cfg, orig.YAML) {
 			t.Fatalf("导入后 YAML 配置不等价\n原始=%+v\n导入=%+v", orig.YAML, dstYAML.cfg)
 		}
-		if !reflect.DeepEqual(dstBiz.bc, orig.Business) {
+		if !jsonEqual(orig.Business, dstBiz.bc) {
 			t.Fatalf("导入后业务配置不等价\n原始=%+v\n导入=%+v", orig.Business, dstBiz.bc)
 		}
 
@@ -415,7 +435,7 @@ func TestProperty27ConfigBackupRoundTrip(t *testing.T) {
 		guardSvc := NewService(guardYAML, guardBiz)
 		ierr := guardSvc.Import(ctx, malformed)
 		assertBackupInvalidRapid(t, ierr, "Service.Import(畸形字节)")
-		if !reflect.DeepEqual(guardBiz.bc, orig.Business) || !reflect.DeepEqual(guardYAML.cfg, orig.YAML) {
+		if !jsonEqual(orig.Business, guardBiz.bc) || !reflect.DeepEqual(guardYAML.cfg, orig.YAML) {
 			t.Fatalf("导入非法备份不应改动已有配置")
 		}
 
@@ -429,4 +449,16 @@ func TestProperty27ConfigBackupRoundTrip(t *testing.T) {
 		assertBackupInvalidRapid(t, cverr, "ParseAndValidate(内容非法备份)")
 		assertBackupInvalidRapid(t, guardSvc.Import(ctx, cdata), "Service.Import(内容非法备份)")
 	})
+}
+
+func jsonEqual[T any](a, b T) bool {
+	ab, err := json.Marshal(a)
+	if err != nil {
+		return false
+	}
+	bb, err := json.Marshal(b)
+	if err != nil {
+		return false
+	}
+	return string(ab) == string(bb)
 }

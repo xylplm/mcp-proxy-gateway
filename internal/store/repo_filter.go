@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -11,12 +12,8 @@ import (
 )
 
 // FilterMCPRow 是 MCP 级屏蔽规则（filter_rule_mcp 表）的行表示。
-//
-// 在 domain.FilterRule 基础上额外携带其绑定的上游 MCP 标识 UpstreamID。
 type FilterMCPRow struct {
 	domain.FilterRule
-	// UpstreamID 为该屏蔽规则绑定的上游 MCP 标识。
-	UpstreamID string
 }
 
 // FilterMCPRepo 提供 MCP 级屏蔽规则的类型安全增删查改与计数。
@@ -29,27 +26,31 @@ func NewFilterMCPRepo(pool *pgxpool.Pool) *FilterMCPRepo {
 	return &FilterMCPRepo{pool: pool}
 }
 
-// Create 持久化一条 MCP 级屏蔽规则并回填生成标识（Req 9.1）。
-//   - 绑定的 upstream_id 不存在（违反外键）返回 CodeNotFound。
-//
-// 数量上限（100 条，Req 9.2/9.9）由应用层借助 CountByUpstream 校验，不在此处强制。
 func (r *FilterMCPRepo) Create(ctx context.Context, row FilterMCPRow) (FilterMCPRow, error) {
-	upstreamID, err := parseUUID(row.UpstreamID)
+	id := newUUID()
+	row.ScopeType = normalizeRuleScope(row.ScopeType, row.UpstreamIDs)
+	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return FilterMCPRow{}, err
 	}
-	id := newUUID()
+	defer func() { _ = tx.Rollback(ctx) }()
 	const q = `
 		INSERT INTO filter_rule_mcp
-			(id, upstream_id, pattern, is_regex, enabled, sort_order)
+			(id, scope_type, pattern, is_regex, enabled, sort_order)
 		VALUES ($1, $2, $3, $4, $5, $6)`
-	_, err = r.pool.Exec(ctx, q,
-		id, upstreamID, row.Pattern, row.IsRegex, row.Enabled, row.SortOrder,
+	_, err = tx.Exec(ctx, q,
+		id, row.ScopeType, row.Pattern, row.IsRegex, row.Enabled, row.SortOrder,
 	)
 	if err != nil {
-		return FilterMCPRow{}, classifyWrite(err, "屏蔽规则冲突", "绑定的上游 MCP 不存在")
+		return FilterMCPRow{}, classifyWrite(err, "屏蔽规则冲突", "屏蔽规则创建失败")
 	}
 	row.ID = uuidString(id)
+	if err := replaceFilterMCPBindings(ctx, tx, row.ID, row.ScopeType, row.UpstreamIDs); err != nil {
+		return FilterMCPRow{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return FilterMCPRow{}, err
+	}
 	return row, nil
 }
 
@@ -60,27 +61,62 @@ func (r *FilterMCPRepo) Get(ctx context.Context, id string) (FilterMCPRow, error
 		return FilterMCPRow{}, err
 	}
 	const q = `
-		SELECT id, upstream_id, pattern, is_regex, enabled, sort_order
+		SELECT id, scope_type, pattern, is_regex, enabled, sort_order
 		FROM filter_rule_mcp
 		WHERE id = $1`
 	row, err := scanFilterMCP(r.pool.QueryRow(ctx, q, uid))
 	if err != nil {
 		return FilterMCPRow{}, notFoundIfNoRows(err, "屏蔽规则不存在")
 	}
+	row.UpstreamIDs, err = r.listBindings(ctx, row.ID)
+	if err != nil {
+		return FilterMCPRow{}, err
+	}
 	return row, nil
 }
 
-// ListByUpstream 返回某上游 MCP 的全部屏蔽规则，按 sort_order 升序；无数据返回空切片。
+// List 返回全部 MCP 级屏蔽规则，按 sort_order 升序；无数据返回空切片。
+func (r *FilterMCPRepo) List(ctx context.Context) ([]FilterMCPRow, error) {
+	const q = `
+		SELECT id, scope_type, pattern, is_regex, enabled, sort_order
+		FROM filter_rule_mcp
+		ORDER BY sort_order ASC, created_at ASC`
+	rows, err := r.pool.Query(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make([]FilterMCPRow, 0)
+	for rows.Next() {
+		row, err := scanFilterMCP(rows)
+		if err != nil {
+			return nil, err
+		}
+		row.UpstreamIDs, err = r.listBindings(ctx, row.ID)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// ListByUpstream 返回适用于某上游 MCP 的全部屏蔽规则，按 sort_order 升序；无数据返回空切片。
 func (r *FilterMCPRepo) ListByUpstream(ctx context.Context, upstreamID string) ([]FilterMCPRow, error) {
 	uid, err := parseUUID(upstreamID)
 	if err != nil {
 		return nil, err
 	}
 	const q = `
-		SELECT id, upstream_id, pattern, is_regex, enabled, sort_order
-		FROM filter_rule_mcp
-		WHERE upstream_id = $1
-		ORDER BY sort_order ASC, created_at ASC`
+		SELECT fr.id, fr.scope_type, fr.pattern, fr.is_regex, fr.enabled, fr.sort_order
+		FROM filter_rule_mcp fr
+		LEFT JOIN filter_rule_mcp_upstream fru ON fru.rule_id = fr.id
+		WHERE fr.scope_type = 'all' OR fru.upstream_id = $1
+		ORDER BY fr.sort_order ASC, fr.created_at ASC`
 	rows, err := r.pool.Query(ctx, q, uid)
 	if err != nil {
 		return nil, err
@@ -93,6 +129,10 @@ func (r *FilterMCPRepo) ListByUpstream(ctx context.Context, upstreamID string) (
 		if err != nil {
 			return nil, err
 		}
+		row.UpstreamIDs, err = r.listBindings(ctx, row.ID)
+		if err != nil {
+			return nil, err
+		}
 		result = append(result, row)
 	}
 	if err := rows.Err(); err != nil {
@@ -101,36 +141,44 @@ func (r *FilterMCPRepo) ListByUpstream(ctx context.Context, upstreamID string) (
 	return result, nil
 }
 
-// CountByUpstream 统计某上游 MCP 已有的屏蔽规则数量，供应用层做上限校验（Req 9.2/9.9）。
-func (r *FilterMCPRepo) CountByUpstream(ctx context.Context, upstreamID string) (int, error) {
-	uid, err := parseUUID(upstreamID)
-	if err != nil {
-		return 0, err
-	}
-	const q = `SELECT count(*) FROM filter_rule_mcp WHERE upstream_id = $1`
+// Count 统计全部 MCP 级屏蔽规则数量，供应用层做上限校验。
+func (r *FilterMCPRepo) Count(ctx context.Context) (int, error) {
+	const q = `SELECT count(*) FROM filter_rule_mcp`
 	var n int
-	if err := r.pool.QueryRow(ctx, q, uid).Scan(&n); err != nil {
+	if err := r.pool.QueryRow(ctx, q).Scan(&n); err != nil {
 		return 0, err
 	}
 	return n, nil
 }
 
-// Update 更新一条 MCP 级屏蔽规则（不变更绑定的 upstream_id）；不存在返回 CodeNotFound。
+// Update 更新一条 MCP 级屏蔽规则；不存在返回 CodeNotFound。
 func (r *FilterMCPRepo) Update(ctx context.Context, row FilterMCPRow) (FilterMCPRow, error) {
 	uid, err := parseUUID(row.ID)
 	if err != nil {
 		return FilterMCPRow{}, err
 	}
+	row.ScopeType = normalizeRuleScope(row.ScopeType, row.UpstreamIDs)
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return FilterMCPRow{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
 	const q = `
 		UPDATE filter_rule_mcp
-		SET pattern = $2, is_regex = $3, enabled = $4, sort_order = $5
+		SET scope_type = $2, pattern = $3, is_regex = $4, enabled = $5, sort_order = $6
 		WHERE id = $1`
-	tag, err := r.pool.Exec(ctx, q, uid, row.Pattern, row.IsRegex, row.Enabled, row.SortOrder)
+	tag, err := tx.Exec(ctx, q, uid, row.ScopeType, row.Pattern, row.IsRegex, row.Enabled, row.SortOrder)
 	if err != nil {
 		return FilterMCPRow{}, err
 	}
 	if tag.RowsAffected() == 0 {
 		return FilterMCPRow{}, domain.NewError(domain.CodeNotFound, "屏蔽规则不存在")
+	}
+	if err := replaceFilterMCPBindings(ctx, tx, row.ID, row.ScopeType, row.UpstreamIDs); err != nil {
+		return FilterMCPRow{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return FilterMCPRow{}, err
 	}
 	return row, nil
 }
@@ -172,23 +220,75 @@ func (r *FilterMCPRepo) Delete(ctx context.Context, id string) error {
 // scanFilterMCP 从单行结果扫描出 FilterMCPRow。
 func scanFilterMCP(row pgx.Row) (FilterMCPRow, error) {
 	var (
-		id         pgtype.UUID
-		upstreamID pgtype.UUID
-		pattern    string
-		isRegex    bool
-		enabled    bool
-		sortOrder  int
+		id        pgtype.UUID
+		scopeType string
+		pattern   string
+		isRegex   bool
+		enabled   bool
+		sortOrder int
 	)
-	if err := row.Scan(&id, &upstreamID, &pattern, &isRegex, &enabled, &sortOrder); err != nil {
+	if err := row.Scan(&id, &scopeType, &pattern, &isRegex, &enabled, &sortOrder); err != nil {
 		return FilterMCPRow{}, err
 	}
-	out := FilterMCPRow{UpstreamID: uuidString(upstreamID)}
+	out := FilterMCPRow{}
 	out.ID = uuidString(id)
+	out.ScopeType = scopeType
 	out.Pattern = pattern
 	out.IsRegex = isRegex
 	out.Enabled = enabled
 	out.SortOrder = sortOrder
 	return out, nil
+}
+
+func (r *FilterMCPRepo) listBindings(ctx context.Context, ruleID string) ([]string, error) {
+	uid, err := parseUUID(ruleID)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := r.pool.Query(ctx, `SELECT upstream_id FROM filter_rule_mcp_upstream WHERE rule_id = $1 ORDER BY upstream_id`, uid)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ids := make([]string, 0)
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, uuidString(id))
+	}
+	return ids, rows.Err()
+}
+
+func (r *FilterMCPRepo) replaceBindings(ctx context.Context, ruleID, scopeType string, upstreamIDs []string) error {
+	return replaceFilterMCPBindings(ctx, r.pool, ruleID, scopeType, upstreamIDs)
+}
+
+func replaceFilterMCPBindings(ctx context.Context, exec interface {
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+}, ruleID, scopeType string, upstreamIDs []string) error {
+	ruleUID, err := parseUUID(ruleID)
+	if err != nil {
+		return err
+	}
+	if _, err := exec.Exec(ctx, `DELETE FROM filter_rule_mcp_upstream WHERE rule_id = $1`, ruleUID); err != nil {
+		return err
+	}
+	if scopeType != "upstreams" {
+		return nil
+	}
+	for _, upstreamID := range upstreamIDs {
+		upUID, err := parseUUID(upstreamID)
+		if err != nil {
+			return err
+		}
+		_, err = exec.Exec(ctx, `INSERT INTO filter_rule_mcp_upstream (rule_id, upstream_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, ruleUID, upUID)
+		if err != nil {
+			return classifyWrite(err, "规则作用范围冲突", "选择的上游 MCP 不存在")
+		}
+	}
+	return nil
 }
 
 // FilterAPIKeyRow 是 API Key 级屏蔽规则（filter_rule_apikey 表）的行表示。
