@@ -6,7 +6,7 @@
     <!-- Centered Content -->
     <div class="mx-auto w-full max-w-[242px] text-center sm:max-w-[472px]">
       <h1 class="text-title-md xl:text-title-2xl mb-8 font-bold text-gray-800 dark:text-white/90">
-        ERROR
+        页面不存在
       </h1>
 
       <img src="/images/error/404.svg" alt="404" class="dark:hidden" />

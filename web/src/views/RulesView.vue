@@ -19,8 +19,6 @@ import { listUpstreams, type Upstream } from '@/api/upstreams'
 
 const { isLargeScreen } = useBreakpoint()
 
-const currentPageTitle = ref('规则管理')
-
 /** 全量上游列表（供选择器使用，按 sortOrder 升序）。 */
 const upstreams = ref<Upstream[]>([])
 /** 当前选中的上游 MCP 标识。 */
@@ -69,7 +67,7 @@ watch(upstreams, (list) => {
 
 <template>
   <AdminLayout>
-    <PageBreadcrumb :pageTitle="currentPageTitle" />
+    <PageBreadcrumb pageTitle="规则管理" />
 
     <!-- 上游选择器工具栏 -->
     <div

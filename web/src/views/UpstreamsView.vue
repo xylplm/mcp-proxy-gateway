@@ -52,8 +52,6 @@ const prefill = ref<PrefillForm | null>(null)
 /** 删除确认目标。 */
 const deleting = ref<Upstream | null>(null)
 
-const currentPageTitle = ref('上游 MCP 管理')
-
 /** 总页数。 */
 const totalPages = computed(() => Math.max(1, Math.ceil(upstreams.value.length / pageSize.value)))
 
@@ -243,7 +241,7 @@ function globalIndex(up: Upstream): number {
 
 <template>
   <AdminLayout>
-    <PageBreadcrumb :pageTitle="currentPageTitle" />
+    <PageBreadcrumb pageTitle="上游 MCP 管理" />
 
     <!-- 工具栏 -->
     <div class="mb-4 flex flex-wrap items-center justify-between gap-3">

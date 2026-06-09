@@ -53,8 +53,6 @@ const configuring = ref<APIKey | null>(null)
 /** 删除确认目标。 */
 const deleting = ref<APIKey | null>(null)
 
-const currentPageTitle = ref('API Key 管理')
-
 /** 总页数。 */
 const totalPages = computed(() => Math.max(1, Math.ceil(apiKeys.value.length / pageSize.value)))
 
@@ -193,7 +191,7 @@ async function copyKey(key: APIKey): Promise<void> {
 
 <template>
   <AdminLayout>
-    <PageBreadcrumb :pageTitle="currentPageTitle" />
+    <PageBreadcrumb pageTitle="API Key 管理" />
 
     <!-- 工具栏 -->
     <div class="mb-4 flex flex-wrap items-center justify-between gap-3">

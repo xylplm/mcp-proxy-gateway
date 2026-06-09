@@ -24,6 +24,7 @@ import {
   type UpstreamConfigRequest,
 } from '@/api/upstreams'
 import type { PrefillForm, Placeholder } from '@/api/templates'
+import { ApiError } from '@/api/request'
 
 const props = defineProps<{
   /** 是否打开抽屉。 */
@@ -376,19 +377,17 @@ function buildPayload(): UpstreamConfigRequest | null {
 
 /** 从后端错误中提取字段级信息或整体消息。 */
 function applyServerError(err: unknown): void {
-  const e = err as {
-    response?: { data?: { message?: string; fields?: Record<string, string> } }
-    message?: string
-  }
-  const data = e.response?.data
-  if (data?.fields) {
-    for (const [k, v] of Object.entries(data.fields)) {
+  // 批 1 后请求层统一抛出 ApiError（含 message/fields）；据此回填字段级错误与整体提示。
+  if (err instanceof ApiError) {
+    for (const [k, v] of Object.entries(err.fields)) {
       // 后端 connParams.<key> 形式映射回本地字段。
       const local = k.startsWith('connParams.') ? k.slice('connParams.'.length) : k
       fieldErrors[local] = v
     }
+    formError.value = err.message || '保存失败，请稍后重试'
+    return
   }
-  formError.value = data?.message ?? e.message ?? '保存失败，请稍后重试'
+  formError.value = err instanceof Error ? err.message : '保存失败，请稍后重试'
 }
 
 /** 提交表单（创建或更新）。 */

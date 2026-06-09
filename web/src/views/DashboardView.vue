@@ -98,8 +98,7 @@ function sevenDaysAgoRFC3339(): string {
 
 /** 解析错误信息，回退通用文案。 */
 function errorMessage(err: unknown): string {
-  const body = (err as { response?: { data?: { message?: string } } })?.response?.data
-  if (body?.message) return body.message
+  // 请求层已将失败统一为 Error（ApiError），其 message 即后端中文提示。
   return err instanceof Error ? err.message : '数据加载失败，请稍后重试'
 }
 
@@ -136,7 +135,7 @@ const cardClass =
 
 <template>
   <AdminLayout>
-    <PageBreadcrumb pageTitle="Dashboard" />
+    <PageBreadcrumb pageTitle="仪表盘" />
 
     <!-- 错误提示 -->
     <div

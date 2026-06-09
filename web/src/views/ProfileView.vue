@@ -29,8 +29,7 @@ function initialOf(name: string): string {
 }
 
 function errorMessage(err: unknown): string {
-  const body = (err as { response?: { data?: { message?: string } } })?.response?.data
-  if (body?.message) return body.message
+  // 请求层已将失败统一为 Error（ApiError），其 message 即后端中文提示。
   return err instanceof Error ? err.message : '加载账户信息失败，请稍后重试'
 }
 

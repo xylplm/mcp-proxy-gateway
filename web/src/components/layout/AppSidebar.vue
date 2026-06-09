@@ -93,11 +93,11 @@ const { isExpanded, isMobileOpen, isHovered } = useSidebar()
 
 const menuGroups = [
   {
-    title: 'Menu',
+    title: '菜单',
     items: [
       {
         icon: GridIcon,
-        name: 'Dashboard',
+        name: '仪表盘',
         path: '/',
       },
       {

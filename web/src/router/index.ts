@@ -47,7 +47,7 @@ const router = createRouter({
       component: () => import('../views/DashboardView.vue'),
       // 受保护页面：需登录后访问（Req 17.4）
       meta: {
-        title: 'Dashboard',
+        title: '仪表盘',
         requiresAuth: true,
       },
     },
@@ -126,7 +126,7 @@ const router = createRouter({
       name: '404 Error',
       component: () => import('../views/Errors/FourZeroFour.vue'),
       meta: {
-        title: '404 Error',
+        title: '页面不存在',
       },
     },
   ],
