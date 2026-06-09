@@ -9,6 +9,7 @@
 import { onMounted, reactive, ref } from 'vue'
 import AdminLayout from '@/components/layout/AdminLayout.vue'
 import PageBreadcrumb from '@/components/common/PageBreadcrumb.vue'
+import FieldLabel from '@/components/common/FieldLabel.vue'
 import { UserCircleIcon } from '@/icons'
 import { useSessionStore } from '@/stores/session'
 import { getCurrentAdmin } from '@/api/auth'
@@ -107,7 +108,6 @@ const cardClass =
   'rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03]'
 const inputClass =
   'h-11 w-full rounded-lg border border-gray-300 bg-transparent px-4 text-sm text-gray-800 shadow-sm placeholder:text-gray-400 focus:border-brand-300 focus:ring-3 focus:ring-brand-500/10 focus:outline-none dark:border-gray-700 dark:text-white/90 dark:placeholder:text-white/30'
-const labelClass = 'mb-1.5 block text-sm font-medium text-gray-700 dark:text-gray-400'
 const hintClass = 'mt-1 text-xs text-gray-400 dark:text-gray-500'
 const errClass = 'mt-1 text-xs text-error-500'
 </script>
@@ -207,7 +207,7 @@ const errClass = 'mt-1 text-xs text-error-500'
         <form class="flex flex-col gap-5" @submit.prevent="submitChangePassword">
           <div class="grid grid-cols-1 gap-5 md:grid-cols-2">
             <div class="md:col-span-2">
-              <label :class="labelClass">当前密码</label>
+              <FieldLabel label="当前密码" required tooltip="用于确认是当前管理员本人在修改密码。" />
               <input
                 v-model="pwd.currentPassword"
                 type="password"
@@ -219,7 +219,7 @@ const errClass = 'mt-1 text-xs text-error-500'
               </p>
             </div>
             <div>
-              <label :class="labelClass">新密码</label>
+              <FieldLabel label="新密码" required tooltip="新密码长度需在 6 至 128 个字符之间。" />
               <input
                 v-model="pwd.newPassword"
                 type="password"
@@ -232,7 +232,7 @@ const errClass = 'mt-1 text-xs text-error-500'
               </p>
             </div>
             <div>
-              <label :class="labelClass">确认新密码</label>
+              <FieldLabel label="确认新密码" required tooltip="再次输入新密码，避免误填。" />
               <input
                 v-model="pwd.confirmPassword"
                 type="password"
