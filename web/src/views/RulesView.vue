@@ -73,34 +73,25 @@ onMounted(loadUpstreams)
       <div>
         <div class="flex items-center justify-between gap-3">
           <h2 class="text-lg font-semibold text-gray-800 dark:text-white/90">规则中心</h2>
-          <div class="group relative shrink-0">
-            <button
-              type="button"
-              class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-gray-300 text-gray-700 transition hover:bg-gray-50 disabled:opacity-60 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
-              :disabled="loading"
-              aria-label="刷新"
-              aria-describedby="rules-refresh-tooltip"
-              @click="refreshAll"
+          <button
+            v-tooltip:bottom-end="'刷新'"
+            type="button"
+            class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-gray-300 text-gray-700 transition hover:bg-gray-50 disabled:opacity-60 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+            :disabled="loading"
+            aria-label="刷新"
+            @click="refreshAll"
+          >
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              :class="{ 'animate-spin': loading }"
+              aria-hidden="true"
             >
-              <svg
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="none"
-                :class="{ 'animate-spin': loading }"
-                aria-hidden="true"
-              >
-                <path d="M4 4v6h6M20 20v-6h-6M20 9a8 8 0 0 0-15-2M4 15a8 8 0 0 0 15 2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
-              </svg>
-            </button>
-            <span
-              id="rules-refresh-tooltip"
-              role="tooltip"
-              class="pointer-events-none absolute top-full right-0 z-20 mt-2 rounded-md bg-gray-900 px-2 py-1 text-xs font-medium whitespace-nowrap text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100 dark:bg-white dark:text-gray-900"
-            >
-              刷新
-            </span>
-          </div>
+              <path d="M4 4v6h6M20 20v-6h-6M20 9a8 8 0 0 0-15-2M4 15a8 8 0 0 0 15 2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </button>
         </div>
         <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
           规则独立创建，再选择作用范围：可应用到全部上游，也可只应用到指定上游。

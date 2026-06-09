@@ -1,4 +1,4 @@
-﻿@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@100..900&display=swap')
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@100..900&display=swap')
 layer(base);
 
 @import 'tailwindcss';
@@ -280,6 +280,36 @@ layer(base);
   background-color: #344054;
 }
 
+.app-tooltip {
+  pointer-events: none;
+  position: fixed;
+  z-index: var(--z-index-999999);
+  max-width: min(280px, calc(100vw - 16px));
+  border-radius: 6px;
+  background: #101828;
+  color: #ffffff;
+  box-shadow: var(--shadow-tooltip);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+  opacity: 0;
+  padding: 4px 8px;
+  transform: translateY(-2px);
+  transition:
+    opacity 150ms ease,
+    transform 150ms ease;
+  white-space: nowrap;
+}
+
+.app-tooltip.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.dark .app-tooltip {
+  background: #ffffff;
+  color: #101828;
+}
 @layer utilities {
   /* For Remove Date Icon */
   input[type='date']::-webkit-inner-spin-button,
