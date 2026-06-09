@@ -13,6 +13,25 @@ const loading = ref(false)
 const errorMessage = ref('')
 
 const detailId = computed(() => String(route.params.id ?? ''))
+const failureSummaryItems = computed(() => {
+  if (record.value === null || statusOf(record.value) === 'success') return []
+  const detail = record.value.FailureDetail
+  if (detail === null || detail === undefined) return []
+  const items: Array<{ label: string; value: string }> = []
+  if (detail.code !== undefined && detail.code !== '') {
+    items.push({ label: '错误码', value: String(detail.code) })
+  }
+  if (detail.httpStatus !== undefined && detail.httpStatus > 0) {
+    items.push({ label: 'HTTP 状态', value: String(detail.httpStatus) })
+  }
+  if (detail.businessCode !== undefined && detail.businessCode > 0) {
+    items.push({ label: '业务码', value: String(detail.businessCode) })
+  }
+  if (detail.timeout === true) {
+    items.push({ label: '超时', value: '是' })
+  }
+  return items
+})
 
 function formatDateTime(value: string): string {
   const date = new Date(value)
@@ -22,6 +41,41 @@ function formatDateTime(value: string): string {
 
 function formatLatency(value: number): string {
   return `${Math.max(0, Math.round(value)).toLocaleString('zh-CN')} ms`
+}
+
+function statusOf(item: CallRecord): string {
+  if (item.Status !== undefined && item.Status !== '') return item.Status
+  return item.Success ? 'success' : 'failed'
+}
+
+function statusLabel(item: CallRecord): string {
+  switch (statusOf(item)) {
+    case 'success':
+      return '成功'
+    case 'upstream_error':
+      return '上游错误'
+    case 'failed':
+      return '调用失败'
+    default:
+      return '未知状态'
+  }
+}
+
+function statusClass(item: CallRecord): string {
+  switch (statusOf(item)) {
+    case 'success':
+      return 'bg-success-50 text-success-700 dark:bg-success-500/10 dark:text-success-400'
+    case 'upstream_error':
+      return 'bg-warning-50 text-warning-700 dark:bg-warning-500/10 dark:text-warning-400'
+    case 'failed':
+      return 'bg-error-50 text-error-600 dark:bg-error-500/10 dark:text-error-400'
+    default:
+      return 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300'
+  }
+}
+
+function responseTitle(item: CallRecord): string {
+  return statusOf(item) === 'success' ? '出参' : '失败响应'
 }
 
 function prettify(value: unknown): string {
@@ -114,15 +168,8 @@ const cardClass =
               <h3 class="truncate text-base font-semibold text-gray-800 dark:text-white/90">
                 {{ toolLabel(record) }}
               </h3>
-              <span
-                class="rounded-full px-2.5 py-1 text-xs font-medium"
-                :class="
-                  record.Success
-                    ? 'bg-success-50 text-success-700 dark:bg-success-500/10 dark:text-success-400'
-                    : 'bg-error-50 text-error-600 dark:bg-error-500/10 dark:text-error-400'
-                "
-              >
-                {{ record.Success ? '成功' : '失败' }}
+              <span class="rounded-full px-2.5 py-1 text-xs font-medium" :class="statusClass(record)">
+                {{ statusLabel(record) }}
               </span>
             </div>
             <p class="mt-2 text-sm text-gray-500 dark:text-gray-400">记录 ID：{{ record.ID }}</p>
@@ -156,12 +203,35 @@ const cardClass =
           </div>
         </div>
 
-        <p
-          v-if="record.ErrorMessage !== ''"
-          class="mt-5 rounded-xl bg-error-50 px-4 py-3 text-sm text-error-600 dark:bg-error-500/10 dark:text-error-400"
+        <section
+          v-if="statusOf(record) !== 'success'"
+          class="mt-5 rounded-xl border border-error-100 bg-error-50 p-4 dark:border-error-500/20 dark:bg-error-500/10"
         >
-          {{ record.ErrorMessage }}
-        </p>
+          <div class="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h3 class="text-sm font-semibold text-error-700 dark:text-error-300">失败详情</h3>
+              <p class="mt-1 text-sm text-error-600 dark:text-error-400">
+                {{ record.FailureDetail?.message || record.ErrorMessage || '上游调用未返回成功结果' }}
+              </p>
+            </div>
+            <span
+              v-if="record.FailureDetail?.timeout === true"
+              class="rounded-full bg-error-100 px-2.5 py-1 text-xs font-medium text-error-700 dark:bg-error-500/20 dark:text-error-300"
+            >
+              超时
+            </span>
+          </div>
+          <div v-if="failureSummaryItems.length > 0" class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <div
+              v-for="item in failureSummaryItems"
+              :key="item.label"
+              class="rounded-lg bg-white/70 px-3 py-2 dark:bg-gray-950/20"
+            >
+              <p class="text-xs text-error-400 dark:text-error-300/80">{{ item.label }}</p>
+              <p class="mt-1 break-all text-sm font-medium text-error-700 dark:text-error-200">{{ item.value }}</p>
+            </div>
+          </div>
+        </section>
       </section>
 
       <section class="mt-6 grid grid-cols-1 gap-5 xl:grid-cols-2">
@@ -170,9 +240,14 @@ const cardClass =
           <pre class="custom-scrollbar max-h-[560px] overflow-auto rounded-xl bg-gray-950 p-4 text-xs leading-5 text-gray-100"><code>{{ prettify(record.RequestArgs) }}</code></pre>
         </article>
         <article :class="cardClass" class="min-w-0">
-          <h3 class="mb-4 text-base font-semibold text-gray-800 dark:text-white/90">出参</h3>
+          <h3 class="mb-4 text-base font-semibold text-gray-800 dark:text-white/90">{{ responseTitle(record) }}</h3>
           <pre class="custom-scrollbar max-h-[560px] overflow-auto rounded-xl bg-gray-950 p-4 text-xs leading-5 text-gray-100"><code>{{ prettify(record.ResponseResult) }}</code></pre>
         </article>
+      </section>
+
+      <section v-if="statusOf(record) !== 'success'" :class="cardClass" class="mt-5 min-w-0">
+        <h3 class="mb-4 text-base font-semibold text-gray-800 dark:text-white/90">诊断 JSON</h3>
+        <pre class="custom-scrollbar max-h-[420px] overflow-auto rounded-xl bg-gray-950 p-4 text-xs leading-5 text-gray-100"><code>{{ prettify(record.FailureDetail) }}</code></pre>
       </section>
     </template>
   </AdminLayout>

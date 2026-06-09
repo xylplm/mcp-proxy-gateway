@@ -3,6 +3,8 @@ package aggregation
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"net/http"
 	"time"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
@@ -192,10 +194,7 @@ func (s *Service) recordCall(ctx context.Context, apiKeyID, exposedName string, 
 	}
 	latencyMS := int(time.Since(startedAt).Milliseconds())
 	success := callErr == nil && !result.IsError
-	var errMsg string
-	if callErr != nil {
-		errMsg = callErr.Error()
-	}
+	status, errMsg, failureDetail := callFailure(result, callErr)
 	s.recorder.RecordAsync(ctx, store.CallStatRecord{
 		UpstreamID:     entry.UpstreamID,
 		OriginalName:   entry.OriginalName,
@@ -204,10 +203,113 @@ func (s *Service) recordCall(ctx context.Context, apiKeyID, exposedName string, 
 		CalledAt:       startedAt.UTC(),
 		LatencyMS:      latencyMS,
 		Success:        success,
+		Status:         status,
 		RequestArgs:    args,
 		ResponseResult: result.Content,
 		ErrorMessage:   errMsg,
+		FailureDetail:  failureDetail,
 	})
+}
+
+type callFailureDetail struct {
+	Kind         string            `json:"kind"`
+	Code         string            `json:"code,omitempty"`
+	Message      string            `json:"message,omitempty"`
+	HTTPStatus   int               `json:"httpStatus,omitempty"`
+	BusinessCode int               `json:"businessCode,omitempty"`
+	Timeout      bool              `json:"timeout,omitempty"`
+	Fields       map[string]string `json:"fields,omitempty"`
+}
+
+func callFailure(result domain.ToolResult, callErr error) (string, string, json.RawMessage) {
+	if callErr != nil {
+		detail := callFailureDetail{
+			Kind:         "gateway_error",
+			Code:         string(domain.CodeInternal),
+			Message:      callErr.Error(),
+			HTTPStatus:   http.StatusInternalServerError,
+			BusinessCode: 50000,
+		}
+		var apiErr *domain.APIError
+		if errors.As(callErr, &apiErr) {
+			detail.Code = string(apiErr.Code)
+			detail.Message = apiErr.Message
+			detail.HTTPStatus = domainErrorHTTPStatus(apiErr.Code)
+			detail.BusinessCode = domainErrorBusinessCode(apiErr.Code)
+			detail.Timeout = apiErr.Code == domain.CodeUpstreamTimeout
+			detail.Fields = apiErr.Fields
+		}
+		return store.CallStatusFailed, callErr.Error(), marshalFailureDetail(detail)
+	}
+	if result.IsError {
+		detail := callFailureDetail{
+			Kind:    "upstream_result_error",
+			Code:    "UPSTREAM_RESULT_ERROR",
+			Message: "上游 MCP 返回错误结果",
+		}
+		return store.CallStatusUpstreamError, "", marshalFailureDetail(detail)
+	}
+	return store.CallStatusSuccess, "", nil
+}
+
+func marshalFailureDetail(detail callFailureDetail) json.RawMessage {
+	raw, err := json.Marshal(detail)
+	if err != nil {
+		return nil
+	}
+	return raw
+}
+
+func domainErrorHTTPStatus(code domain.ErrorCode) int {
+	switch code {
+	case domain.CodeValidation:
+		return http.StatusBadRequest
+	case domain.CodeNotFound, domain.CodeToolNotFound:
+		return http.StatusNotFound
+	case domain.CodeConflict:
+		return http.StatusConflict
+	case domain.CodeUnauthorized:
+		return http.StatusUnauthorized
+	case domain.CodeForbidden:
+		return http.StatusForbidden
+	case domain.CodeRateLimited:
+		return http.StatusTooManyRequests
+	case domain.CodeUpstreamUnavailable:
+		return http.StatusBadGateway
+	case domain.CodeUpstreamTimeout:
+		return http.StatusGatewayTimeout
+	case domain.CodeBackupInvalid:
+		return http.StatusBadRequest
+	default:
+		return http.StatusInternalServerError
+	}
+}
+
+func domainErrorBusinessCode(code domain.ErrorCode) int {
+	switch code {
+	case domain.CodeValidation:
+		return 40000
+	case domain.CodeUnauthorized:
+		return 40100
+	case domain.CodeForbidden:
+		return 40300
+	case domain.CodeNotFound:
+		return 40400
+	case domain.CodeToolNotFound:
+		return 40401
+	case domain.CodeConflict:
+		return 40900
+	case domain.CodeBackupInvalid:
+		return 42200
+	case domain.CodeRateLimited:
+		return 42900
+	case domain.CodeUpstreamUnavailable:
+		return 50200
+	case domain.CodeUpstreamTimeout:
+		return 50400
+	default:
+		return 50000
+	}
 }
 
 // buildToolSetWithReverseMap 是聚合管线的数据获取编排层，返回可见工具集合及其反向映射。

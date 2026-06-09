@@ -71,6 +71,19 @@ export interface ToolErrorRank {
   AvgLatencyMS: number
 }
 
+export type CallRecordStatus = 'success' | 'upstream_error' | 'failed' | string
+
+export interface CallFailureDetail {
+  kind?: string
+  code?: string
+  message?: string
+  httpStatus?: number
+  businessCode?: number
+  timeout?: boolean
+  fields?: Record<string, string>
+  [key: string]: unknown
+}
+
 export interface CallRecord {
   ID: number
   UpstreamID: string
@@ -82,9 +95,11 @@ export interface CallRecord {
   CalledAt: string
   LatencyMS: number
   Success: boolean
+  Status?: CallRecordStatus
   RequestArgs: unknown
   ResponseResult: unknown
   ErrorMessage: string
+  FailureDetail?: CallFailureDetail | null
 }
 
 /** 时间区间查询参数；start/end 均为可选 RFC3339 字符串。 */

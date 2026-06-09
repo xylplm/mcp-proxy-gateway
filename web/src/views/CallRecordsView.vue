@@ -16,8 +16,11 @@ const maxLocalRecords = 120
 
 const latestId = computed(() => records.value.reduce((max, item) => Math.max(max, item.ID), 0))
 const latestCalledAt = computed(() => records.value[0]?.CalledAt ?? '')
-const successCount = computed(() => records.value.filter((item) => item.Success).length)
-const failureCount = computed(() => records.value.length - successCount.value)
+const successCount = computed(() => records.value.filter((item) => statusOf(item) === 'success').length)
+const upstreamErrorCount = computed(
+  () => records.value.filter((item) => statusOf(item) === 'upstream_error').length,
+)
+const failedCount = computed(() => records.value.filter((item) => statusOf(item) === 'failed').length)
 const avgLatency = computed(() => {
   if (records.value.length === 0) return 0
   return Math.round(records.value.reduce((sum, item) => sum + item.LatencyMS, 0) / records.value.length)
@@ -31,6 +34,41 @@ function formatDateTime(value: string): string {
 
 function formatLatency(value: number): string {
   return `${Math.max(0, Math.round(value)).toLocaleString('zh-CN')} ms`
+}
+
+function statusOf(record: CallRecord): string {
+  if (record.Status !== undefined && record.Status !== '') return record.Status
+  return record.Success ? 'success' : 'failed'
+}
+
+function statusLabel(record: CallRecord): string {
+  switch (statusOf(record)) {
+    case 'success':
+      return '成功'
+    case 'upstream_error':
+      return '上游错误'
+    case 'failed':
+      return '调用失败'
+    default:
+      return '未知状态'
+  }
+}
+
+function statusClass(record: CallRecord): string {
+  switch (statusOf(record)) {
+    case 'success':
+      return 'bg-success-50 text-success-700 dark:bg-success-500/10 dark:text-success-400'
+    case 'upstream_error':
+      return 'bg-warning-50 text-warning-700 dark:bg-warning-500/10 dark:text-warning-400'
+    case 'failed':
+      return 'bg-error-50 text-error-600 dark:bg-error-500/10 dark:text-error-400'
+    default:
+      return 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300'
+  }
+}
+
+function failureCode(record: CallRecord): string {
+  return record.FailureDetail?.code ?? ''
 }
 
 function mcpLabel(record: CallRecord): string {
@@ -147,7 +185,7 @@ const cardClass =
       {{ errorMessage }}
     </p>
 
-    <div class="mb-5 grid grid-cols-1 gap-4 sm:grid-cols-3">
+    <div class="mb-5 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
       <section :class="cardClass">
         <p class="text-sm text-gray-500 dark:text-gray-400">当前列表</p>
         <p class="mt-2 text-2xl font-semibold text-gray-800 dark:text-white/90">
@@ -155,9 +193,21 @@ const cardClass =
         </p>
       </section>
       <section :class="cardClass">
-        <p class="text-sm text-gray-500 dark:text-gray-400">成功 / 失败</p>
-        <p class="mt-2 text-2xl font-semibold text-gray-800 dark:text-white/90">
-          {{ successCount }} / {{ failureCount }}
+        <p class="text-sm text-gray-500 dark:text-gray-400">成功</p>
+        <p class="mt-2 text-2xl font-semibold text-success-700 dark:text-success-400">
+          {{ successCount.toLocaleString('zh-CN') }}
+        </p>
+      </section>
+      <section :class="cardClass">
+        <p class="text-sm text-gray-500 dark:text-gray-400">上游错误</p>
+        <p class="mt-2 text-2xl font-semibold text-warning-700 dark:text-warning-400">
+          {{ upstreamErrorCount.toLocaleString('zh-CN') }}
+        </p>
+      </section>
+      <section :class="cardClass">
+        <p class="text-sm text-gray-500 dark:text-gray-400">调用失败</p>
+        <p class="mt-2 text-2xl font-semibold text-error-600 dark:text-error-400">
+          {{ failedCount.toLocaleString('zh-CN') }}
         </p>
       </section>
       <section :class="cardClass">
@@ -197,17 +247,17 @@ const cardClass =
               {{ mcpLabel(record) }}
             </p>
           </div>
-          <span
-            class="shrink-0 rounded-full px-2.5 py-1 text-xs font-medium"
-            :class="
-              record.Success
-                ? 'bg-success-50 text-success-700 dark:bg-success-500/10 dark:text-success-400'
-                : 'bg-error-50 text-error-600 dark:bg-error-500/10 dark:text-error-400'
-            "
-          >
-            {{ record.Success ? '成功' : '失败' }}
+          <span class="shrink-0 rounded-full px-2.5 py-1 text-xs font-medium" :class="statusClass(record)">
+            {{ statusLabel(record) }}
           </span>
         </div>
+
+        <p
+          v-if="statusOf(record) !== 'success' && failureCode(record) !== ''"
+          class="mt-3 truncate rounded-lg bg-gray-50 px-3 py-2 text-xs text-gray-500 dark:bg-gray-800/60 dark:text-gray-400"
+        >
+          错误码：{{ failureCode(record) }}
+        </p>
 
         <div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
           <div>

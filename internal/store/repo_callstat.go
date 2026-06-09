@@ -22,6 +22,12 @@ import (
 // 仅凭表名即可推算该分区的时间范围，从而以 DROP 整张分区表的方式高效清理超期数据。
 const partitionPrefix = "call_stat_p"
 
+const (
+	CallStatusSuccess       = "success"
+	CallStatusUpstreamError = "upstream_error"
+	CallStatusFailed        = "failed"
+)
+
 // CallStatRecord 是一条调用统计记录（call_stat 表）（Req 16.1）。
 //
 // 统计维度采用稳定标识 (UpstreamID, OriginalName)，不随别名重命名或上游重排序而断裂；
@@ -41,12 +47,16 @@ type CallStatRecord struct {
 	LatencyMS int
 	// Success 表示执行结果是否成功。
 	Success bool
+	// Status stores success/upstream_error/failed.
+	Status string
 	// RequestArgs 为调用入参 JSON。
 	RequestArgs json.RawMessage
 	// ResponseResult 为调用出参 JSON。
 	ResponseResult json.RawMessage
 	// ErrorMessage 为调用失败时的错误说明。
 	ErrorMessage string
+	// FailureDetail stores diagnostic JSON for failed calls.
+	FailureDetail json.RawMessage
 }
 
 // CallRecordView 是管理台调用记录列表与详情使用的单条调用视图。
@@ -61,9 +71,11 @@ type CallRecordView struct {
 	CalledAt       time.Time
 	LatencyMS      int
 	Success        bool
+	Status         string
 	RequestArgs    json.RawMessage
 	ResponseResult json.RawMessage
 	ErrorMessage   string
+	FailureDetail  json.RawMessage
 }
 
 // DimensionCount 为按某一维度（上游 MCP 或 API Key）聚合的调用条数（Req 16.2、16.4）。
@@ -135,7 +147,7 @@ func (r *CallStatRepo) Insert(ctx context.Context, records []CallStatRecord) err
 	columns := []string{
 		"upstream_id", "original_name", "exposed_name",
 		"api_key_id", "called_at", "latency_ms", "success",
-		"request_args", "response_result", "error_message",
+		"status", "request_args", "response_result", "error_message", "failure_detail",
 	}
 	rows := make([][]any, 0, len(records))
 	for _, rec := range records {
@@ -147,6 +159,7 @@ func (r *CallStatRepo) Insert(ctx context.Context, records []CallStatRecord) err
 		if err != nil {
 			return err
 		}
+		status := normalizeCallStatus(rec.Status, rec.Success)
 		rows = append(rows, []any{
 			upstreamID,
 			rec.OriginalName,
@@ -155,9 +168,11 @@ func (r *CallStatRepo) Insert(ctx context.Context, records []CallStatRecord) err
 			rec.CalledAt,
 			int32(rec.LatencyMS),
 			rec.Success,
+			status,
 			nullableJSON(rec.RequestArgs),
 			nullableJSON(rec.ResponseResult),
 			nullableText(rec.ErrorMessage),
+			nullableJSON(rec.FailureDetail),
 		})
 	}
 
@@ -188,9 +203,11 @@ func (r *CallStatRepo) ListRecords(ctx context.Context, limit int, afterID int64
 			cs.called_at,
 			cs.latency_ms,
 			cs.success,
+			coalesce(cs.status, CASE WHEN cs.success THEN 'success' WHEN coalesce(cs.error_message, '') <> '' THEN 'failed' ELSE 'upstream_error' END),
 			coalesce(cs.request_args, 'null'::jsonb),
 			coalesce(cs.response_result, 'null'::jsonb),
-			coalesce(cs.error_message, '')
+			coalesce(cs.error_message, ''),
+			coalesce(cs.failure_detail, 'null'::jsonb)
 		FROM call_stat cs
 		LEFT JOIN upstream_mcp up ON up.id = cs.upstream_id
 		LEFT JOIN api_key ak ON ak.id = cs.api_key_id
@@ -227,9 +244,11 @@ func (r *CallStatRepo) GetRecord(ctx context.Context, id int64) (CallRecordView,
 			cs.called_at,
 			cs.latency_ms,
 			cs.success,
+			coalesce(cs.status, CASE WHEN cs.success THEN 'success' WHEN coalesce(cs.error_message, '') <> '' THEN 'failed' ELSE 'upstream_error' END),
 			coalesce(cs.request_args, 'null'::jsonb),
 			coalesce(cs.response_result, 'null'::jsonb),
-			coalesce(cs.error_message, '')
+			coalesce(cs.error_message, ''),
+			coalesce(cs.failure_detail, 'null'::jsonb)
 		FROM call_stat cs
 		LEFT JOIN upstream_mcp up ON up.id = cs.upstream_id
 		LEFT JOIN api_key ak ON ak.id = cs.api_key_id
@@ -639,6 +658,7 @@ func scanCallRecordViews(rows pgx.Rows) ([]CallRecordView, error) {
 			apiKeyID   pgtype.UUID
 			request    []byte
 			response   []byte
+			failure    []byte
 			item       CallRecordView
 		)
 		if err := rows.Scan(
@@ -652,16 +672,20 @@ func scanCallRecordViews(rows pgx.Rows) ([]CallRecordView, error) {
 			&item.CalledAt,
 			&item.LatencyMS,
 			&item.Success,
+			&item.Status,
 			&request,
 			&response,
 			&item.ErrorMessage,
+			&failure,
 		); err != nil {
 			return nil, err
 		}
 		item.UpstreamID = uuidString(upstreamID)
 		item.APIKeyID = uuidString(apiKeyID)
+		item.Status = normalizeCallStatus(item.Status, item.Success)
 		item.RequestArgs = json.RawMessage(request)
 		item.ResponseResult = json.RawMessage(response)
+		item.FailureDetail = json.RawMessage(failure)
 		result = append(result, item)
 	}
 	if err := rows.Err(); err != nil {
@@ -670,7 +694,18 @@ func scanCallRecordViews(rows pgx.Rows) ([]CallRecordView, error) {
 	return result, nil
 }
 
-// validateRange 校验统计时间范围：开始时间不得晚于结束时间（Req 16.7）。
+func normalizeCallStatus(status string, success bool) string {
+	switch status {
+	case CallStatusSuccess, CallStatusUpstreamError, CallStatusFailed:
+		return status
+	}
+	if success {
+		return CallStatusSuccess
+	}
+	return CallStatusFailed
+}
+
+// validateRange checks that the statistics range start is not after end.
 func validateRange(start, end time.Time) error {
 	if start.After(end) {
 		return domain.NewValidationError("统计时间范围无效：开始时间晚于结束时间", map[string]string{
