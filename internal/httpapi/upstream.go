@@ -2,10 +2,12 @@ package httpapi
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
+	"github.com/myGithub/mcp-proxy-gateway/internal/manager"
 )
 
 // 本文件实现上游 MCP 管理端点（Req 2.1、3.1、3.4、5.6、6.4）：
@@ -30,12 +32,16 @@ import (
 type upstreamConfigRequest struct {
 	// Name 为服务名称，长度需在 1 至 100 个字符之间（Req 2.1、2.2）。
 	Name string `json:"name"`
+	// Tags 为用户自定义标签，用于管理台分组与识别。
+	Tags []string `json:"tags"`
 	// Transport 为传输类型（stdio/sse/streamable-http/websocket）。
 	Transport domain.TransportType `json:"transport"`
 	// ConnParams 为传输类型相关的连接参数。
 	ConnParams map[string]any `json:"connParams"`
-	// Credential 为鉴权凭证明文，仅入参，持久化前加密、响应不回显（Req 19.1、19.3）。
+	// Credential 为鉴权凭证明文，仅入参，响应不回显（Req 19.3）。
 	Credential string `json:"credential"`
+	// CredentialAction 控制更新时凭证处理：keep/replace/clear。创建时忽略，等同 replace。
+	CredentialAction string `json:"credentialAction"`
 	// Enabled 表示该上游是否启用并参与聚合。
 	Enabled bool `json:"enabled"`
 	// SortOrder 为排序顺序。
@@ -48,6 +54,7 @@ type upstreamConfigRequest struct {
 func (req upstreamConfigRequest) toConfig() domain.UpstreamConfig {
 	return domain.UpstreamConfig{
 		Name:       req.Name,
+		Tags:       req.Tags,
 		Transport:  req.Transport,
 		ConnParams: req.ConnParams,
 		Credential: req.Credential,
@@ -119,7 +126,16 @@ func (r *Router) updateUpstream(c *gin.Context) {
 	if !bindJSON(c, &req) {
 		return
 	}
-	up, err := r.upstream.Update(c.Request.Context(), c.Param("id"), req.toConfig())
+	cfg := req.toConfig()
+	action := manager.CredentialAction(strings.TrimSpace(req.CredentialAction))
+	if action == "" {
+		action = manager.CredentialReplace
+		if strings.TrimSpace(req.Credential) == "" {
+			action = manager.CredentialKeep
+		}
+	}
+
+	up, err := r.upstream.UpdateWithCredentialAction(c.Request.Context(), c.Param("id"), cfg, action)
 	if err != nil {
 		respondError(c, err)
 		return

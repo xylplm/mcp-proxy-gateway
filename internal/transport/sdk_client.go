@@ -212,22 +212,28 @@ func wrapUpstreamError(err error) error {
 	return domain.NewError(domain.CodeUpstreamUnavailable, fmt.Sprintf("上游 MCP 调用失败：%v", err))
 }
 
-// newAuthHTTPClient 构造一个在每个请求上附带鉴权凭证的 HTTP 客户端（Req 4.7）。
+// newAuthHTTPClient 构造一个在每个请求上附带自定义请求头与鉴权凭证的 HTTP 客户端（Req 4.7）。
 //
-// 当 credential 为空时返回 nil，使 SDK 退回到 http.DefaultClient；否则返回包装了
-// authRoundTripper 的客户端，对请求统一附加 Authorization: Bearer <credential> 头。
-func newAuthHTTPClient(credential string) *http.Client {
-	if credential == "" {
+// 当 credential 与 headers 均为空时返回 nil，使 SDK 退回到 http.DefaultClient；否则返回包装了
+// authRoundTripper 的客户端。自定义 Authorization 头优先，未显式提供时再附加 Bearer 凭证。
+func newAuthHTTPClient(credential string, headers map[string]string) *http.Client {
+	if credential == "" && len(headers) == 0 {
 		return nil
 	}
+	resolvedHeaders := resolveStringMapCredentials(headers, credential)
+	autoBearerCredential := credential
+	if stringMapContainsCredentialPlaceholder(headers) {
+		autoBearerCredential = ""
+	}
 	return &http.Client{
-		Transport: &authRoundTripper{credential: credential, base: http.DefaultTransport},
+		Transport: &authRoundTripper{credential: autoBearerCredential, headers: resolvedHeaders, base: http.DefaultTransport},
 	}
 }
 
 // authRoundTripper 是一个为出站 HTTP 请求附加 Bearer 鉴权头的 http.RoundTripper 装饰器。
 type authRoundTripper struct {
 	credential string
+	headers    map[string]string
 	base       http.RoundTripper
 }
 
@@ -238,7 +244,12 @@ func (rt *authRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
 		base = http.DefaultTransport
 	}
 	cloned := req.Clone(req.Context())
-	if cloned.Header.Get("Authorization") == "" {
+	for k, v := range rt.headers {
+		if cloned.Header.Get(k) == "" {
+			cloned.Header.Set(k, v)
+		}
+	}
+	if rt.credential != "" && cloned.Header.Get("Authorization") == "" {
 		cloned.Header.Set("Authorization", "Bearer "+rt.credential)
 	}
 	return base.RoundTrip(cloned)

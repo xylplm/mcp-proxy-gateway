@@ -1,0 +1,1 @@
+ALTER TABLE upstream_mcp DROP COLUMN IF EXISTS tags;

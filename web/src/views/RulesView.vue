@@ -6,7 +6,7 @@
  * 17.5（管理 REST API 接入）。
  *
  * 布局：规则中心，规则独立创建，作用范围支持全部上游或指定多个上游。
- * 响应式：卡片与网格布局，小屏单列，平板双列，PC/2K/4K 自动提升信息密度，避免表格。
+ * 响应式：卡片与网格布局，随可用空间调整信息密度，避免表格。
  */
 import { onMounted, ref } from 'vue'
 import AdminLayout from '@/components/layout/AdminLayout.vue'
@@ -53,10 +53,7 @@ async function loadUpstreams(): Promise<void> {
 
 async function refreshAll(): Promise<void> {
   await loadUpstreams()
-  await Promise.all([
-    aliasSection.value?.reload(),
-    filterSection.value?.reload(),
-  ])
+  await Promise.all([aliasSection.value?.reload(), filterSection.value?.reload()])
 }
 
 onMounted(loadUpstreams)
@@ -89,7 +86,13 @@ onMounted(loadUpstreams)
               :class="{ 'animate-spin': loading }"
               aria-hidden="true"
             >
-              <path d="M4 4v6h6M20 20v-6h-6M20 9a8 8 0 0 0-15-2M4 15a8 8 0 0 0 15 2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+              <path
+                d="M4 4v6h6M20 20v-6h-6M20 9a8 8 0 0 0-15-2M4 15a8 8 0 0 0 15 2"
+                stroke="currentColor"
+                stroke-width="1.8"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
             </svg>
           </button>
         </div>
@@ -99,22 +102,28 @@ onMounted(loadUpstreams)
         <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
           <div class="rounded-xl bg-gray-50 px-4 py-3 dark:bg-gray-800/60">
             <div class="text-xs text-gray-500 dark:text-gray-400">可用上游</div>
-            <div class="mt-1 text-xl font-semibold text-gray-800 dark:text-white/90">{{ upstreams.length }}</div>
+            <div class="mt-1 text-xl font-semibold text-gray-800 dark:text-white/90">
+              {{ upstreams.length }}
+            </div>
           </div>
           <div class="rounded-xl bg-gray-50 px-4 py-3 dark:bg-gray-800/60">
             <div class="text-xs text-gray-500 dark:text-gray-400">作用范围</div>
-            <div class="mt-1 text-sm font-medium text-gray-800 dark:text-white/90">全部 / 多选上游</div>
+            <div class="mt-1 text-sm font-medium text-gray-800 dark:text-white/90">
+              全部 / 多选上游
+            </div>
           </div>
           <div class="rounded-xl bg-gray-50 px-4 py-3 dark:bg-gray-800/60">
             <div class="text-xs text-gray-500 dark:text-gray-400">规则类型</div>
-            <div class="mt-1 text-sm font-medium text-gray-800 dark:text-white/90">别名重写 / 过滤</div>
+            <div class="mt-1 text-sm font-medium text-gray-800 dark:text-white/90">
+              别名重写 / 过滤
+            </div>
           </div>
         </div>
       </div>
 
       <p
         v-if="errorMessage !== ''"
-        class="mt-4 rounded-lg bg-error-50 px-4 py-2.5 text-sm text-error-600 dark:bg-error-500/10 dark:text-error-400"
+        class="bg-error-50 text-error-600 dark:bg-error-500/10 dark:text-error-400 mt-4 rounded-lg px-4 py-2.5 text-sm"
       >
         {{ errorMessage }}
       </p>
@@ -123,19 +132,13 @@ onMounted(loadUpstreams)
     <!-- 操作提示 -->
     <p
       v-if="toast !== ''"
-      class="mb-4 rounded-lg bg-success-50 px-4 py-2.5 text-sm text-success-700 dark:bg-success-500/10 dark:text-success-400"
+      class="bg-success-50 text-success-700 dark:bg-success-500/10 dark:text-success-400 mb-4 rounded-lg px-4 py-2.5 text-sm"
     >
       {{ toast }}
     </p>
 
-    <!--
-      规则看板：小屏单列，PC 双栏，4K 仍保持可读宽度，内部卡片继续自适应。
-      isLargeScreen 仅用于辅助标识，实际栏数由 Tailwind 响应式工具类驱动。
-    -->
-    <div
-      class="grid grid-cols-1 gap-5 lg:grid-cols-2"
-      :data-large-screen="isLargeScreen"
-    >
+    <!-- 规则看板：两个规则区块按可用空间自动排列，内部卡片继续自适应。 -->
+    <div class="grid grid-cols-1 gap-5 lg:grid-cols-2" :data-large-screen="isLargeScreen">
       <AliasRuleSection ref="aliasSection" :upstreams="upstreams" @toast="showToast" />
       <FilterRuleSection ref="filterSection" :upstreams="upstreams" @toast="showToast" />
     </div>

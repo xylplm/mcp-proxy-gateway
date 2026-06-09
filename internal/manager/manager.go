@@ -2,6 +2,7 @@ package manager
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -12,12 +13,28 @@ import (
 	"github.com/myGithub/mcp-proxy-gateway/internal/transport"
 )
 
+// CredentialAction 表示更新上游时如何处理已保存的鉴权凭证。
+type CredentialAction string
+
+const (
+	// CredentialReplace 表示使用提交的 credential 替换原凭证。
+	CredentialReplace CredentialAction = "replace"
+	// CredentialKeep 表示保留原凭证。
+	CredentialKeep CredentialAction = "keep"
+	// CredentialClear 表示清除原凭证。
+	CredentialClear CredentialAction = "clear"
+)
+
 // 名称长度约束：服务名称需在 1 至 100 个字符之间（Req 2.1、2.2）。
 const (
 	// minNameLen 为上游 MCP 名称的最小字符数。
 	minNameLen = 1
 	// maxNameLen 为上游 MCP 名称的最大字符数。
 	maxNameLen = 100
+	// maxTags 为单个上游允许配置的标签数量上限。
+	maxTags = 8
+	// maxTagLen 为单个标签的最大字符数。
+	maxTagLen = 32
 )
 
 // UpstreamRepository 是连接管理器依赖的上游 MCP 仓储窄接口。
@@ -47,6 +64,8 @@ type UpstreamRepository interface {
 type CredentialEncryptor interface {
 	// Encrypt 对明文凭证加密，返回密文字节。
 	Encrypt(plaintext []byte) ([]byte, error)
+	// Decrypt 对持久化的加密凭证解密，返回明文字节。
+	Decrypt(ciphertext []byte) ([]byte, error)
 }
 
 // ToolCacheCleaner 是工具缓存清理窄接口，用于删除上游时级联清理缓存（Req 2.5、6.6）。
@@ -168,7 +187,9 @@ func New(
 // 校验错误且不持久化（Req 2.2）；名称与既有上游重复时仓储层返回 CONFLICT（Req 2.7）。
 // 返回的 Upstream 不含明文凭证（Req 19.3）。
 func (m *Manager) Create(ctx context.Context, cfg domain.UpstreamConfig) (domain.Upstream, error) {
-	if err := m.validateConfig(cfg); err != nil {
+	var err error
+	cfg, err = m.validateConfig(cfg)
+	if err != nil {
 		return domain.Upstream{}, err
 	}
 
@@ -197,13 +218,45 @@ func (m *Manager) Create(ctx context.Context, cfg domain.UpstreamConfig) (domain
 // 连接重建（Req 2.4 后半句）：停止该上游既有的重试循环、写入新配置，再按新配置的
 // 启停状态重新拨号建立连接（或在停用时置为不可用），从而使更新后的连接参数立即生效。
 func (m *Manager) Update(ctx context.Context, id string, cfg domain.UpstreamConfig) (domain.Upstream, error) {
-	if err := m.validateConfig(cfg); err != nil {
+	return m.UpdateWithCredentialAction(ctx, id, cfg, CredentialReplace)
+}
+
+// UpdateWithCredentialAction 更新某个已存在的上游 MCP 服务配置，并按 action 明确处理凭证。
+func (m *Manager) UpdateWithCredentialAction(ctx context.Context, id string, cfg domain.UpstreamConfig, action CredentialAction) (domain.Upstream, error) {
+	var err error
+	if action == "" {
+		action = CredentialReplace
+	}
+	if action != CredentialReplace && action != CredentialKeep && action != CredentialClear {
+		return domain.Upstream{}, domain.NewValidationError("上游 MCP 配置校验失败", map[string]string{
+			"credentialAction": "凭证处理方式只能是 keep、replace 或 clear",
+		})
+	}
+
+	if action == CredentialClear {
+		cfg.Credential = ""
+	}
+
+	cfg, err = m.validateConfig(cfg)
+	if err != nil {
 		return domain.Upstream{}, err
 	}
 
-	credentialEnc, err := m.encryptCredential(cfg.Credential)
-	if err != nil {
-		return domain.Upstream{}, err
+	var credentialEnc []byte
+	if action == CredentialKeep {
+		cfg.Credential, err = m.currentCredential(ctx, id)
+		if err != nil {
+			return domain.Upstream{}, err
+		}
+		credentialEnc = nil
+	} else {
+		credentialEnc, err = m.encryptCredential(cfg.Credential)
+		if err != nil {
+			return domain.Upstream{}, err
+		}
+		if action == CredentialClear {
+			credentialEnc = []byte{}
+		}
 	}
 
 	row, err := m.repo.Update(ctx, id, cfg, credentialEnc)
@@ -215,6 +268,31 @@ func (m *Manager) Update(ctx context.Context, id string, cfg domain.UpstreamConf
 	cfg.SortOrder = row.Config.SortOrder
 	m.rebuildConnection(id, cfg)
 	return m.toUpstream(row), nil
+}
+
+func (m *Manager) currentCredential(ctx context.Context, id string) (string, error) {
+	m.connsMu.Lock()
+	c := m.conns[id]
+	m.connsMu.Unlock()
+	if c != nil {
+		credential := c.config().Credential
+		if credential != "" {
+			return credential, nil
+		}
+	}
+
+	row, err := m.repo.Get(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	if len(row.CredentialEnc) == 0 {
+		return "", nil
+	}
+	plain, err := m.enc.Decrypt(row.CredentialEnc)
+	if err != nil {
+		return "", err
+	}
+	return string(plain), nil
 }
 
 // Delete 删除某个已存在的上游 MCP 服务并级联清理（Req 2.5、2.6、6.6）。
@@ -375,7 +453,7 @@ func (m *Manager) Reconnect(ctx context.Context, id string) error {
 //
 // 任一项不通过即返回携带字段级说明的 VALIDATION 错误，由调用方据此拒绝写入、
 // 不持久化任何变更。
-func (m *Manager) validateConfig(cfg domain.UpstreamConfig) error {
+func (m *Manager) validateConfig(cfg domain.UpstreamConfig) (domain.UpstreamConfig, error) {
 	fields := make(map[string]string)
 
 	// 名称必填且长度 1-100（按 Unicode 字符计数）。
@@ -390,10 +468,43 @@ func (m *Manager) validateConfig(cfg domain.UpstreamConfig) error {
 		mergeFields(fields, err)
 	}
 
-	if len(fields) > 0 {
-		return domain.NewValidationError("上游 MCP 配置校验失败", fields)
+	if normalized, err := normalizeTags(cfg.Tags); err != nil {
+		fields["tags"] = err.Error()
+	} else {
+		cfg.Tags = normalized
 	}
-	return nil
+
+	if len(fields) > 0 {
+		return domain.UpstreamConfig{}, domain.NewValidationError("上游 MCP 配置校验失败", fields)
+	}
+	return cfg, nil
+}
+
+func normalizeTags(tags []string) ([]string, error) {
+	if len(tags) == 0 {
+		return nil, nil
+	}
+	seen := make(map[string]struct{}, len(tags))
+	out := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		t := strings.TrimSpace(tag)
+		if t == "" {
+			continue
+		}
+		if n := utf8.RuneCountInString(t); n > maxTagLen {
+			return nil, fmt.Errorf("标签长度不能超过 %d 个字符", maxTagLen)
+		}
+		key := strings.ToLower(t)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, t)
+	}
+	if len(out) > maxTags {
+		return nil, fmt.Errorf("标签数量不能超过 %d 个", maxTags)
+	}
+	return out, nil
 }
 
 // encryptCredential 在写库前对鉴权凭证明文加密（Req 19.1）。

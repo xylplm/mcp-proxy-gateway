@@ -65,6 +65,8 @@ type ToolResult struct {
 type UpstreamConfig struct {
 	// Name 为服务名称，长度需在 1 至 100 个字符之间。
 	Name string `json:"name"`
+	// Tags 为用户自定义标签，用于在管理台中分组与识别上游 MCP。
+	Tags []string `json:"tags,omitempty"`
 	// Transport 为传输类型。
 	Transport TransportType `json:"transport"`
 	// ConnParams 为传输类型相关的连接参数。

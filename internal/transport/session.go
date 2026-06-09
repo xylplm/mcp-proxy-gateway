@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -59,21 +60,27 @@ const (
 )
 
 // connParams 为从 domain.UpstreamConfig.ConnParams 解析出的、与具体传输相关的连接参数。
-// 字段在不同传输类型下取舍不同：stdio 使用 command/args；sse/streamable-http/websocket 使用 url。
+// 字段在不同传输类型下取舍不同：stdio 使用 command/args/env/cwd；远程传输使用 url/headers。
 type connParams struct {
 	// command 为 stdio 传输启动上游 MCP 子进程的可执行文件路径或命令。
 	command string
 	// args 为 stdio 传输的命令行参数列表。
 	args []string
+	// env 为 stdio 子进程附加环境变量。
+	env map[string]string
+	// cwd 为 stdio 子进程工作目录。
+	cwd string
 	// url 为 sse/streamable-http/websocket 传输的服务地址。
 	url string
+	// headers 为远程传输建立连接时携带的自定义请求头。
+	headers map[string]string
 }
 
 // parseConnParams 在校验通过的前提下从配置中提取连接参数。
 //
 // 为保证健壮性，它先复用 ValidateConnParams 做字段级校验（Req 4.5/4.6/4.8），
 // 校验失败时直接返回该校验错误；校验通过后再按传输类型安全地提取 command/args/url，
-// 复用 validate.go 中的键名常量（ParamCommand/ParamArgs/ParamURL）避免魔法字符串散落。
+// 复用 validate.go 中的键名常量避免魔法字符串散落。
 func parseConnParams(cfg domain.UpstreamConfig) (connParams, error) {
 	if err := ValidateConnParams(cfg); err != nil {
 		return connParams{}, err
@@ -88,10 +95,20 @@ func parseConnParams(cfg domain.UpstreamConfig) (connParams, error) {
 		}
 		// args 为可选参数，可能是 []string 或 JSON 解析得到的 []any。
 		p.args = toStringSlice(cfg.ConnParams[ParamArgs])
+		// env/cwd 为可选参数，类型已在 ValidateConnParams 中校验。
+		if env := toStringMap(cfg.ConnParams[ParamEnv]); len(env) > 0 {
+			p.env = env
+		}
+		if cwd, ok := cfg.ConnParams[ParamCWD].(string); ok {
+			p.cwd = cwd
+		}
 	case domain.TransportSSE, domain.TransportStreamableHTTP, domain.TransportWebSocket:
 		// url 经校验必为合法且非空的字符串。
 		if s, ok := cfg.ConnParams[ParamURL].(string); ok {
 			p.url = s
+		}
+		if headers := toStringMap(cfg.ConnParams[ParamHeaders]); len(headers) > 0 {
+			p.headers = headers
 		}
 	}
 	return p, nil
@@ -120,6 +137,81 @@ func toStringSlice(raw any) []string {
 	default:
 		return nil
 	}
+}
+
+// toStringMap 将连接参数中的字符串映射归一化为 map[string]string，兼容 map[string]string 与 map[string]any。
+// 非映射或包含非字符串值时返回 nil（此类非法输入已在 ValidateConnParams 阶段被拦截）。
+func toStringMap(raw any) map[string]string {
+	switch v := raw.(type) {
+	case nil:
+		return nil
+	case map[string]string:
+		out := make(map[string]string, len(v))
+		for k, val := range v {
+			out[k] = val
+		}
+		return out
+	case map[string]any:
+		out := make(map[string]string, len(v))
+		for k, item := range v {
+			s, ok := item.(string)
+			if !ok {
+				return nil
+			}
+			out[k] = s
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+// resolveCredentialPlaceholders 把连接参数中的 ${credential} 占位替换为加密存储后解密到内存的凭证明文。
+func resolveCredentialPlaceholders(value string, credential string) string {
+	if credential == "" {
+		return value
+	}
+	return strings.ReplaceAll(value, "${credential}", credential)
+}
+
+func resolveStringSliceCredentials(values []string, credential string) []string {
+	if len(values) == 0 {
+		return values
+	}
+	out := make([]string, len(values))
+	for i, value := range values {
+		out[i] = resolveCredentialPlaceholders(value, credential)
+	}
+	return out
+}
+
+func resolveStringMapCredentials(values map[string]string, credential string) map[string]string {
+	if len(values) == 0 {
+		return values
+	}
+	out := make(map[string]string, len(values))
+	for k, value := range values {
+		out[k] = resolveCredentialPlaceholders(value, credential)
+	}
+	return out
+}
+
+func stringMapHasKeyFold(values map[string]string, key string) bool {
+	for k := range values {
+		if strings.EqualFold(k, key) {
+			return true
+		}
+	}
+	return false
+}
+
+func stringMapContainsCredentialPlaceholder(values map[string]string) bool {
+	for _, value := range values {
+		if strings.Contains(value, "${credential}") {
+			return true
+		}
+	}
+	return false
 }
 
 // mcpClientConn 抽象一条已建立的上游 MCP 客户端连接，屏蔽具体 SDK 与传输细节。

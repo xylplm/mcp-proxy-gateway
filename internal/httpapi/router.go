@@ -10,6 +10,7 @@ import (
 	"github.com/myGithub/mcp-proxy-gateway/internal/audit"
 	"github.com/myGithub/mcp-proxy-gateway/internal/config"
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
+	"github.com/myGithub/mcp-proxy-gateway/internal/manager"
 	"github.com/myGithub/mcp-proxy-gateway/internal/store"
 	"github.com/myGithub/mcp-proxy-gateway/internal/template"
 )
@@ -40,6 +41,8 @@ type UpstreamService interface {
 	Create(ctx context.Context, cfg domain.UpstreamConfig) (domain.Upstream, error)
 	// Update 更新上游 MCP 配置并按新配置重建连接。
 	Update(ctx context.Context, id string, cfg domain.UpstreamConfig) (domain.Upstream, error)
+	// UpdateWithCredentialAction 更新上游 MCP 配置，并明确处理鉴权凭证。
+	UpdateWithCredentialAction(ctx context.Context, id string, cfg domain.UpstreamConfig, action manager.CredentialAction) (domain.Upstream, error)
 	// Delete 删除上游 MCP 服务并级联清理工具缓存与规则。
 	Delete(ctx context.Context, id string) error
 	// List 返回全部上游 MCP 及其当前连接状态。

@@ -18,6 +18,7 @@ package store
 import (
 	"context"
 	"os"
+	"reflect"
 	"testing"
 	"time"
 
@@ -99,7 +100,9 @@ func TestUpstreamRepoCRUD(t *testing.T) {
 	ctx, _, repos := setupRepos(t)
 
 	// Create：持久化配置并回填标识与时间戳。
-	created, err := repos.Upstream.Create(ctx, sampleUpstreamConfig("crud-upstream"), []byte("enc-credential"))
+	cfg := sampleUpstreamConfig("crud-upstream")
+	cfg.Tags = []string{"生产", "搜索"}
+	created, err := repos.Upstream.Create(ctx, cfg, []byte("enc-credential"))
 	if err != nil {
 		t.Fatalf("创建上游失败: %v", err)
 	}
@@ -124,6 +127,9 @@ func TestUpstreamRepoCRUD(t *testing.T) {
 	if got.Config.Transport != domain.TransportStreamableHTTP {
 		t.Errorf("传输类型不一致，实际 %s", got.Config.Transport)
 	}
+	if !reflect.DeepEqual(got.Config.Tags, []string{"生产", "搜索"}) {
+		t.Errorf("标签未正确持久化，实际 %v", got.Config.Tags)
+	}
 	if string(got.CredentialEnc) != "enc-credential" {
 		t.Errorf("密文凭证应原样持久化，实际 %q", string(got.CredentialEnc))
 	}
@@ -143,6 +149,7 @@ func TestUpstreamRepoCRUD(t *testing.T) {
 	// Update：更新可变字段并刷新 updated_at。
 	updatedCfg := got.Config
 	updatedCfg.Name = "crud-upstream-renamed"
+	updatedCfg.Tags = []string{"生产", "向量"}
 	updatedCfg.Enabled = false
 	updatedCfg.SortOrder = 5
 	updated, err := repos.Upstream.Update(ctx, created.ID, updatedCfg, []byte("enc-credential-2"))
@@ -160,8 +167,28 @@ func TestUpstreamRepoCRUD(t *testing.T) {
 	if reGot.Config.SortOrder != 5 {
 		t.Errorf("排序值未持久化，实际 %d", reGot.Config.SortOrder)
 	}
+	if !reflect.DeepEqual(reGot.Config.Tags, []string{"生产", "向量"}) {
+		t.Errorf("更新后标签未生效，实际 %v", reGot.Config.Tags)
+	}
 	if string(reGot.CredentialEnc) != "enc-credential-2" {
 		t.Errorf("更新后密文凭证未生效，实际 %q", string(reGot.CredentialEnc))
+	}
+
+	preserveCfg := reGot.Config
+	preserveCfg.Name = "crud-upstream-preserve"
+	preserved, err := repos.Upstream.Update(ctx, created.ID, preserveCfg, nil)
+	if err != nil {
+		t.Fatalf("保留凭证更新失败: %v", err)
+	}
+	if string(preserved.CredentialEnc) != "enc-credential-2" {
+		t.Errorf("nil 密文更新应保留原凭证，返回值实际 %q", string(preserved.CredentialEnc))
+	}
+	preservedGot, err := repos.Upstream.Get(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("保留凭证后查询失败: %v", err)
+	}
+	if string(preservedGot.CredentialEnc) != "enc-credential-2" {
+		t.Errorf("nil 密文更新应保留库中凭证，实际 %q", string(preservedGot.CredentialEnc))
 	}
 
 	// Delete：删除后再查应得 NOT_FOUND。

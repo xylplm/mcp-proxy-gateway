@@ -46,13 +46,13 @@ func (r *UpstreamRepo) Create(ctx context.Context, cfg domain.UpstreamConfig, cr
 	id := newUUID()
 	const q = `
 		INSERT INTO upstream_mcp
-			(id, name, transport, conn_params, credential_enc, enabled, sort_order, auto_sync)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+			(id, name, tags, transport, conn_params, credential_enc, enabled, sort_order, auto_sync)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		RETURNING created_at, updated_at`
 
 	var createdAt, updatedAt time.Time
 	err = r.pool.QueryRow(ctx, q,
-		id, cfg.Name, string(cfg.Transport), connParams, credentialEnc,
+		id, cfg.Name, storeTags(cfg.Tags), string(cfg.Transport), connParams, credentialEnc,
 		cfg.Enabled, cfg.SortOrder, cfg.AutoSync,
 	).Scan(&createdAt, &updatedAt)
 	if err != nil {
@@ -75,7 +75,7 @@ func (r *UpstreamRepo) Get(ctx context.Context, id string) (*UpstreamRow, error)
 		return nil, err
 	}
 	const q = `
-		SELECT id, name, transport, conn_params, credential_enc,
+		SELECT id, name, tags, transport, conn_params, credential_enc,
 		       enabled, sort_order, auto_sync, created_at, updated_at
 		FROM upstream_mcp
 		WHERE id = $1`
@@ -89,7 +89,7 @@ func (r *UpstreamRepo) Get(ctx context.Context, id string) (*UpstreamRow, error)
 // List 返回全部上游 MCP，按 sort_order 升序、创建时间次序排列；无数据返回空切片（Req 2.8、3.4）。
 func (r *UpstreamRepo) List(ctx context.Context) ([]UpstreamRow, error) {
 	const q = `
-		SELECT id, name, transport, conn_params, credential_enc,
+		SELECT id, name, tags, transport, conn_params, credential_enc,
 		       enabled, sort_order, auto_sync, created_at, updated_at
 		FROM upstream_mcp
 		ORDER BY sort_order ASC, created_at ASC`
@@ -128,16 +128,18 @@ func (r *UpstreamRepo) Update(ctx context.Context, id string, cfg domain.Upstrea
 
 	const q = `
 		UPDATE upstream_mcp
-		SET name = $2, transport = $3, conn_params = $4, credential_enc = $5,
-		    enabled = $6, sort_order = $7, auto_sync = $8, updated_at = now()
+		SET name = $2, tags = $3, transport = $4, conn_params = $5,
+		    credential_enc = CASE WHEN $6::bytea IS NULL THEN credential_enc ELSE $6::bytea END,
+		    enabled = $7, sort_order = $8, auto_sync = $9, updated_at = now()
 		WHERE id = $1
-		RETURNING created_at, updated_at`
+		RETURNING credential_enc, created_at, updated_at`
 
+	var savedCredentialEnc []byte
 	var createdAt, updatedAt time.Time
 	err = r.pool.QueryRow(ctx, q,
-		uid, cfg.Name, string(cfg.Transport), connParams, credentialEnc,
+		uid, cfg.Name, storeTags(cfg.Tags), string(cfg.Transport), connParams, credentialEnc,
 		cfg.Enabled, cfg.SortOrder, cfg.AutoSync,
-	).Scan(&createdAt, &updatedAt)
+	).Scan(&savedCredentialEnc, &createdAt, &updatedAt)
 	if err != nil {
 		if e := notFoundIfNoRows(err, "上游 MCP 不存在"); e != err {
 			return nil, e
@@ -145,7 +147,7 @@ func (r *UpstreamRepo) Update(ctx context.Context, id string, cfg domain.Upstrea
 		return nil, classifyWrite(err, "上游 MCP 名称已存在："+cfg.Name, "上游 MCP 不存在")
 	}
 
-	row := &UpstreamRow{CredentialEnc: credentialEnc}
+	row := &UpstreamRow{CredentialEnc: savedCredentialEnc}
 	row.ID = id
 	row.Config = cfg
 	row.Config.Credential = ""
@@ -218,11 +220,19 @@ func marshalConnParams(params map[string]any) ([]byte, error) {
 	return b, nil
 }
 
+func storeTags(tags []string) []string {
+	if tags == nil {
+		return []string{}
+	}
+	return tags
+}
+
 // scanUpstream 从单行结果扫描出 UpstreamRow。
 func scanUpstream(row pgx.Row) (*UpstreamRow, error) {
 	var (
 		id            pgtype.UUID
 		name          string
+		tags          []string
 		transport     string
 		connParams    []byte
 		credentialEnc []byte
@@ -232,7 +242,7 @@ func scanUpstream(row pgx.Row) (*UpstreamRow, error) {
 		createdAt     time.Time
 		updatedAt     time.Time
 	)
-	if err := row.Scan(&id, &name, &transport, &connParams, &credentialEnc,
+	if err := row.Scan(&id, &name, &tags, &transport, &connParams, &credentialEnc,
 		&enabled, &sortOrder, &autoSync, &createdAt, &updatedAt); err != nil {
 		return nil, err
 	}
@@ -248,6 +258,7 @@ func scanUpstream(row pgx.Row) (*UpstreamRow, error) {
 	out.ID = uuidString(id)
 	out.Config = domain.UpstreamConfig{
 		Name:       name,
+		Tags:       tags,
 		Transport:  domain.TransportType(transport),
 		ConnParams: params,
 		Enabled:    enabled,

@@ -15,15 +15,21 @@ const (
 	ParamCommand = "command"
 	// ParamArgs 为 stdio 传输的命令行参数列表，可选，需为字符串数组。
 	ParamArgs = "args"
+	// ParamEnv 为 stdio 传输的环境变量映射，可选，键和值均需为字符串。
+	ParamEnv = "env"
+	// ParamCWD 为 stdio 传输的工作目录，可选，需为非空字符串。
+	ParamCWD = "cwd"
 	// ParamURL 为 SSE / Streamable-HTTP / WebSocket 传输的服务地址，必填。
 	ParamURL = "url"
+	// ParamHeaders 为 SSE / Streamable-HTTP / WebSocket 传输的请求头映射，可选。
+	ParamHeaders = "headers"
 )
 
 // 各传输类型的必填连接参数与格式约定（Req 4.5）：
-//   - stdio：command（非空字符串，可执行文件路径或命令）；args 可选，字符串数组。
-//   - sse：url（http:// 或 https:// 合法 URL）。
-//   - streamable-http：url（http:// 或 https:// 合法 URL）。
-//   - websocket：url（ws:// 或 wss:// 合法 URL）。
+//   - stdio：command（非空字符串，可执行文件路径或命令）；args/env/cwd 可选。
+//   - sse：url（http:// 或 https:// 合法 URL）；headers 可选。
+//   - streamable-http：url（http:// 或 https:// 合法 URL）；headers 可选。
+//   - websocket：url（ws:// 或 wss:// 合法 URL）；headers 可选。
 //
 // 不在上述集合内的传输类型视为不受支持（Req 4.6）。
 
@@ -42,9 +48,11 @@ func ValidateConnParams(cfg domain.UpstreamConfig) error {
 	case domain.TransportSSE, domain.TransportStreamableHTTP:
 		// SSE 与 Streamable-HTTP 均要求 http/https 合法 URL。
 		validateURLParam(cfg.ConnParams, fields, "http", "https")
+		validateOptionalStringMapParam(cfg.ConnParams, ParamHeaders, fields)
 	case domain.TransportWebSocket:
 		// WebSocket 要求 ws/wss 合法 URL。
 		validateURLParam(cfg.ConnParams, fields, "ws", "wss")
+		validateOptionalStringMapParam(cfg.ConnParams, ParamHeaders, fields)
 	default:
 		// 传输类型不属于受支持集合，返回指示「传输类型不受支持」的校验错误（Req 4.6）。
 		fields["transport"] = fmt.Sprintf(
@@ -59,7 +67,7 @@ func ValidateConnParams(cfg domain.UpstreamConfig) error {
 	return nil
 }
 
-// validateStdioParams 校验 stdio 传输的连接参数：command 必填且为非空字符串，args 可选且为字符串数组。
+// validateStdioParams 校验 stdio 传输的连接参数：command 必填，args/env/cwd 可选。
 func validateStdioParams(params map[string]any, fields map[string]string) {
 	requireStringParam(params, ParamCommand, fields)
 
@@ -79,6 +87,9 @@ func validateStdioParams(params map[string]any, fields map[string]string) {
 			fields[fieldKey(ParamArgs)] = fmt.Sprintf("连接参数 %q 必须为字符串数组", ParamArgs)
 		}
 	}
+
+	validateOptionalStringMapParam(params, ParamEnv, fields)
+	validateOptionalStringParam(params, ParamCWD, fields)
 }
 
 // validateURLParam 校验名为 url 的必填连接参数为合法 URL，且其协议位于 allowedSchemes 之内。
@@ -129,9 +140,60 @@ func requireStringParam(params map[string]any, key string, fields map[string]str
 	}
 	if strings.TrimSpace(s) == "" {
 		fields[fieldKey(key)] = fmt.Sprintf("连接参数 %q 不能为空", key)
-		return "", false
+		return s, false
 	}
 	return s, true
+}
+
+// validateOptionalStringParam 校验可选字符串连接参数；提供时必须是非空字符串。
+func validateOptionalStringParam(params map[string]any, key string, fields map[string]string) {
+	raw, ok := params[key]
+	if !ok || raw == nil {
+		return
+	}
+	s, ok := raw.(string)
+	if !ok {
+		fields[fieldKey(key)] = fmt.Sprintf("连接参数 %q 必须为字符串", key)
+		return
+	}
+	if strings.TrimSpace(s) == "" {
+		fields[fieldKey(key)] = fmt.Sprintf("连接参数 %q 不能为空", key)
+	}
+}
+
+// validateOptionalStringMapParam 校验可选字符串映射连接参数；提供时键和值均需为字符串。
+func validateOptionalStringMapParam(params map[string]any, key string, fields map[string]string) {
+	raw, ok := params[key]
+	if !ok || raw == nil {
+		return
+	}
+
+	validate := func(m map[string]string) {
+		for k := range m {
+			if strings.TrimSpace(k) == "" {
+				fields[fieldKey(key)] = fmt.Sprintf("连接参数 %q 不能包含空键", key)
+				return
+			}
+		}
+	}
+
+	switch v := raw.(type) {
+	case map[string]string:
+		validate(v)
+	case map[string]any:
+		converted := make(map[string]string, len(v))
+		for k, item := range v {
+			s, ok := item.(string)
+			if !ok {
+				fields[fieldKey(key)] = fmt.Sprintf("连接参数 %q 的值必须为字符串", key)
+				return
+			}
+			converted[k] = s
+		}
+		validate(converted)
+	default:
+		fields[fieldKey(key)] = fmt.Sprintf("连接参数 %q 必须为字符串映射", key)
+	}
 }
 
 // fieldKey 将连接参数键名转换为字段级错误中使用的限定路径，便于前端定位到具体字段。

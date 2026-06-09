@@ -3,6 +3,7 @@ package manager
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -56,6 +57,8 @@ type testUpstreamRepo struct {
 	// 注入的返回行与错误。
 	createRow  *store.UpstreamRow
 	createErr  error
+	getRow     *store.UpstreamRow
+	getErr     error
 	updateRow  *store.UpstreamRow
 	updateErr  error
 	deleteErr  error
@@ -75,7 +78,12 @@ func (r *testUpstreamRepo) Create(_ context.Context, cfg domain.UpstreamConfig, 
 }
 
 func (r *testUpstreamRepo) Get(_ context.Context, _ string) (*store.UpstreamRow, error) {
-	// CRUD 测试不经由 Manager 暴露的 Get（接口未暴露），保留以满足窄接口。
+	if r.getErr != nil {
+		return nil, r.getErr
+	}
+	if r.getRow != nil {
+		return r.getRow, nil
+	}
 	return nil, domain.NewError(domain.CodeNotFound, "上游 MCP 不存在")
 }
 
@@ -122,9 +130,12 @@ func (r *testUpstreamRepo) Delete(_ context.Context, _ string) error {
 // 默认将明文加上固定前缀模拟「加密」，便于断言写库前确实经过加密；
 // 也可注入错误以覆盖加密失败路径。
 type testEncryptor struct {
-	calls         int
-	lastPlaintext []byte
-	err           error
+	calls          int
+	decryptCalls   int
+	lastPlaintext  []byte
+	lastCiphertext []byte
+	err            error
+	decryptErr     error
 }
 
 // testEncPrefix 为模拟加密添加的可识别前缀。
@@ -137,6 +148,19 @@ func (e *testEncryptor) Encrypt(plaintext []byte) ([]byte, error) {
 		return nil, e.err
 	}
 	return append([]byte(testEncPrefix), plaintext...), nil
+}
+
+func (e *testEncryptor) Decrypt(ciphertext []byte) ([]byte, error) {
+	e.decryptCalls++
+	e.lastCiphertext = ciphertext
+	if e.decryptErr != nil {
+		return nil, e.decryptErr
+	}
+	s := string(ciphertext)
+	if strings.HasPrefix(s, testEncPrefix) {
+		return []byte(strings.TrimPrefix(s, testEncPrefix)), nil
+	}
+	return ciphertext, nil
 }
 
 // testToolCacheCleaner 是 ToolCacheCleaner 的内存替身，记录删除调用。
@@ -413,6 +437,60 @@ func TestCreateWithoutCredentialSkipsEncryption(t *testing.T) {
 	}
 }
 
+func TestCreateNormalizesTags(t *testing.T) {
+	cfg := testValidConfig()
+	cfg.Tags = []string{"  生产  ", "搜索", "生产", "Search", "search", ""}
+
+	row := &store.UpstreamRow{}
+	row.ID = "up-tags"
+	row.Config = cfg
+
+	repo := &testUpstreamRepo{createRow: row}
+	m := New(repo, &testEncryptor{}, &testToolCacheCleaner{}, nil, nil)
+
+	if _, err := m.Create(context.Background(), cfg); err != nil {
+		t.Fatalf("带标签创建不应返回错误：%v", err)
+	}
+
+	want := []string{"生产", "搜索", "Search"}
+	if !reflect.DeepEqual(repo.lastCfg.Tags, want) {
+		t.Fatalf("期望仓储收到归一化标签 %v，实际 %v", want, repo.lastCfg.Tags)
+	}
+}
+
+func TestCreateRejectsInvalidTags(t *testing.T) {
+	cases := []struct {
+		name string
+		tags []string
+	}{
+		{name: "标签数量超限", tags: []string{"a", "b", "c", "d", "e", "f", "g", "h", "i"}},
+		{name: "单个标签过长", tags: []string{strings.Repeat("标", maxTagLen+1)}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := &testUpstreamRepo{}
+			m := New(repo, &testEncryptor{}, &testToolCacheCleaner{}, nil, nil)
+
+			cfg := testValidConfig()
+			cfg.Tags = tc.tags
+
+			_, err := m.Create(context.Background(), cfg)
+
+			apiErr := asAPIError(t, err)
+			if apiErr.Code != domain.CodeValidation {
+				t.Errorf("期望错误码 %q，实际 %q", domain.CodeValidation, apiErr.Code)
+			}
+			if _, ok := apiErr.Fields["tags"]; !ok {
+				t.Errorf("期望字段级错误包含 tags，实际 Fields=%v", apiErr.Fields)
+			}
+			if repo.createCalls != 0 {
+				t.Errorf("标签校验失败时不应调用仓储 Create，实际调用 %d 次", repo.createCalls)
+			}
+		})
+	}
+}
+
 // TestUpdateNotFoundPassthrough 验证更新不存在的标识时透传 NOT_FOUND（Req 2.6）。
 func TestUpdateNotFoundPassthrough(t *testing.T) {
 	repo := &testUpstreamRepo{
@@ -459,6 +537,59 @@ func TestUpdateNameConflictPassthrough(t *testing.T) {
 	apiErr := asAPIError(t, err)
 	if apiErr.Code != domain.CodeConflict {
 		t.Errorf("期望透传错误码 %q，实际 %q", domain.CodeConflict, apiErr.Code)
+	}
+}
+
+func TestUpdateKeepCredentialDecryptsStoredCredential(t *testing.T) {
+	cfg := testValidConfig()
+	cfg.Credential = ""
+	row := &store.UpstreamRow{}
+	row.ID = "up-keep"
+	row.Config = cfg
+
+	repo := &testUpstreamRepo{
+		getRow:            &store.UpstreamRow{CredentialEnc: []byte(testEncPrefix + "stored-token")},
+		updateRow:         row,
+		lastCredentialEnc: []byte("should be overwritten"),
+	}
+	enc := &testEncryptor{}
+	m := New(repo, enc, &testToolCacheCleaner{}, nil, nil)
+
+	_, err := m.UpdateWithCredentialAction(context.Background(), "up-keep", cfg, CredentialKeep)
+	if err != nil {
+		t.Fatalf("保留凭证更新不应失败：%v", err)
+	}
+	if enc.decryptCalls != 1 || string(enc.lastCiphertext) != testEncPrefix+"stored-token" {
+		t.Fatalf("期望从仓储密文解密旧凭证，calls=%d ciphertext=%q", enc.decryptCalls, string(enc.lastCiphertext))
+	}
+	if enc.calls != 0 {
+		t.Fatalf("保留凭证时不应重新加密，实际调用 Encrypt %d 次", enc.calls)
+	}
+	if repo.lastCredentialEnc != nil {
+		t.Fatalf("保留凭证时仓储 Update 应收到 nil 密文以保留原值，实际 %v", repo.lastCredentialEnc)
+	}
+}
+
+func TestUpdateClearCredentialStoresEmptyCiphertext(t *testing.T) {
+	cfg := testValidConfig()
+	cfg.Credential = "should-be-cleared"
+	row := &store.UpstreamRow{}
+	row.ID = "up-clear"
+	row.Config = cfg
+
+	repo := &testUpstreamRepo{updateRow: row}
+	enc := &testEncryptor{}
+	m := New(repo, enc, &testToolCacheCleaner{}, nil, nil)
+
+	_, err := m.UpdateWithCredentialAction(context.Background(), "up-clear", cfg, CredentialClear)
+	if err != nil {
+		t.Fatalf("清除凭证更新不应失败：%v", err)
+	}
+	if enc.calls != 0 {
+		t.Fatalf("清除凭证不应调用 Encrypt，实际 %d 次", enc.calls)
+	}
+	if repo.lastCredentialEnc == nil || len(repo.lastCredentialEnc) != 0 {
+		t.Fatalf("清除凭证应向仓储传空字节切片，实际 %#v", repo.lastCredentialEnc)
 	}
 }
 

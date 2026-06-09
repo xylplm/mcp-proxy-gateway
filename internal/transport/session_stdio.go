@@ -2,6 +2,7 @@ package transport
 
 import (
 	"context"
+	"os"
 	"os/exec"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -45,7 +46,16 @@ func (s *stdioSession) Connect(ctx context.Context) error {
 		// establish 在连接成功后会立即取消它；若将子进程绑定到 dialCtx，进程会被随之杀死。
 		// 子进程生命周期应等同于会话生命周期，由 CommandTransport 在 Close 时关闭 stdin 优雅终止
 		//（必要时 SIGTERM/SIGKILL）。
-		cmd := exec.Command(s.params.command, s.params.args...)
+		cmd := exec.Command(s.params.command, resolveStringSliceCredentials(s.params.args, s.credential)...)
+		if s.params.cwd != "" {
+			cmd.Dir = resolveCredentialPlaceholders(s.params.cwd, s.credential)
+		}
+		if len(s.params.env) > 0 {
+			cmd.Env = os.Environ()
+			for k, v := range resolveStringMapCredentials(s.params.env, s.credential) {
+				cmd.Env = append(cmd.Env, k+"="+v)
+			}
+		}
 		transport := &mcp.CommandTransport{Command: cmd}
 		return connectWithTimeout(dialCtx, transport)
 	})

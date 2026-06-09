@@ -5,8 +5,8 @@
  * 覆盖 Req 14.3/14.6/14.7（模板市场接入向导）、17.5（管理 REST API 接入）以及
  * 上游 CRUD / 启停 / 排序 / 连接状态展示 / 手动刷新（Req 2.x、3.x、5.6、6.4）。
  *
- * 风格：Tailwind 工具类 + TailAdmin 组件风格（卡片、表格、徽章、按钮、分页）；
- * 响应式：分页条数来自 useBreakpoint，小屏下表格可横向滚动。
+ * 风格：Tailwind 工具类 + TailAdmin 组件风格（卡片、徽章、按钮、分页）；
+ * 响应式：分页条数来自 useBreakpoint，小屏单列，大屏提升卡片密度。
  */
 import { computed, onMounted, ref } from 'vue'
 import AdminLayout from '@/components/layout/AdminLayout.vue'
@@ -51,6 +51,8 @@ const prefill = ref<PrefillForm | null>(null)
 
 /** 删除确认目标。 */
 const deleting = ref<Upstream | null>(null)
+const draggingID = ref<string | null>(null)
+const dragOverID = ref<string | null>(null)
 
 /** 总页数。 */
 const totalPages = computed(() => Math.max(1, Math.ceil(upstreams.value.length / pageSize.value)))
@@ -60,6 +62,25 @@ const pagedUpstreams = computed(() => {
   const start = (currentPage.value - 1) * pageSize.value
   return upstreams.value.slice(start, start + pageSize.value)
 })
+
+const allTags = computed(() => normalizeTags(upstreams.value.flatMap((up) => up.config.tags ?? [])))
+const nextSortOrder = computed(
+  () => upstreams.value.reduce((max, up) => Math.max(max, up.config.sortOrder), -1) + 1,
+)
+
+function normalizeTags(tags: string[]): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const tag of tags) {
+    const value = tag.trim()
+    if (value === '') continue
+    const key = value.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(value)
+  }
+  return out
+}
 
 /** 传输类型显示名。 */
 function transportLabel(value: string): string {
@@ -183,29 +204,55 @@ async function reconnect(up: Upstream): Promise<void> {
   }
 }
 
-/**
- * 上移/下移：交换相邻两项后提交全量顺序（Req 3.4、3.5）。
- * 基于全量列表索引（非分页索引）操作，保证跨页排序正确。
- */
-async function move(up: Upstream, direction: -1 | 1): Promise<void> {
-  const idx = upstreams.value.findIndex((u) => u.id === up.id)
-  const target = idx + direction
-  if (idx < 0 || target < 0 || target >= upstreams.value.length) return
+function onDragStart(event: DragEvent, up: Upstream): void {
+  if (busy.value.has('reorder')) {
+    event.preventDefault()
+    return
+  }
+  draggingID.value = up.id
+  dragOverID.value = null
+  event.dataTransfer?.setData('text/plain', up.id)
+  if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move'
+}
+
+function onDragOver(event: DragEvent, up: Upstream): void {
+  if (draggingID.value === null || draggingID.value === up.id) return
+  event.preventDefault()
+  dragOverID.value = up.id
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
+}
+
+async function onDrop(event: DragEvent, target: Upstream): Promise<void> {
+  event.preventDefault()
+  const sourceID = draggingID.value ?? event.dataTransfer?.getData('text/plain') ?? ''
+  draggingID.value = null
+  dragOverID.value = null
+  if (sourceID === '' || sourceID === target.id || busy.value.has('reorder')) return
+
+  const from = upstreams.value.findIndex((u) => u.id === sourceID)
+  const to = upstreams.value.findIndex((u) => u.id === target.id)
+  if (from < 0 || to < 0) return
 
   const reordered = [...upstreams.value]
-  const tmp = reordered[idx]
-  reordered[idx] = reordered[target]
-  reordered[target] = tmp
+  const [moved] = reordered.splice(from, 1)
+  reordered.splice(to, 0, moved)
 
-  // 乐观更新。
   upstreams.value = reordered
+  setBusy('reorder', true)
   try {
     await reorderUpstreams(reordered.map((u) => u.id))
     await loadUpstreams()
   } catch (err) {
     showToast(err instanceof Error ? err.message : '排序失败')
     await loadUpstreams()
+  } finally {
+    setBusy('reorder', false)
   }
+}
+
+function onDragEnd(): void {
+  draggingID.value = null
+  dragOverID.value = null
 }
 
 /** 请求删除确认。 */
@@ -232,11 +279,6 @@ function goPage(p: number): void {
   if (p < 1 || p > totalPages.value) return
   currentPage.value = p
 }
-
-/** 全量列表中的索引（用于禁用首/尾项的上移/下移按钮）。 */
-function globalIndex(up: Upstream): number {
-  return upstreams.value.findIndex((u) => u.id === up.id)
-}
 </script>
 
 <template>
@@ -256,27 +298,43 @@ function globalIndex(up: Upstream): number {
           @click="loadUpstreams"
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-            <path d="M4 4v6h6M20 20v-6h-6M20 9a8 8 0 0 0-15-2M4 15a8 8 0 0 0 15 2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+            <path
+              d="M4 4v6h6M20 20v-6h-6M20 9a8 8 0 0 0-15-2M4 15a8 8 0 0 0 15 2"
+              stroke="currentColor"
+              stroke-width="1.8"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
           </svg>
           刷新列表
         </button>
         <button
           type="button"
-          class="inline-flex items-center gap-1.5 rounded-lg border border-brand-300 px-3.5 py-2 text-sm font-medium text-brand-600 transition hover:bg-brand-50 dark:border-brand-500/40 dark:text-brand-400 dark:hover:bg-brand-500/10"
+          class="border-brand-300 text-brand-600 hover:bg-brand-50 dark:border-brand-500/40 dark:text-brand-400 dark:hover:bg-brand-500/10 inline-flex items-center gap-1.5 rounded-lg border px-3.5 py-2 text-sm font-medium transition"
           @click="marketOpen = true"
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-            <path d="M3 9h18M9 21V9M4 4h16a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" />
+            <path
+              d="M3 9h18M9 21V9M4 4h16a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Z"
+              stroke="currentColor"
+              stroke-width="1.6"
+              stroke-linejoin="round"
+            />
           </svg>
           模板市场
         </button>
         <button
           type="button"
-          class="inline-flex items-center gap-1.5 rounded-lg bg-brand-500 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-brand-600"
+          class="bg-brand-500 hover:bg-brand-600 inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-medium text-white transition"
           @click="openCreate"
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-            <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+            <path
+              d="M12 5v14M5 12h14"
+              stroke="currentColor"
+              stroke-width="1.8"
+              stroke-linecap="round"
+            />
           </svg>
           新建上游
         </button>
@@ -286,7 +344,7 @@ function globalIndex(up: Upstream): number {
     <!-- 操作提示 -->
     <p
       v-if="toast !== ''"
-      class="mb-4 rounded-lg bg-success-50 px-4 py-2.5 text-sm text-success-700 dark:bg-success-500/10 dark:text-success-400"
+      class="bg-success-50 text-success-700 dark:bg-success-500/10 dark:text-success-400 mb-4 rounded-lg px-4 py-2.5 text-sm"
     >
       {{ toast }}
     </p>
@@ -295,7 +353,7 @@ function globalIndex(up: Upstream): number {
     <div>
       <p
         v-if="errorMessage !== ''"
-        class="mb-4 rounded-lg bg-error-50 px-4 py-2.5 text-sm text-error-600 dark:bg-error-500/10 dark:text-error-400"
+        class="bg-error-50 text-error-600 dark:bg-error-500/10 dark:text-error-400 mb-4 rounded-lg px-4 py-2.5 text-sm"
       >
         {{ errorMessage }}
       </p>
@@ -318,18 +376,58 @@ function globalIndex(up: Upstream): number {
           v-for="up in pagedUpstreams"
           :key="up.id"
           class="flex flex-col rounded-2xl border border-gray-200 bg-white p-5 shadow-sm transition hover:shadow-md dark:border-gray-800 dark:bg-white/[0.03]"
+          :class="[
+            draggingID === up.id ? 'opacity-60' : '',
+            dragOverID === up.id
+              ? 'border-brand-300 ring-brand-500/20 dark:border-brand-500/60 ring-2'
+              : '',
+          ]"
+          @dragover="onDragOver($event, up)"
+          @drop="onDrop($event, up)"
         >
           <!-- 头部：名称 + 启停 -->
           <div class="mb-3 flex items-start justify-between gap-3">
-            <div class="min-w-0">
-              <div class="truncate font-medium text-gray-800 dark:text-white/90" :title="up.config.name">
-                {{ up.config.name }}
-              </div>
-              <div class="mt-1 flex flex-wrap items-center gap-1.5">
-                <span class="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-600 dark:bg-gray-800 dark:text-gray-300">
-                  {{ transportLabel(up.config.transport) }}
-                </span>
-                <ConnStateBadge :state="up.state" />
+            <div class="flex min-w-0 flex-1 items-start gap-2">
+              <button
+                v-tooltip:bottom="busy.has('reorder') ? '正在保存排序' : '拖拽排序'"
+                type="button"
+                draggable="true"
+                class="mt-0.5 inline-flex h-8 w-8 shrink-0 cursor-grab items-center justify-center rounded-lg text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 active:cursor-grabbing disabled:cursor-wait disabled:opacity-50 dark:hover:bg-gray-800 dark:hover:text-gray-300"
+                :disabled="busy.has('reorder')"
+                aria-label="拖拽排序"
+                @dragstart="onDragStart($event, up)"
+                @dragend="onDragEnd"
+              >
+                <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none">
+                  <path
+                    d="M9 5.5h.01M15 5.5h.01M9 12h.01M15 12h.01M9 18.5h.01M15 18.5h.01"
+                    stroke="currentColor"
+                    stroke-width="3"
+                    stroke-linecap="round"
+                  />
+                </svg>
+              </button>
+              <div class="min-w-0 flex-1">
+                <div class="truncate font-medium text-gray-800 dark:text-white/90">
+                  {{ up.config.name }}
+                </div>
+                <div class="mt-1 flex flex-wrap items-center gap-1.5">
+                  <span
+                    class="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-600 dark:bg-gray-800 dark:text-gray-300"
+                  >
+                    {{ transportLabel(up.config.transport) }}
+                  </span>
+                  <ConnStateBadge :state="up.state" />
+                </div>
+                <div v-if="up.config.tags?.length" class="mt-2 flex flex-wrap gap-1.5">
+                  <span
+                    v-for="tag in up.config.tags"
+                    :key="tag"
+                    class="bg-brand-50 text-brand-600 dark:bg-brand-500/10 dark:text-brand-300 inline-flex max-w-full items-center truncate rounded-full px-2 py-0.5 text-xs font-medium"
+                  >
+                    {{ tag }}
+                  </span>
+                </div>
               </div>
             </div>
             <button
@@ -351,39 +449,16 @@ function globalIndex(up: Upstream): number {
           <!-- 最近错误（如有） -->
           <p
             v-if="up.lastError"
-            class="mb-3 truncate rounded-lg bg-error-50 px-3 py-1.5 text-xs text-error-600 dark:bg-error-500/10 dark:text-error-400"
+            class="bg-error-50 text-error-600 dark:bg-error-500/10 dark:text-error-400 mb-3 truncate rounded-lg px-3 py-1.5 text-xs"
             :title="up.lastError"
           >
             {{ up.lastError }}
           </p>
 
-          <!-- 排序 -->
-          <div class="mb-4 flex items-center gap-2 text-xs text-gray-400">
-            <span>排序</span>
-            <div class="flex items-center gap-1">
-              <button
-                type="button"
-                class="rounded-md border border-gray-200 p-1 text-gray-500 hover:bg-gray-50 disabled:opacity-40 dark:border-gray-700 dark:hover:bg-gray-800"
-                :disabled="globalIndex(up) === 0"
-                aria-label="上移"
-                @click="move(up, -1)"
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M6 15l6-6 6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></svg>
-              </button>
-              <button
-                type="button"
-                class="rounded-md border border-gray-200 p-1 text-gray-500 hover:bg-gray-50 disabled:opacity-40 dark:border-gray-700 dark:hover:bg-gray-800"
-                :disabled="globalIndex(up) === upstreams.length - 1"
-                aria-label="下移"
-                @click="move(up, 1)"
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></svg>
-              </button>
-            </div>
-          </div>
-
           <!-- 操作 -->
-          <div class="mt-auto flex flex-wrap items-center justify-end gap-1.5 border-t border-gray-100 pt-3 dark:border-gray-800">
+          <div
+            class="mt-auto flex flex-wrap items-center justify-end gap-1.5 border-t border-gray-100 pt-3 dark:border-gray-800"
+          >
             <button
               type="button"
               class="rounded-lg px-2.5 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-100 disabled:opacity-50 dark:text-gray-300 dark:hover:bg-gray-800"
@@ -402,14 +477,14 @@ function globalIndex(up: Upstream): number {
             </button>
             <button
               type="button"
-              class="rounded-lg px-2.5 py-1.5 text-xs font-medium text-brand-600 hover:bg-brand-50 dark:text-brand-400 dark:hover:bg-brand-500/10"
+              class="text-brand-600 hover:bg-brand-50 dark:text-brand-400 dark:hover:bg-brand-500/10 rounded-lg px-2.5 py-1.5 text-xs font-medium"
               @click="openEdit(up)"
             >
               编辑
             </button>
             <button
               type="button"
-              class="rounded-lg px-2.5 py-1.5 text-xs font-medium text-error-600 hover:bg-error-50 dark:text-error-400 dark:hover:bg-error-500/10"
+              class="text-error-600 hover:bg-error-50 dark:text-error-400 dark:hover:bg-error-500/10 rounded-lg px-2.5 py-1.5 text-xs font-medium"
               @click="askDelete(up)"
             >
               删除
@@ -419,10 +494,7 @@ function globalIndex(up: Upstream): number {
       </div>
 
       <!-- 分页 -->
-      <div
-        v-if="totalPages > 1"
-        class="mt-4 flex items-center justify-between"
-      >
+      <div v-if="totalPages > 1" class="mt-4 flex items-center justify-between">
         <span class="text-xs text-gray-500 dark:text-gray-400">
           第 {{ currentPage }} / {{ totalPages }} 页
         </span>
@@ -452,6 +524,8 @@ function globalIndex(up: Upstream): number {
       :open="drawerOpen"
       :upstream="editing"
       :prefill="prefill"
+      :tag-options="allTags"
+      :next-sort-order="nextSortOrder"
       @close="drawerOpen = false"
       @saved="onSaved"
     />
@@ -470,10 +544,14 @@ function globalIndex(up: Upstream): number {
         class="fixed inset-0 z-[100001] flex items-center justify-center bg-gray-900/40 p-4 backdrop-blur-[1px]"
         @click.self="deleting = null"
       >
-        <div class="w-full max-w-sm rounded-2xl border border-gray-200 bg-white p-6 shadow-xl dark:border-gray-800 dark:bg-gray-900">
+        <div
+          class="w-full max-w-sm rounded-2xl border border-gray-200 bg-white p-6 shadow-xl dark:border-gray-800 dark:bg-gray-900"
+        >
           <h3 class="mb-2 text-base font-semibold text-gray-800 dark:text-white/90">确认删除</h3>
           <p class="mb-5 text-sm text-gray-500 dark:text-gray-400">
-            确定删除上游 MCP「{{ deleting.config.name }}」吗？该操作将级联清理其工具缓存与规则，且不可恢复。
+            确定删除上游 MCP「{{
+              deleting.config.name
+            }}」吗？该操作将级联清理其工具缓存与规则，且不可恢复。
           </p>
           <div class="flex justify-end gap-3">
             <button
@@ -485,7 +563,7 @@ function globalIndex(up: Upstream): number {
             </button>
             <button
               type="button"
-              class="rounded-lg bg-error-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-error-600"
+              class="bg-error-500 hover:bg-error-600 rounded-lg px-4 py-2 text-sm font-medium text-white transition"
               @click="confirmDelete"
             >
               删除

@@ -21,6 +21,7 @@ import request from '@/api/request'
 
 /** 上游 MCP 传输类型，与后端 domain.TransportType 对齐。 */
 export type TransportType = 'stdio' | 'sse' | 'streamable-http' | 'websocket'
+export type CredentialAction = 'keep' | 'replace' | 'clear'
 
 /** 上游连接状态，与后端 domain.ConnState 对齐。 */
 export type ConnState = 'connecting' | 'available' | 'unavailable' | 'suspended'
@@ -50,7 +51,10 @@ export const CONN_STATE_LABELS: Record<ConnState, string> = {
 export interface ConnParams {
   command?: string
   args?: string[]
+  env?: Record<string, string>
+  cwd?: string
   url?: string
+  headers?: Record<string, string>
   [key: string]: unknown
 }
 
@@ -61,12 +65,16 @@ export interface ConnParams {
 export interface UpstreamConfigRequest {
   /** 服务名称，长度 1-100。 */
   name: string
+  /** 用户自定义标签，用于分组与识别。 */
+  tags?: string[]
   /** 传输类型。 */
   transport: TransportType
   /** 传输相关连接参数。 */
   connParams: ConnParams
   /** 鉴权凭证明文（可选，仅入参不回显）。 */
   credential?: string
+  /** 更新时如何处理已保存的鉴权凭证；创建时忽略。 */
+  credentialAction?: CredentialAction
   /** 是否启用并参与聚合。 */
   enabled: boolean
   /** 排序顺序。 */
@@ -78,6 +86,7 @@ export interface UpstreamConfigRequest {
 /** 上游配置（响应内嵌，不含凭证明文）。 */
 export interface UpstreamConfig {
   name: string
+  tags?: string[]
   transport: TransportType
   connParams: ConnParams
   enabled: boolean

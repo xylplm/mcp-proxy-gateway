@@ -52,6 +52,7 @@ func (s *wsSession) Connect(ctx context.Context) error {
 		transport := &wsClientTransport{
 			endpoint:   s.params.url,
 			credential: s.credential,
+			headers:    s.params.headers,
 		}
 		return connectWithTimeout(dialCtx, transport)
 	})
@@ -63,6 +64,8 @@ type wsClientTransport struct {
 	endpoint string
 	// credential 为鉴权凭证明文，握手时以 Authorization: Bearer 头携带（Req 4.7）。
 	credential string
+	// headers 为握手 HTTP 请求中携带的自定义请求头。
+	headers map[string]string
 }
 
 // Connect 完成 WebSocket 握手并返回承载 JSON-RPC 的连接（mcp.Connection）。
@@ -71,10 +74,16 @@ type wsClientTransport struct {
 // 用于驱动后续读写，使其不受连接建立超时的影响。
 func (t *wsClientTransport) Connect(ctx context.Context) (mcp.Connection, error) {
 	opts := &websocket.DialOptions{}
-	if t.credential != "" {
-		// 以 Bearer 形式在握手 HTTP 请求中携带鉴权凭证（Req 4.7）。
+	if len(t.headers) > 0 || t.credential != "" {
 		opts.HTTPHeader = http.Header{}
-		opts.HTTPHeader.Set("Authorization", "Bearer "+t.credential)
+		resolvedHeaders := resolveStringMapCredentials(t.headers, t.credential)
+		for k, v := range resolvedHeaders {
+			opts.HTTPHeader.Set(k, v)
+		}
+		if t.credential != "" && !stringMapContainsCredentialPlaceholder(t.headers) && !stringMapHasKeyFold(resolvedHeaders, "Authorization") {
+			// 以 Bearer 形式在握手 HTTP 请求中携带鉴权凭证（Req 4.7）。
+			opts.HTTPHeader.Set("Authorization", "Bearer "+t.credential)
+		}
 	}
 
 	conn, resp, err := websocket.Dial(ctx, t.endpoint, opts)

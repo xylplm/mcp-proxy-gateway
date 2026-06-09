@@ -261,7 +261,7 @@ func corruptValidBackup(t *rapid.T, b Backup) Backup {
 	switch kind {
 	case 0:
 		// 错误版本号。
-		b.Version = "mpg-backup/v" + genNonEmptyToken(t, "badVersion")
+		b.Version = FormatVersion + "-invalid-" + genNonEmptyToken(t, "badVersion")
 	case 1:
 		// YAML 取值越界（mode 非法）。
 		b.YAML.MCPAPI.Mode = "invalid-mode-" + genNonEmptyToken(t, "badMode")
