@@ -103,13 +103,23 @@ const { isExpanded, isMobileOpen, isHovered } = useSidebar()
 
 const menuGroups = [
   {
-    title: '菜单',
+    title: '总览',
     items: [
       {
         icon: GridIcon,
         name: '仪表盘',
         path: '/',
       },
+      {
+        icon: PieChartIcon,
+        name: '调用统计',
+        path: '/statistics',
+      },
+    ],
+  },
+  {
+    title: 'MCP 管理',
+    items: [
       {
         icon: PlugInIcon,
         name: '上游 MCP 管理',
@@ -120,20 +130,15 @@ const menuGroups = [
         name: '规则管理',
         path: '/rules',
       },
+    ],
+  },
+  {
+    title: 'API 管理',
+    items: [
       {
         icon: BoxCubeIcon,
         name: 'API Key 管理',
         path: '/apikeys',
-      },
-      {
-        icon: PieChartIcon,
-        name: '调用统计',
-        path: '/statistics',
-      },
-      {
-        icon: TableIcon,
-        name: '审计日志',
-        path: '/audit',
       },
       {
         icon: BoxCubeIcon,
@@ -141,9 +146,24 @@ const menuGroups = [
         path: '/api-service',
       },
       {
+        icon: TableIcon,
+        name: '调用记录',
+        path: '/call-records',
+      },
+    ],
+  },
+  {
+    title: '系统',
+    items: [
+      {
         icon: SettingsIcon,
         name: '系统设置',
         path: '/settings',
+      },
+      {
+        icon: TableIcon,
+        name: '审计日志',
+        path: '/audit',
       },
       {
         icon: InfoCircleIcon,
@@ -154,5 +174,8 @@ const menuGroups = [
   },
 ]
 
-const isActive = (path: string) => route.path === path
+const isActive = (path: string) => {
+  if (path === '/') return route.path === '/'
+  return route.path === path || route.path.startsWith(`${path}/`)
+}
 </script>

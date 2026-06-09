@@ -71,6 +71,22 @@ export interface ToolErrorRank {
   AvgLatencyMS: number
 }
 
+export interface CallRecord {
+  ID: number
+  UpstreamID: string
+  UpstreamName: string
+  OriginalName: string
+  ExposedName: string
+  APIKeyID: string
+  APIKeyName: string
+  CalledAt: string
+  LatencyMS: number
+  Success: boolean
+  RequestArgs: unknown
+  ResponseResult: unknown
+  ErrorMessage: string
+}
+
 /** 时间区间查询参数；start/end 均为可选 RFC3339 字符串。 */
 export interface TimeRangeQuery {
   /** 区间起点（RFC3339）；缺省表示自最早记录起。 */
@@ -99,6 +115,14 @@ interface DailyResponse {
 
 interface ToolErrorsResponse {
   tools: ToolErrorRank[] | null
+}
+
+interface CallRecordsResponse {
+  records: CallRecord[] | null
+}
+
+interface CallRecordResponse {
+  record: CallRecord
 }
 
 /** 构造仅含非空 start/end 的查询参数对象，避免传空串触发后端格式校验。 */
@@ -185,4 +209,28 @@ export async function topToolErrors(
   }
   const res = await request.get<ToolErrorsResponse>('/stats/tool-errors', { params })
   return res.data?.tools ?? []
+}
+
+export async function listCallRecords(query: {
+  limit?: number
+  afterId?: number
+  afterAt?: string
+} = {}): Promise<CallRecord[]> {
+  const params: Record<string, string> = {}
+  if (query.limit !== undefined && query.limit > 0) {
+    params.limit = String(query.limit)
+  }
+  if (query.afterId !== undefined && query.afterId > 0) {
+    params.afterId = String(query.afterId)
+  }
+  if (query.afterAt !== undefined && query.afterAt !== '') {
+    params.afterAt = query.afterAt
+  }
+  const res = await request.get<CallRecordsResponse>('/stats/calls', { params })
+  return res.data?.records ?? []
+}
+
+export async function getCallRecord(id: number | string): Promise<CallRecord> {
+  const res = await request.get<CallRecordResponse>(`/stats/calls/${encodeURIComponent(String(id))}`)
+  return res.data.record
 }

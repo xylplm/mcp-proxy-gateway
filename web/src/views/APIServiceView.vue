@@ -12,7 +12,14 @@ import {
 } from '@/icons'
 import { listAPIKeys } from '@/api/apikeys'
 import { getHealth, type DetailHealthReport } from '@/api/health'
-import { extractAPIError, getSettings, updateSettings, type YAMLConfig } from '@/api/settings'
+import {
+  extractAPIError,
+  getSettings,
+  updateSettings,
+  type MCPMode,
+  type YAMLConfig,
+} from '@/api/settings'
+import { getAggregatedTools, type GatewayTool, type ToolDef } from '@/api/tools'
 
 const loading = ref(false)
 const refreshing = ref(false)
@@ -22,16 +29,38 @@ const formError = ref('')
 const toast = ref('')
 const copyError = ref('')
 const copiedKey = ref('')
+const modeSaving = ref(false)
 
 const settings = ref<YAMLConfig | null>(null)
 const health = ref<DetailHealthReport | null>(null)
 const apiKeyTotal = ref(0)
 const apiKeyEnabled = ref(0)
+const aggregatedTools = ref<ToolDef[]>([])
+const gatewayTools = ref<GatewayTool[]>([])
 
 const xiaozhiEnabled = ref(false)
 const xiaozhiEndpoint = ref('')
-const smartDiscoveryLimit = ref(50)
 const fieldErrors = reactive<Record<string, string>>({})
+
+const modeOptions: ReadonlyArray<{
+  value: MCPMode
+  title: string
+  desc: string
+  note: string
+}> = [
+  {
+    value: 'smart',
+    title: '智能模式',
+    desc: '外部客户端先看到网关工具，再由网关按需检索和调用真实聚合工具。',
+    note: '工具很多时更省上下文',
+  },
+  {
+    value: 'full',
+    title: '全量模式',
+    desc: '外部客户端连接后直接看到当前聚合后的真实工具列表。',
+    note: '工具较少时最直观',
+  },
+]
 
 const origin = computed(() => {
   if (typeof window === 'undefined') return ''
@@ -82,6 +111,8 @@ const dependencyOK = computed(
 const currentModeLabel = computed(() =>
   settings.value?.mcp_api.mode === 'full' ? '全量模式' : '智能模式',
 )
+const currentMode = computed<MCPMode | null>(() => settings.value?.mcp_api.mode ?? null)
+const aggregatedToolCount = computed(() => aggregatedTools.value.length)
 const xiaozhiStatusLabel = computed(() => {
   if (!settings.value?.xiaozhi.enabled) return '未启用'
   if (health.value?.xiaozhi?.connected) return '已连接'
@@ -109,7 +140,6 @@ const systemStatusClass = computed(() =>
 function syncForm(cfg: YAMLConfig): void {
   xiaozhiEnabled.value = cfg.xiaozhi.enabled
   xiaozhiEndpoint.value = cfg.xiaozhi.endpoint
-  smartDiscoveryLimit.value = cfg.mcp_api.smart_discovery_limit
 }
 
 function errorMessage(err: unknown): string {
@@ -134,11 +164,18 @@ async function loadAPIService(): Promise<void> {
   loading.value = true
   loadError.value = ''
   try {
-    const [cfg, report, keys] = await Promise.all([getSettings(), getHealth(), listAPIKeys()])
+    const [cfg, report, keys, tools] = await Promise.all([
+      getSettings(),
+      getHealth(),
+      listAPIKeys(),
+      getAggregatedTools(),
+    ])
     settings.value = cfg
     health.value = report
     apiKeyTotal.value = keys.length
     apiKeyEnabled.value = keys.filter((item) => item.enabled).length
+    aggregatedTools.value = tools.tools
+    gatewayTools.value = tools.gatewayTools
     syncForm(cfg)
   } catch (err) {
     loadError.value = errorMessage(err)
@@ -152,10 +189,12 @@ async function refreshStatus(): Promise<void> {
   refreshing.value = true
   copyError.value = ''
   try {
-    const [report, keys] = await Promise.all([getHealth(), listAPIKeys()])
+    const [report, keys, tools] = await Promise.all([getHealth(), listAPIKeys(), getAggregatedTools()])
     health.value = report
     apiKeyTotal.value = keys.length
     apiKeyEnabled.value = keys.filter((item) => item.enabled).length
+    aggregatedTools.value = tools.tools
+    gatewayTools.value = tools.gatewayTools
   } catch (err) {
     copyError.value = errorMessage(err)
   } finally {
@@ -169,10 +208,6 @@ async function saveAPISettings(): Promise<void> {
   saving.value = true
   const next: YAMLConfig = {
     ...settings.value,
-    mcp_api: {
-      ...settings.value.mcp_api,
-      smart_discovery_limit: smartDiscoveryLimit.value,
-    },
     xiaozhi: {
       enabled: xiaozhiEnabled.value,
       endpoint: xiaozhiEndpoint.value.trim(),
@@ -193,6 +228,28 @@ async function saveAPISettings(): Promise<void> {
     formError.value = body?.message ?? errorMessage(err)
   } finally {
     saving.value = false
+  }
+}
+
+async function switchMode(mode: MCPMode): Promise<void> {
+  if (settings.value === null || modeSaving.value || settings.value.mcp_api.mode === mode) return
+  clearFieldErrors()
+  modeSaving.value = true
+  const next: YAMLConfig = {
+    ...settings.value,
+    mcp_api: {
+      ...settings.value.mcp_api,
+      mode,
+    },
+  }
+  try {
+    settings.value = await updateSettings(next)
+    showToast('服务模式已切换')
+    await refreshStatus()
+  } catch (err) {
+    formError.value = errorMessage(err)
+  } finally {
+    modeSaving.value = false
   }
 }
 
@@ -243,7 +300,7 @@ const errClass = 'mt-1 text-xs text-error-500'
         <div>
           <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">服务概览</h3>
           <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-            外部客户端接入、鉴权与小智连接状态集中在这里查看和调整。
+            外部客户端接入、服务模式、真实工具与第三方连接状态集中在这里查看和调整。
           </p>
         </div>
         <button
@@ -312,10 +369,56 @@ const errClass = 'mt-1 text-xs text-error-500'
           </span>
           <p class="mt-4 text-xs text-gray-400 dark:text-gray-500">对外模式</p>
           <p class="mt-1 text-sm font-semibold text-gray-800 dark:text-white/90">{{ currentModeLabel }}</p>
-          <router-link to="/" class="mt-3 inline-flex text-xs font-medium text-brand-600 hover:text-brand-700 dark:text-brand-400">
-            前往首页切换
-          </router-link>
+          <span class="mt-3 inline-flex rounded-full bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-600 dark:bg-white/5 dark:text-gray-400">
+            真实工具 {{ aggregatedToolCount }} 个
+          </span>
         </div>
+      </div>
+    </section>
+
+    <section :class="cardClass" class="mb-6">
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">服务模式</h3>
+          <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+            控制外部客户端连接后看到的是网关工具，还是直接看到聚合后的真实工具。
+          </p>
+        </div>
+        <span class="rounded-full bg-brand-50 px-2.5 py-1 text-xs font-medium text-brand-600 dark:bg-brand-500/10 dark:text-brand-400">
+          {{ currentModeLabel }}
+        </span>
+      </div>
+
+      <div class="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <button
+          v-for="mode in modeOptions"
+          :key="mode.value"
+          type="button"
+          class="group flex min-h-32 flex-col rounded-xl border p-4 text-left transition disabled:cursor-not-allowed disabled:opacity-70"
+          :class="
+            currentMode === mode.value
+              ? 'border-brand-300 bg-brand-50/60 shadow-theme-sm dark:border-brand-500/50 dark:bg-brand-500/[0.08]'
+              : 'border-gray-200 bg-white hover:border-brand-300 hover:bg-brand-50/40 dark:border-gray-800 dark:bg-white/[0.02] dark:hover:border-brand-500/40 dark:hover:bg-brand-500/[0.06]'
+          "
+          :disabled="loading || settings === null || modeSaving"
+          @click="switchMode(mode.value)"
+        >
+          <span class="flex items-center justify-between gap-3">
+            <span class="text-sm font-semibold text-gray-800 dark:text-white/90">{{ mode.title }}</span>
+            <span
+              class="flex h-5 w-5 items-center justify-center rounded-full border transition"
+              :class="
+                currentMode === mode.value
+                  ? 'border-brand-500 bg-brand-500 text-white'
+                  : 'border-gray-300 text-transparent dark:border-gray-700'
+              "
+            >
+              <span class="h-2 w-2 rounded-full bg-current"></span>
+            </span>
+          </span>
+          <span class="mt-3 text-sm leading-6 text-gray-600 dark:text-gray-300">{{ mode.desc }}</span>
+          <span class="mt-auto pt-4 text-xs text-gray-400 dark:text-gray-500">{{ mode.note }}</span>
+        </button>
       </div>
     </section>
 
@@ -385,15 +488,82 @@ const errClass = 'mt-1 text-xs text-error-500'
             </div>
           </div>
         </div>
+
+        <div class="mt-5 grid grid-cols-1 gap-4 2xl:grid-cols-2">
+          <div class="rounded-xl border border-gray-100 bg-gray-50 p-4 dark:border-gray-800 dark:bg-white/[0.02]">
+            <div class="flex items-start justify-between gap-3">
+              <div>
+                <h4 class="text-sm font-semibold text-gray-800 dark:text-white/90">客户端可见工具</h4>
+                <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
+                  智能模式先暴露网关工具，全量模式直接暴露真实聚合工具。
+                </p>
+              </div>
+              <span class="shrink-0 rounded-full bg-brand-50 px-2.5 py-1 text-xs font-medium text-brand-600 dark:bg-brand-500/10 dark:text-brand-400">
+                {{ currentModeLabel }}
+              </span>
+            </div>
+            <div class="mt-4 space-y-2">
+              <div
+                v-for="tool in currentMode === 'smart' ? gatewayTools : aggregatedTools.slice(0, 6)"
+                :key="tool.name"
+                class="rounded-lg bg-white p-3 dark:bg-gray-900/60"
+              >
+                <p class="truncate font-mono text-xs font-medium text-gray-800 dark:text-white/90">
+                  {{ tool.name }}
+                </p>
+                <p class="mt-1 line-clamp-2 text-xs leading-5 text-gray-500 dark:text-gray-400">
+                  {{ tool.description || '暂无描述' }}
+                </p>
+              </div>
+              <p
+                v-if="(currentMode === 'smart' ? gatewayTools : aggregatedTools).length === 0"
+                class="py-4 text-center text-sm text-gray-400"
+              >
+                暂无工具
+              </p>
+            </div>
+          </div>
+
+          <div class="rounded-xl border border-gray-100 bg-gray-50 p-4 dark:border-gray-800 dark:bg-white/[0.02]">
+            <div class="flex items-start justify-between gap-3">
+              <div>
+                <h4 class="text-sm font-semibold text-gray-800 dark:text-white/90">真实聚合工具</h4>
+                <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
+                  已经过上游启停、别名和过滤规则处理后的工具集合。
+                </p>
+              </div>
+              <span class="shrink-0 rounded-full bg-success-50 px-2.5 py-1 text-xs font-medium text-success-700 dark:bg-success-500/10 dark:text-success-400">
+                {{ aggregatedToolCount }} 个
+              </span>
+            </div>
+            <div class="custom-scrollbar mt-4 grid max-h-80 grid-cols-1 gap-2 overflow-y-auto pr-1">
+              <div
+                v-for="tool in aggregatedTools"
+                :key="`${tool.upstreamId}:${tool.originalName}:${tool.name}`"
+                class="rounded-lg bg-white p-3 dark:bg-gray-900/60"
+              >
+                <p class="truncate font-mono text-xs font-medium text-gray-800 dark:text-white/90">
+                  {{ tool.name }}
+                </p>
+                <p class="mt-1 truncate text-xs text-gray-500 dark:text-gray-400">
+                  {{ tool.originalName }}
+                </p>
+              </div>
+              <p v-if="aggregatedTools.length === 0" class="py-8 text-center text-sm text-gray-400">
+                暂无可用工具
+              </p>
+            </div>
+          </div>
+        </div>
       </section>
 
       <section :class="cardClass">
         <form class="flex h-full flex-col" @submit.prevent="saveAPISettings">
           <div class="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">小智接入</h3>
+              <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">第三方对接</h3>
               <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                网关主动连接小智 MCP 接入点并提供聚合工具。
+                当前内置小智接入，后续可扩展更多特殊第三方连接。
               </p>
             </div>
             <span class="rounded-full px-2.5 py-1 text-xs font-medium" :class="xiaozhiStatusClass">
@@ -451,25 +621,6 @@ const errClass = 'mt-1 text-xs text-error-500'
               </p>
             </div>
 
-            <details class="rounded-xl border border-gray-100 bg-gray-50 p-4 dark:border-gray-800 dark:bg-white/[0.02]">
-              <summary class="cursor-pointer text-sm font-medium text-gray-800 dark:text-white/90">
-                高级设置
-              </summary>
-              <div class="mt-4">
-                <label :class="labelClass">智能模式默认返回工具数</label>
-                <input
-                  v-model.number="smartDiscoveryLimit"
-                  type="number"
-                  min="1"
-                  max="200"
-                  :class="inputClass"
-                />
-                <p :class="hintClass">仅智能模式生效，范围 1 至 200。</p>
-                <p v-if="fieldErrors['mcp_api.smart_discovery_limit']" :class="errClass">
-                  {{ fieldErrors['mcp_api.smart_discovery_limit'] }}
-                </p>
-              </div>
-            </details>
           </div>
 
           <div class="mt-6 flex justify-end">

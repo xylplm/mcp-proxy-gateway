@@ -32,6 +32,7 @@ import { listUpstreams } from '@/api/upstreams'
 import { listAPIKeys } from '@/api/apikeys'
 import { statsByUpstream } from '@/api/stats'
 import { getSettings, updateSettings, type MCPMode, type YAMLConfig } from '@/api/settings'
+import { getAggregatedTools } from '@/api/tools'
 
 const loading = ref(true)
 const loadError = ref('')
@@ -47,6 +48,7 @@ const apiKeyEnabled = ref(0)
 
 // 最近 7 天调用量
 const recentCalls = ref(0)
+const effectiveToolCount = ref(0)
 
 const settings = ref<YAMLConfig | null>(null)
 const modeSaving = ref(false)
@@ -78,6 +80,13 @@ const cards = computed<MetricCard[]>(() => [
     icon: UserGroupIcon,
   },
   {
+    key: 'tools',
+    label: '有效工具',
+    value: effectiveToolCount.value,
+    hint: '当前聚合后的真实工具数',
+    icon: BoxCubeIcon,
+  },
+  {
     key: 'calls',
     label: '最近 7 天调用量',
     value: recentCalls.value,
@@ -90,6 +99,7 @@ const cards = computed<MetricCard[]>(() => [
 const quickLinks: ReadonlyArray<{ to: string; label: string; desc: string; icon: Component }> = [
   { to: '/upstreams', label: '上游 MCP 管理', desc: '配置与连接上游服务', icon: PlugInIcon },
   { to: '/api-service', label: 'API 服务', desc: '查看接入地址与服务状态', icon: BoxCubeIcon },
+  { to: '/call-records', label: '调用记录', desc: '追踪工具调用明细', icon: BarChartIcon },
   { to: '/apikeys', label: 'API Key 管理', desc: '签发与管控访问密钥', icon: UserGroupIcon },
   { to: '/rules', label: '规则管理', desc: '工具屏蔽与别名规则', icon: ListIcon },
   { to: '/statistics', label: '调用统计', desc: '查看调用排行与趋势', icon: BarChartIcon },
@@ -146,11 +156,12 @@ async function loadOverview(): Promise<void> {
   loadError.value = ''
   modeError.value = ''
   try {
-    const [upstreams, apiKeys, counts, cfg] = await Promise.all([
+    const [upstreams, apiKeys, counts, cfg, aggregated] = await Promise.all([
       listUpstreams(),
       listAPIKeys(),
       statsByUpstream({ start: sevenDaysAgoRFC3339() }),
       getSettings(),
+      getAggregatedTools(),
     ])
 
     upstreamTotal.value = upstreams.length
@@ -161,6 +172,7 @@ async function loadOverview(): Promise<void> {
     apiKeyEnabled.value = apiKeys.filter((k) => k.enabled).length
 
     recentCalls.value = counts.reduce((sum, c) => sum + c.Count, 0)
+    effectiveToolCount.value = aggregated.count
     settings.value = cfg
   } catch (err) {
     loadError.value = errorMessage(err)
