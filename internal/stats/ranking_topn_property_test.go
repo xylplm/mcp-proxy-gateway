@@ -47,6 +47,18 @@ func (q *rankingFakeQuerier) TopTools(_ context.Context, _, _ time.Time, limit i
 	return sorted, nil
 }
 
+func (q *rankingFakeQuerier) Summary(context.Context, time.Time, time.Time) (store.StatsSummary, error) {
+	return store.StatsSummary{}, nil
+}
+
+func (q *rankingFakeQuerier) Daily(context.Context, time.Time, time.Time) ([]store.DailyCount, error) {
+	return nil, nil
+}
+
+func (q *rankingFakeQuerier) TopToolErrors(context.Context, time.Time, time.Time, int) ([]store.ToolErrorRank, error) {
+	return nil, nil
+}
+
 // genToolRanks 生成一组按 (upstream_id, original_name) 稳定标识唯一的工具计数项。
 //
 // 通过对每条记录使用自增序号构造唯一稳定标识，避免聚合重复；调用次数取非负随机值

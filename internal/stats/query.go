@@ -32,6 +32,12 @@ type StatQuerier interface {
 	CountByAPIKey(ctx context.Context, start, end time.Time) ([]store.DimensionCount, error)
 	// TopTools 返回 [start, end] 闭区间内按调用次数降序排列的工具排行，至多 limit 条。
 	TopTools(ctx context.Context, start, end time.Time, limit int) ([]store.ToolRank, error)
+	// Summary 返回 [start, end] 闭区间内调用概览。
+	Summary(ctx context.Context, start, end time.Time) (store.StatsSummary, error)
+	// Daily 返回 [start, end] 闭区间内按日聚合的调用趋势。
+	Daily(ctx context.Context, start, end time.Time) ([]store.DailyCount, error)
+	// TopToolErrors 返回 [start, end] 闭区间内按失败次数降序排列的工具错误排行。
+	TopToolErrors(ctx context.Context, start, end time.Time, limit int) ([]store.ToolErrorRank, error)
 }
 
 // ConfigProvider 是统计查询服务读取排行默认条数配置的窄接口。
@@ -97,6 +103,21 @@ func (s *QueryService) CountByAPIKey(ctx context.Context, start, end time.Time) 
 //   - 无记录时返回空切片而非错误（Req 16.6）。
 func (s *QueryService) TopTools(ctx context.Context, start, end time.Time, limit int) ([]store.ToolRank, error) {
 	return s.repo.TopTools(ctx, start, end, s.resolveTopLimit(limit))
+}
+
+// Summary 返回 [start, end] 闭区间内调用概览。
+func (s *QueryService) Summary(ctx context.Context, start, end time.Time) (store.StatsSummary, error) {
+	return s.repo.Summary(ctx, start, end)
+}
+
+// Daily 返回 [start, end] 闭区间内按日聚合的调用趋势。
+func (s *QueryService) Daily(ctx context.Context, start, end time.Time) ([]store.DailyCount, error) {
+	return s.repo.Daily(ctx, start, end)
+}
+
+// TopToolErrors 返回 [start, end] 闭区间内按失败次数降序排列的工具错误排行。
+func (s *QueryService) TopToolErrors(ctx context.Context, start, end time.Time, limit int) ([]store.ToolErrorRank, error) {
+	return s.repo.TopToolErrors(ctx, start, end, s.resolveTopLimit(limit))
 }
 
 // resolveTopLimit 计算生效的工具排行返回条数（Req 16.3）。

@@ -101,7 +101,8 @@ const title = computed(() => {
 
 const form = reactive<{
   name: string
-  tagInput: string
+  tagDraft: string
+  tags: string[]
   transport: TransportType
   command: string
   args: string
@@ -121,7 +122,8 @@ const form = reactive<{
   autoSync: boolean
 }>({
   name: '',
-  tagInput: '',
+  tagDraft: '',
+  tags: [],
   transport: 'stdio',
   command: '',
   args: '',
@@ -149,7 +151,7 @@ const fieldErrors = reactive<Record<string, string>>({})
 const formError = ref('')
 
 const normalizedTagOptions = computed(() => normalizeTags(props.tagOptions ?? []))
-const formTags = computed(() => normalizeTags(parseTags(form.tagInput)))
+const formTags = computed(() => normalizeTags([...form.tags, ...parseTags(form.tagDraft)]))
 const availableTagOptions = computed(() => normalizedTagOptions.value.filter((tag) => !hasTag(tag)))
 
 const selectedAuthMayUseCredential = computed(() => {
@@ -191,8 +193,20 @@ function normalizeTags(tags: string[]): string[] {
 }
 
 function addTag(tag: string): void {
-  const next = normalizeTags([...formTags.value, tag])
-  form.tagInput = next.join(', ')
+  form.tags = normalizeTags([...form.tags, ...parseTags(tag)])
+  form.tagDraft = ''
+}
+
+function commitTagDraft(): void {
+  addTag(form.tagDraft)
+}
+
+function onTagInput(event: Event): void {
+  const value = (event.target as HTMLInputElement).value
+  if (/[，,、;；]/.test(value)) {
+    form.tags = normalizeTags([...form.tags, ...parseTags(value)])
+    form.tagDraft = ''
+  }
 }
 
 function hasTag(tag: string): boolean {
@@ -202,7 +216,7 @@ function hasTag(tag: string): boolean {
 
 function removeTag(tag: string): void {
   const key = tag.toLowerCase()
-  form.tagInput = formTags.value.filter((item) => item.toLowerCase() !== key).join(', ')
+  form.tags = form.tags.filter((item) => item.toLowerCase() !== key)
 }
 
 function resetManualFields(): void {
@@ -358,7 +372,8 @@ function resetForm(): void {
     const env = normalizeRecord(cfg.connParams.env)
 
     form.name = cfg.name
-    form.tagInput = normalizeTags(cfg.tags ?? []).join(', ')
+    form.tags = normalizeTags(cfg.tags ?? [])
+    form.tagDraft = ''
     form.transport = cfg.transport
     resetManualFields()
     form.command = typeof cfg.connParams.command === 'string' ? cfg.connParams.command : ''
@@ -383,7 +398,8 @@ function resetForm(): void {
   }
 
   form.name = props.prefill?.name ?? ''
-  form.tagInput = ''
+  form.tags = []
+  form.tagDraft = ''
   form.transport = props.prefill?.transport ?? 'stdio'
   resetManualFields()
   form.enabled = true
@@ -811,18 +827,11 @@ const errorClass = 'mt-1.5 text-xs text-error-500'
 
               <div>
                 <label for="up-tags" :class="labelClass">标签</label>
-                <input
-                  id="up-tags"
-                  v-model="form.tagInput"
-                  type="text"
-                  :class="inputClass"
-                  placeholder="例如 生产、搜索、团队 A，可用逗号分隔"
-                />
-                <p :class="helpClass">用于列表识别和归类，可输入新标签，也可点选已有标签。</p>
-                <p v-if="fieldErrors.tags" :class="errorClass">{{ fieldErrors.tags }}</p>
-                <div v-if="formTags.length > 0" class="mt-2 flex flex-wrap gap-2">
+                <div
+                  class="focus-within:border-brand-300 focus-within:ring-brand-500/10 flex min-h-11 flex-wrap items-center gap-2 rounded-lg border border-gray-300 bg-transparent px-3 py-2 shadow-sm focus-within:ring-3 dark:border-gray-700"
+                >
                   <button
-                    v-for="tag in formTags"
+                    v-for="tag in form.tags"
                     :key="tag"
                     type="button"
                     class="bg-brand-50 text-brand-600 hover:bg-brand-100 dark:bg-brand-500/10 dark:text-brand-300 inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium"
@@ -831,7 +840,20 @@ const errorClass = 'mt-1.5 text-xs text-error-500'
                     {{ tag }}
                     <span aria-hidden="true" class="text-brand-400">x</span>
                   </button>
+                  <input
+                    id="up-tags"
+                    v-model="form.tagDraft"
+                    type="text"
+                    class="min-w-[120px] flex-1 border-0 bg-transparent p-0 text-sm text-gray-800 placeholder:text-gray-400 focus:ring-0 focus:outline-none dark:text-white/90 dark:placeholder:text-white/30"
+                    placeholder="输入标签后回车"
+                    @input="onTagInput"
+                    @keydown.enter.prevent="commitTagDraft"
+                    @keydown.tab="commitTagDraft"
+                    @blur="commitTagDraft"
+                  />
                 </div>
+                <p :class="helpClass">用于列表识别和归类，输入后回车加入，也可点选已有标签。</p>
+                <p v-if="fieldErrors.tags" :class="errorClass">{{ fieldErrors.tags }}</p>
                 <div v-if="availableTagOptions.length > 0" class="mt-2 flex flex-wrap gap-2">
                   <button
                     v-for="tag in availableTagOptions"

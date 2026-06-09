@@ -198,6 +198,12 @@ type StatsService interface {
 	CountByAPIKey(ctx context.Context, start, end time.Time) ([]store.DimensionCount, error)
 	// TopTools 返回闭区间内按调用次数降序的工具排行，至多 limit 条。
 	TopTools(ctx context.Context, start, end time.Time, limit int) ([]store.ToolRank, error)
+	// Summary 返回闭区间内调用概览。
+	Summary(ctx context.Context, start, end time.Time) (store.StatsSummary, error)
+	// Daily 返回闭区间内按日聚合的调用趋势。
+	Daily(ctx context.Context, start, end time.Time) ([]store.DailyCount, error)
+	// TopToolErrors 返回闭区间内按失败次数降序的工具错误排行。
+	TopToolErrors(ctx context.Context, start, end time.Time, limit int) ([]store.ToolErrorRank, error)
 }
 
 // AuditService 是审计日志分页查询依赖的应用服务窄接口（Req 22.4）。

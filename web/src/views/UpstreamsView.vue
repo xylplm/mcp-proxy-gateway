@@ -51,8 +51,13 @@ const prefill = ref<PrefillForm | null>(null)
 
 /** 删除确认目标。 */
 const deleting = ref<Upstream | null>(null)
-const draggingID = ref<string | null>(null)
-const dragOverID = ref<string | null>(null)
+const sortingOpen = ref(false)
+const sortDraft = ref<Upstream[]>([])
+const sortDraggingID = ref<string | null>(null)
+const sortDragOverID = ref<string | null>(null)
+const sortSelectedID = ref('')
+const sortTargetPosition = ref('')
+const sortMoveMessage = ref('')
 
 /** 总页数。 */
 const totalPages = computed(() => Math.max(1, Math.ceil(upstreams.value.length / pageSize.value)))
@@ -204,43 +209,138 @@ async function reconnect(up: Upstream): Promise<void> {
   }
 }
 
-function onDragStart(event: DragEvent, up: Upstream): void {
+function openSorting(): void {
+  sortDraft.value = [...upstreams.value]
+  sortDraggingID.value = null
+  sortDragOverID.value = null
+  sortSelectedID.value = sortDraft.value[0]?.id ?? ''
+  sortTargetPosition.value = sortDraft.value.length > 0 ? '1' : ''
+  sortMoveMessage.value = ''
+  sortingOpen.value = true
+}
+
+function sortDraftIndex(up: Upstream): number {
+  return sortDraft.value.findIndex((item) => item.id === up.id)
+}
+
+function selectSortItem(up: Upstream): void {
+  sortSelectedID.value = up.id
+  const index = sortDraftIndex(up)
+  sortTargetPosition.value = index >= 0 ? String(index + 1) : ''
+  sortMoveMessage.value = ''
+}
+
+function syncSelectedSortPosition(): void {
+  const index = sortDraft.value.findIndex((item) => item.id === sortSelectedID.value)
+  sortTargetPosition.value = index >= 0 ? String(index + 1) : ''
+  sortMoveMessage.value = ''
+}
+
+function moveSelectedSortDraft(): void {
+  const from = sortDraft.value.findIndex((item) => item.id === sortSelectedID.value)
+  const target = Number.parseInt(sortTargetPosition.value, 10)
+  if (from < 0) {
+    sortMoveMessage.value = '请选择要移动的上游'
+    return
+  }
+  if (!Number.isInteger(target) || target < 1 || target > sortDraft.value.length) {
+    sortMoveMessage.value = `目标位置需在 1 至 ${sortDraft.value.length} 之间`
+    return
+  }
+
+  const to = target - 1
+  if (from === to) {
+    sortMoveMessage.value = '已在目标位置'
+    return
+  }
+
+  const next = [...sortDraft.value]
+  const [moved] = next.splice(from, 1)
+  next.splice(to, 0, moved)
+  sortDraft.value = next
+  sortSelectedID.value = moved.id
+  sortTargetPosition.value = String(to + 1)
+  sortMoveMessage.value = `已移动到第 ${to + 1} 位`
+}
+
+function moveSortDraft(up: Upstream, direction: -1 | 1): void {
+  const from = sortDraftIndex(up)
+  const to = from + direction
+  if (from < 0 || to < 0 || to >= sortDraft.value.length) return
+  const next = [...sortDraft.value]
+  const [moved] = next.splice(from, 1)
+  next.splice(to, 0, moved)
+  sortDraft.value = next
+  sortSelectedID.value = moved.id
+  sortTargetPosition.value = String(to + 1)
+  sortMoveMessage.value = ''
+}
+
+function moveSortDraftTo(up: Upstream, target: 'first' | 'last'): void {
+  const from = sortDraftIndex(up)
+  if (from < 0) return
+  const next = [...sortDraft.value]
+  const [moved] = next.splice(from, 1)
+  next.splice(target === 'first' ? 0 : next.length, 0, moved)
+  sortDraft.value = next
+  sortSelectedID.value = moved.id
+  sortTargetPosition.value = target === 'first' ? '1' : String(next.length)
+  sortMoveMessage.value = ''
+}
+
+function onSortDragStart(event: DragEvent, up: Upstream): void {
   if (busy.value.has('reorder')) {
     event.preventDefault()
     return
   }
-  draggingID.value = up.id
-  dragOverID.value = null
+  sortDraggingID.value = up.id
+  sortSelectedID.value = up.id
+  sortDragOverID.value = null
   event.dataTransfer?.setData('text/plain', up.id)
   if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move'
 }
 
-function onDragOver(event: DragEvent, up: Upstream): void {
-  if (draggingID.value === null || draggingID.value === up.id) return
+function onSortDragOver(event: DragEvent, up: Upstream): void {
+  if (sortDraggingID.value === null || sortDraggingID.value === up.id) return
   event.preventDefault()
-  dragOverID.value = up.id
+  sortDragOverID.value = up.id
   if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
 }
 
-async function onDrop(event: DragEvent, target: Upstream): Promise<void> {
+function onSortDrop(event: DragEvent, target: Upstream): void {
   event.preventDefault()
-  const sourceID = draggingID.value ?? event.dataTransfer?.getData('text/plain') ?? ''
-  draggingID.value = null
-  dragOverID.value = null
+  const sourceID = sortDraggingID.value ?? event.dataTransfer?.getData('text/plain') ?? ''
+  sortDraggingID.value = null
+  sortDragOverID.value = null
   if (sourceID === '' || sourceID === target.id || busy.value.has('reorder')) return
 
-  const from = upstreams.value.findIndex((u) => u.id === sourceID)
-  const to = upstreams.value.findIndex((u) => u.id === target.id)
+  const from = sortDraft.value.findIndex((u) => u.id === sourceID)
+  const to = sortDraft.value.findIndex((u) => u.id === target.id)
   if (from < 0 || to < 0) return
 
-  const reordered = [...upstreams.value]
+  const reordered = [...sortDraft.value]
   const [moved] = reordered.splice(from, 1)
   reordered.splice(to, 0, moved)
+  sortDraft.value = reordered
+  sortSelectedID.value = moved.id
+  sortTargetPosition.value = String(to + 1)
+  sortMoveMessage.value = ''
+}
 
-  upstreams.value = reordered
+function onSortDragEnd(): void {
+  sortDraggingID.value = null
+  sortDragOverID.value = null
+}
+
+async function saveSorting(): Promise<void> {
+  if (busy.value.has('reorder')) return
+  const reordered = [...sortDraft.value]
   setBusy('reorder', true)
   try {
     await reorderUpstreams(reordered.map((u) => u.id))
+    upstreams.value = reordered
+    sortingOpen.value = false
+    showToast('排序已保存')
     await loadUpstreams()
   } catch (err) {
     showToast(err instanceof Error ? err.message : '排序失败')
@@ -248,11 +348,6 @@ async function onDrop(event: DragEvent, target: Upstream): Promise<void> {
   } finally {
     setBusy('reorder', false)
   }
-}
-
-function onDragEnd(): void {
-  draggingID.value = null
-  dragOverID.value = null
 }
 
 /** 请求删除确认。 */
@@ -307,6 +402,22 @@ function goPage(p: number): void {
             />
           </svg>
           刷新列表
+        </button>
+        <button
+          type="button"
+          class="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 px-3.5 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:opacity-60 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+          :disabled="upstreams.length <= 1 || loading"
+          @click="openSorting"
+        >
+          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none">
+            <path
+              d="M8 7h12M4 7h.01M8 12h12M4 12h.01M8 17h12M4 17h.01"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+            />
+          </svg>
+          排序
         </button>
         <button
           type="button"
@@ -376,58 +487,29 @@ function goPage(p: number): void {
           v-for="up in pagedUpstreams"
           :key="up.id"
           class="flex flex-col rounded-2xl border border-gray-200 bg-white p-5 shadow-sm transition hover:shadow-md dark:border-gray-800 dark:bg-white/[0.03]"
-          :class="[
-            draggingID === up.id ? 'opacity-60' : '',
-            dragOverID === up.id
-              ? 'border-brand-300 ring-brand-500/20 dark:border-brand-500/60 ring-2'
-              : '',
-          ]"
-          @dragover="onDragOver($event, up)"
-          @drop="onDrop($event, up)"
         >
           <!-- 头部：名称 + 启停 -->
           <div class="mb-3 flex items-start justify-between gap-3">
-            <div class="flex min-w-0 flex-1 items-start gap-2">
-              <button
-                v-tooltip:bottom="busy.has('reorder') ? '正在保存排序' : '拖拽排序'"
-                type="button"
-                draggable="true"
-                class="mt-0.5 inline-flex h-8 w-8 shrink-0 cursor-grab items-center justify-center rounded-lg text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 active:cursor-grabbing disabled:cursor-wait disabled:opacity-50 dark:hover:bg-gray-800 dark:hover:text-gray-300"
-                :disabled="busy.has('reorder')"
-                aria-label="拖拽排序"
-                @dragstart="onDragStart($event, up)"
-                @dragend="onDragEnd"
-              >
-                <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none">
-                  <path
-                    d="M9 5.5h.01M15 5.5h.01M9 12h.01M15 12h.01M9 18.5h.01M15 18.5h.01"
-                    stroke="currentColor"
-                    stroke-width="3"
-                    stroke-linecap="round"
-                  />
-                </svg>
-              </button>
-              <div class="min-w-0 flex-1">
-                <div class="truncate font-medium text-gray-800 dark:text-white/90">
-                  {{ up.config.name }}
-                </div>
-                <div class="mt-1 flex flex-wrap items-center gap-1.5">
-                  <span
-                    class="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-600 dark:bg-gray-800 dark:text-gray-300"
-                  >
-                    {{ transportLabel(up.config.transport) }}
-                  </span>
-                  <ConnStateBadge :state="up.state" />
-                </div>
-                <div v-if="up.config.tags?.length" class="mt-2 flex flex-wrap gap-1.5">
-                  <span
-                    v-for="tag in up.config.tags"
-                    :key="tag"
-                    class="bg-brand-50 text-brand-600 dark:bg-brand-500/10 dark:text-brand-300 inline-flex max-w-full items-center truncate rounded-full px-2 py-0.5 text-xs font-medium"
-                  >
-                    {{ tag }}
-                  </span>
-                </div>
+            <div class="min-w-0 flex-1">
+              <div class="truncate font-medium text-gray-800 dark:text-white/90">
+                {{ up.config.name }}
+              </div>
+              <div class="mt-1 flex flex-wrap items-center gap-1.5">
+                <span
+                  class="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-600 dark:bg-gray-800 dark:text-gray-300"
+                >
+                  {{ transportLabel(up.config.transport) }}
+                </span>
+                <ConnStateBadge :state="up.state" />
+              </div>
+              <div v-if="up.config.tags?.length" class="mt-2 flex flex-wrap gap-1.5">
+                <span
+                  v-for="tag in up.config.tags"
+                  :key="tag"
+                  class="bg-brand-50 text-brand-600 dark:bg-brand-500/10 dark:text-brand-300 inline-flex max-w-full items-center truncate rounded-full px-2 py-0.5 text-xs font-medium"
+                >
+                  {{ tag }}
+                </span>
               </div>
             </div>
             <button
@@ -447,13 +529,13 @@ function goPage(p: number): void {
           </div>
 
           <!-- 最近错误（如有） -->
-          <p
-            v-if="up.lastError"
-            class="bg-error-50 text-error-600 dark:bg-error-500/10 dark:text-error-400 mb-3 truncate rounded-lg px-3 py-1.5 text-xs"
-            :title="up.lastError"
-          >
-            {{ up.lastError }}
-          </p>
+          <Tooltip v-if="up.lastError" :content="up.lastError" placement="bottom-start">
+            <p
+              class="bg-error-50 text-error-600 dark:bg-error-500/10 dark:text-error-400 mb-3 truncate rounded-lg px-3 py-1.5 text-xs"
+            >
+              {{ up.lastError }}
+            </p>
+          </Tooltip>
 
           <!-- 操作 -->
           <div
@@ -536,6 +618,240 @@ function goPage(p: number): void {
       @close="marketOpen = false"
       @select="onTemplateSelected"
     />
+
+    <!-- 全量排序 -->
+    <transition name="fade">
+      <div
+        v-if="sortingOpen"
+        class="fixed inset-0 z-[100001] flex items-center justify-center bg-gray-900/40 p-4 backdrop-blur-[1px]"
+        @click.self="sortingOpen = false"
+      >
+        <div
+          class="flex max-h-[86vh] w-full max-w-2xl flex-col rounded-2xl border border-gray-200 bg-white shadow-xl dark:border-gray-800 dark:bg-gray-900"
+        >
+          <div
+            class="flex items-center justify-between gap-3 border-b border-gray-200 px-5 py-4 dark:border-gray-800"
+          >
+            <div>
+              <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">上游排序</h3>
+              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                拖拽适合近距离调整；数量多时可选择上游并输入目标位置。
+              </p>
+            </div>
+            <button
+              v-tooltip:bottom-end="'关闭'"
+              type="button"
+              class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-800"
+              aria-label="关闭"
+              @click="sortingOpen = false"
+            >
+              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none">
+                <path
+                  d="M6 6l12 12M6 18L18 6"
+                  stroke="currentColor"
+                  stroke-width="1.8"
+                  stroke-linecap="round"
+                />
+              </svg>
+            </button>
+          </div>
+
+          <div class="border-b border-gray-200 px-4 py-3 dark:border-gray-800">
+            <div
+              class="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_160px_auto] sm:items-end"
+            >
+              <label class="block">
+                <span class="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400"
+                  >上游</span
+                >
+                <select
+                  v-model="sortSelectedID"
+                  class="focus:border-brand-300 focus:ring-brand-500/10 h-10 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-800 shadow-sm focus:ring-3 focus:outline-none dark:border-gray-700 dark:bg-gray-900 dark:text-white/90"
+                  @change="syncSelectedSortPosition"
+                >
+                  <option v-for="(up, index) in sortDraft" :key="up.id" :value="up.id">
+                    {{ index + 1 }}. {{ up.config.name }}
+                  </option>
+                </select>
+              </label>
+              <label class="block">
+                <span class="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400"
+                  >目标位置</span
+                >
+                <input
+                  v-model="sortTargetPosition"
+                  type="number"
+                  min="1"
+                  :max="sortDraft.length"
+                  class="focus:border-brand-300 focus:ring-brand-500/10 h-10 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-800 shadow-sm focus:ring-3 focus:outline-none dark:border-gray-700 dark:bg-gray-900 dark:text-white/90"
+                />
+              </label>
+              <button
+                type="button"
+                class="bg-brand-500 hover:bg-brand-600 h-10 rounded-lg px-4 text-sm font-medium text-white transition disabled:opacity-60"
+                :disabled="sortDraft.length <= 1 || busy.has('reorder')"
+                @click="moveSelectedSortDraft"
+              >
+                移动
+              </button>
+            </div>
+            <p v-if="sortMoveMessage !== ''" class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+              {{ sortMoveMessage }}
+            </p>
+          </div>
+
+          <div class="custom-scrollbar flex-1 space-y-2 overflow-y-auto p-4">
+            <div
+              v-for="(up, index) in sortDraft"
+              :key="up.id"
+              draggable="true"
+              class="flex items-center gap-3 rounded-lg border border-gray-200 bg-white p-3 transition dark:border-gray-800 dark:bg-white/[0.03]"
+              :class="[
+                sortDraggingID === up.id ? 'opacity-60' : '',
+                sortSelectedID === up.id
+                  ? 'border-brand-300 bg-brand-50/50 dark:border-brand-500/60 dark:bg-brand-500/10'
+                  : '',
+                sortDragOverID === up.id
+                  ? 'border-brand-300 ring-brand-500/20 dark:border-brand-500/60 ring-2'
+                  : '',
+              ]"
+              @click="selectSortItem(up)"
+              @dragstart="onSortDragStart($event, up)"
+              @dragover="onSortDragOver($event, up)"
+              @drop="onSortDrop($event, up)"
+              @dragend="onSortDragEnd"
+            >
+              <div
+                class="flex h-8 w-8 shrink-0 cursor-grab items-center justify-center rounded-lg text-gray-400 active:cursor-grabbing"
+              >
+                <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none">
+                  <path
+                    d="M9 5.5h.01M15 5.5h.01M9 12h.01M15 12h.01M9 18.5h.01M15 18.5h.01"
+                    stroke="currentColor"
+                    stroke-width="3"
+                    stroke-linecap="round"
+                  />
+                </svg>
+              </div>
+              <div class="w-8 shrink-0 text-sm text-gray-400 tabular-nums">{{ index + 1 }}</div>
+              <div class="min-w-0 flex-1">
+                <div class="truncate text-sm font-medium text-gray-800 dark:text-white/90">
+                  {{ up.config.name }}
+                </div>
+                <div class="mt-1 flex flex-wrap items-center gap-1.5">
+                  <span
+                    class="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-500 dark:bg-gray-800 dark:text-gray-400"
+                  >
+                    {{ transportLabel(up.config.transport) }}
+                  </span>
+                  <span
+                    v-for="tag in up.config.tags ?? []"
+                    :key="tag"
+                    class="bg-brand-50 text-brand-600 dark:bg-brand-500/10 dark:text-brand-300 rounded-full px-2 py-0.5 text-xs"
+                  >
+                    {{ tag }}
+                  </span>
+                </div>
+              </div>
+              <div class="flex shrink-0 items-center gap-1">
+                <button
+                  v-tooltip:bottom="'置顶'"
+                  type="button"
+                  class="rounded-md p-1.5 text-gray-500 hover:bg-gray-100 disabled:opacity-30 dark:hover:bg-gray-800"
+                  :disabled="index === 0"
+                  aria-label="置顶"
+                  @click="moveSortDraftTo(up, 'first')"
+                >
+                  <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none">
+                    <path
+                      d="M6 5h12M7 15l5-5 5 5"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    />
+                  </svg>
+                </button>
+                <button
+                  v-tooltip:bottom="'上移'"
+                  type="button"
+                  class="rounded-md p-1.5 text-gray-500 hover:bg-gray-100 disabled:opacity-30 dark:hover:bg-gray-800"
+                  :disabled="index === 0"
+                  aria-label="上移"
+                  @click="moveSortDraft(up, -1)"
+                >
+                  <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none">
+                    <path
+                      d="M7 14l5-5 5 5"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    />
+                  </svg>
+                </button>
+                <button
+                  v-tooltip:bottom="'下移'"
+                  type="button"
+                  class="rounded-md p-1.5 text-gray-500 hover:bg-gray-100 disabled:opacity-30 dark:hover:bg-gray-800"
+                  :disabled="index === sortDraft.length - 1"
+                  aria-label="下移"
+                  @click="moveSortDraft(up, 1)"
+                >
+                  <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none">
+                    <path
+                      d="M7 10l5 5 5-5"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    />
+                  </svg>
+                </button>
+                <button
+                  v-tooltip:bottom-end="'置底'"
+                  type="button"
+                  class="rounded-md p-1.5 text-gray-500 hover:bg-gray-100 disabled:opacity-30 dark:hover:bg-gray-800"
+                  :disabled="index === sortDraft.length - 1"
+                  aria-label="置底"
+                  @click="moveSortDraftTo(up, 'last')"
+                >
+                  <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none">
+                    <path
+                      d="M6 19h12M7 9l5 5 5-5"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    />
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div
+            class="flex items-center justify-end gap-3 border-t border-gray-200 px-5 py-4 dark:border-gray-800"
+          >
+            <button
+              type="button"
+              class="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+              @click="sortingOpen = false"
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              class="bg-brand-500 hover:bg-brand-600 rounded-lg px-4 py-2 text-sm font-medium text-white transition disabled:opacity-60"
+              :disabled="busy.has('reorder')"
+              @click="saveSorting"
+            >
+              {{ busy.has('reorder') ? '保存中...' : '保存排序' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </transition>
 
     <!-- 删除确认 -->
     <transition name="fade">

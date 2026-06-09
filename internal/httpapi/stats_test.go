@@ -18,6 +18,9 @@ type fakeStats struct {
 	upstreamCounts []store.DimensionCount
 	apiKeyCounts   []store.DimensionCount
 	topTools       []store.ToolRank
+	summary        store.StatsSummary
+	daily          []store.DailyCount
+	topErrors      []store.ToolErrorRank
 	err            error
 
 	gotStart time.Time
@@ -47,6 +50,30 @@ func (f *fakeStats) TopTools(_ context.Context, start, end time.Time, limit int)
 		return nil, f.err
 	}
 	return f.topTools, nil
+}
+
+func (f *fakeStats) Summary(_ context.Context, start, end time.Time) (store.StatsSummary, error) {
+	f.gotStart, f.gotEnd = start, end
+	if f.err != nil {
+		return store.StatsSummary{}, f.err
+	}
+	return f.summary, nil
+}
+
+func (f *fakeStats) Daily(_ context.Context, start, end time.Time) ([]store.DailyCount, error) {
+	f.gotStart, f.gotEnd = start, end
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.daily, nil
+}
+
+func (f *fakeStats) TopToolErrors(_ context.Context, start, end time.Time, limit int) ([]store.ToolErrorRank, error) {
+	f.gotStart, f.gotEnd, f.gotLimit = start, end, limit
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.topErrors, nil
 }
 
 // TestStatsByUpstream 验证按上游统计端点返回计数并解析时间区间。
@@ -120,6 +147,61 @@ func TestStatsTopToolsDefaultLimit(t *testing.T) {
 	}
 	if st.gotLimit != 0 {
 		t.Errorf("缺省 limit 期望以 0 透传，实际 %d", st.gotLimit)
+	}
+}
+
+func TestStatsSummary(t *testing.T) {
+	st := &fakeStats{summary: store.StatsSummary{TotalCalls: 12, FailureCalls: 2}}
+	e := newTestEngine(Deps{Stats: st})
+
+	w := doJSON(e, http.MethodGet, "/api/admin/stats/summary", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("期望 HTTP 200，实际 %d", w.Code)
+	}
+	var got struct {
+		Summary store.StatsSummary `json:"summary"`
+	}
+	unmarshalData(t, w, &got)
+	if got.Summary.TotalCalls != 12 || got.Summary.FailureCalls != 2 {
+		t.Errorf("概览结果不符：%+v", got.Summary)
+	}
+}
+
+func TestStatsDaily(t *testing.T) {
+	day := time.Date(2024, 5, 1, 0, 0, 0, 0, time.UTC)
+	st := &fakeStats{daily: []store.DailyCount{{Day: day, TotalCalls: 7}}}
+	e := newTestEngine(Deps{Stats: st})
+
+	w := doJSON(e, http.MethodGet, "/api/admin/stats/daily", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("期望 HTTP 200，实际 %d", w.Code)
+	}
+	var got struct {
+		Days []store.DailyCount `json:"days"`
+	}
+	unmarshalData(t, w, &got)
+	if len(got.Days) != 1 || got.Days[0].TotalCalls != 7 {
+		t.Errorf("每日趋势结果不符：%+v", got.Days)
+	}
+}
+
+func TestStatsTopToolErrorsParsesLimit(t *testing.T) {
+	st := &fakeStats{topErrors: []store.ToolErrorRank{{UpstreamID: "up", OriginalName: "t1", FailureCalls: 3}}}
+	e := newTestEngine(Deps{Stats: st})
+
+	w := doJSON(e, http.MethodGet, "/api/admin/stats/tool-errors?limit=8", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("期望 HTTP 200，实际 %d", w.Code)
+	}
+	if st.gotLimit != 8 {
+		t.Errorf("期望 limit=8 透传给服务，实际 %d", st.gotLimit)
+	}
+	var got struct {
+		Tools []store.ToolErrorRank `json:"tools"`
+	}
+	unmarshalData(t, w, &got)
+	if len(got.Tools) != 1 || got.Tools[0].FailureCalls != 3 {
+		t.Errorf("错误排行结果不符：%+v", got.Tools)
 	}
 }
 

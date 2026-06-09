@@ -11,6 +11,9 @@
  *   GET /stats/upstreams?start=&end=        各上游 MCP 区间调用条数（Req 16.2）
  *   GET /stats/apikeys?start=&end=          各 API Key 区间调用条数（Req 16.4）
  *   GET /stats/tools?start=&end=&limit=     工具调用排行（降序，至多 limit 条，Req 16.3）
+ *   GET /stats/summary?start=&end=          调用概览
+ *   GET /stats/daily?start=&end=            每日调用趋势
+ *   GET /stats/tool-errors?start=&end=      工具错误排行
  *
  * 响应字段名与后端 Go 结构体一致（无 json tag，故为首字母大写：ID/Count/UpstreamID/OriginalName）。
  */
@@ -40,6 +43,34 @@ export interface ToolRank {
   Count: number
 }
 
+export interface StatsSummary {
+  TotalCalls: number
+  SuccessCalls: number
+  FailureCalls: number
+  ActiveUpstreams: number
+  ActiveAPIKeys: number
+  UniqueTools: number
+  AvgLatencyMS: number
+  P95LatencyMS: number
+}
+
+export interface DailyCount {
+  Day: string
+  TotalCalls: number
+  SuccessCalls: number
+  FailureCalls: number
+  AvgLatencyMS: number
+}
+
+export interface ToolErrorRank {
+  UpstreamID: string
+  OriginalName: string
+  TotalCalls: number
+  FailureCalls: number
+  LastFailedAt: string
+  AvgLatencyMS: number
+}
+
 /** 时间区间查询参数；start/end 均为可选 RFC3339 字符串。 */
 export interface TimeRangeQuery {
   /** 区间起点（RFC3339）；缺省表示自最早记录起。 */
@@ -56,6 +87,18 @@ interface CountsResponse {
 /** 工具排行响应体：{ tools: [...] }；后端可能返回 null，归一化为空数组。 */
 interface ToolsResponse {
   tools: ToolRank[] | null
+}
+
+interface SummaryResponse {
+  summary: StatsSummary
+}
+
+interface DailyResponse {
+  days: DailyCount[] | null
+}
+
+interface ToolErrorsResponse {
+  tools: ToolErrorRank[] | null
 }
 
 /** 构造仅含非空 start/end 的查询参数对象，避免传空串触发后端格式校验。 */
@@ -98,14 +141,48 @@ export async function statsByAPIKey(range: TimeRangeQuery = {}): Promise<Dimensi
  * limit 缺省或为 0 时由后端取配置默认值，越界值由后端收敛到 [1,100]。
  * 无记录返回空数组；开始晚于结束时后端返回 VALIDATION（400）。
  */
-export async function topTools(
-  range: TimeRangeQuery = {},
-  limit?: number,
-): Promise<ToolRank[]> {
+export async function topTools(range: TimeRangeQuery = {}, limit?: number): Promise<ToolRank[]> {
   const params = buildRangeParams(range)
   if (limit !== undefined && limit > 0) {
     params.limit = String(limit)
   }
   const res = await request.get<ToolsResponse>('/stats/tools', { params })
+  return res.data?.tools ?? []
+}
+
+export async function statsSummary(range: TimeRangeQuery = {}): Promise<StatsSummary> {
+  const res = await request.get<SummaryResponse>('/stats/summary', {
+    params: buildRangeParams(range),
+  })
+  return (
+    res.data?.summary ?? {
+      TotalCalls: 0,
+      SuccessCalls: 0,
+      FailureCalls: 0,
+      ActiveUpstreams: 0,
+      ActiveAPIKeys: 0,
+      UniqueTools: 0,
+      AvgLatencyMS: 0,
+      P95LatencyMS: 0,
+    }
+  )
+}
+
+export async function dailyStats(range: TimeRangeQuery = {}): Promise<DailyCount[]> {
+  const res = await request.get<DailyResponse>('/stats/daily', {
+    params: buildRangeParams(range),
+  })
+  return res.data?.days ?? []
+}
+
+export async function topToolErrors(
+  range: TimeRangeQuery = {},
+  limit?: number,
+): Promise<ToolErrorRank[]> {
+  const params = buildRangeParams(range)
+  if (limit !== undefined && limit > 0) {
+    params.limit = String(limit)
+  }
+  const res = await request.get<ToolErrorsResponse>('/stats/tool-errors', { params })
   return res.data?.tools ?? []
 }

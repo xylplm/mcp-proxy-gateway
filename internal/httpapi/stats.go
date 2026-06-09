@@ -14,6 +14,9 @@ import (
 //   GET /api/admin/stats/upstreams?start=&end=          各上游 MCP 区间调用条数
 //   GET /api/admin/stats/apikeys?start=&end=            各 API Key 区间调用条数
 //   GET /api/admin/stats/tools?start=&end=&limit=       工具调用排行（降序，至多 limit 条）
+//   GET /api/admin/stats/summary?start=&end=            调用概览
+//   GET /api/admin/stats/daily?start=&end=              每日调用趋势
+//   GET /api/admin/stats/tool-errors?start=&end=&limit= 工具错误排行
 //
 // 时间区间通过查询参数 start/end 传入（RFC3339）。两者均可缺省：缺省 start 取零值
 // （表示自最早记录起），缺省 end 取当前时刻。开始晚于结束的非法区间由下层统计服务
@@ -60,6 +63,9 @@ func (r *Router) registerStatsRoutes(g *gin.RouterGroup) {
 	st.GET("/upstreams", r.statsByUpstream)
 	st.GET("/apikeys", r.statsByAPIKey)
 	st.GET("/tools", r.statsTopTools)
+	st.GET("/summary", r.statsSummary)
+	st.GET("/daily", r.statsDaily)
+	st.GET("/tool-errors", r.statsTopToolErrors)
 }
 
 // statsByUpstream 返回各上游 MCP 在区间内的调用条数（Req 16.2）。
@@ -126,6 +132,74 @@ func (r *Router) statsTopTools(c *gin.Context) {
 		limit = n
 	}
 	ranks, err := r.stats.TopTools(c.Request.Context(), start, end, limit)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	respondOK(c, gin.H{"tools": ranks})
+}
+
+// statsSummary 返回区间内调用概览。
+func (r *Router) statsSummary(c *gin.Context) {
+	if r.stats == nil {
+		respondServiceUnavailable(c, "统计查询服务未就绪")
+		return
+	}
+	start, end, err := parseTimeRange(c)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	summary, err := r.stats.Summary(c.Request.Context(), start, end)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	respondOK(c, gin.H{"summary": summary})
+}
+
+// statsDaily 返回区间内按日聚合的调用趋势。
+func (r *Router) statsDaily(c *gin.Context) {
+	if r.stats == nil {
+		respondServiceUnavailable(c, "统计查询服务未就绪")
+		return
+	}
+	start, end, err := parseTimeRange(c)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	days, err := r.stats.Daily(c.Request.Context(), start, end)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	respondOK(c, gin.H{"days": days})
+}
+
+// statsTopToolErrors 返回区间内按失败次数降序的工具错误排行。
+func (r *Router) statsTopToolErrors(c *gin.Context) {
+	if r.stats == nil {
+		respondServiceUnavailable(c, "统计查询服务未就绪")
+		return
+	}
+	start, end, err := parseTimeRange(c)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	limit := 0
+	if l := c.Query("limit"); l != "" {
+		n, perr := strconv.Atoi(l)
+		if perr != nil {
+			respondError(c, domain.NewValidationError("排行条数参数非法", map[string]string{
+				"limit": "需为整数",
+			}))
+			return
+		}
+		limit = n
+	}
+	ranks, err := r.stats.TopToolErrors(c.Request.Context(), start, end, limit)
 	if err != nil {
 		respondError(c, err)
 		return

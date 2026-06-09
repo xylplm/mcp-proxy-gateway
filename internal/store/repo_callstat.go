@@ -60,6 +60,37 @@ type ToolRank struct {
 	Count int64
 }
 
+// StatsSummary 为某个时间区间内的调用概览聚合。
+type StatsSummary struct {
+	TotalCalls      int64
+	SuccessCalls    int64
+	FailureCalls    int64
+	ActiveUpstreams int64
+	ActiveAPIKeys   int64
+	UniqueTools     int64
+	AvgLatencyMS    float64
+	P95LatencyMS    float64
+}
+
+// DailyCount 为按自然日聚合的调用趋势。
+type DailyCount struct {
+	Day          time.Time
+	TotalCalls   int64
+	SuccessCalls int64
+	FailureCalls int64
+	AvgLatencyMS float64
+}
+
+// ToolErrorRank 为按工具维度聚合的失败排行。
+type ToolErrorRank struct {
+	UpstreamID   string
+	OriginalName string
+	TotalCalls   int64
+	FailureCalls int64
+	LastFailedAt time.Time
+	AvgLatencyMS float64
+}
+
 // CallStatRepo 提供调用统计（call_stat 表）的批量写入与多维度查询。
 type CallStatRepo struct {
 	pool *pgxpool.Pool
@@ -182,6 +213,123 @@ func (r *CallStatRepo) TopTools(ctx context.Context, start, end time.Time, limit
 			OriginalName: original,
 			Count:        count,
 		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// Summary 返回 [start, end] 闭区间内调用概览。
+func (r *CallStatRepo) Summary(ctx context.Context, start, end time.Time) (StatsSummary, error) {
+	if err := validateRange(start, end); err != nil {
+		return StatsSummary{}, err
+	}
+	const q = `
+		SELECT
+			count(*) AS total_calls,
+			count(*) FILTER (WHERE success) AS success_calls,
+			count(*) FILTER (WHERE NOT success) AS failure_calls,
+			count(DISTINCT upstream_id) FILTER (WHERE upstream_id IS NOT NULL) AS active_upstreams,
+			count(DISTINCT api_key_id) FILTER (WHERE api_key_id IS NOT NULL) AS active_api_keys,
+			count(DISTINCT (upstream_id, original_name)) AS unique_tools,
+			coalesce(avg(latency_ms), 0)::float8 AS avg_latency_ms,
+			coalesce(percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms), 0)::float8 AS p95_latency_ms
+		FROM call_stat
+		WHERE called_at >= $1 AND called_at <= $2`
+
+	var out StatsSummary
+	err := r.pool.QueryRow(ctx, q, start, end).Scan(
+		&out.TotalCalls,
+		&out.SuccessCalls,
+		&out.FailureCalls,
+		&out.ActiveUpstreams,
+		&out.ActiveAPIKeys,
+		&out.UniqueTools,
+		&out.AvgLatencyMS,
+		&out.P95LatencyMS,
+	)
+	if err != nil {
+		return StatsSummary{}, err
+	}
+	return out, nil
+}
+
+// Daily 返回 [start, end] 闭区间内按 UTC 自然日聚合的调用趋势。
+func (r *CallStatRepo) Daily(ctx context.Context, start, end time.Time) ([]DailyCount, error) {
+	if err := validateRange(start, end); err != nil {
+		return nil, err
+	}
+	const q = `
+		SELECT
+			(date_trunc('day', called_at AT TIME ZONE 'UTC'))::date AS day,
+			count(*) AS total_calls,
+			count(*) FILTER (WHERE success) AS success_calls,
+			count(*) FILTER (WHERE NOT success) AS failure_calls,
+			coalesce(avg(latency_ms), 0)::float8 AS avg_latency_ms
+		FROM call_stat
+		WHERE called_at >= $1 AND called_at <= $2
+		GROUP BY day
+		ORDER BY day ASC`
+	rows, err := r.pool.Query(ctx, q, start, end)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make([]DailyCount, 0)
+	for rows.Next() {
+		var item DailyCount
+		if err := rows.Scan(&item.Day, &item.TotalCalls, &item.SuccessCalls, &item.FailureCalls, &item.AvgLatencyMS); err != nil {
+			return nil, err
+		}
+		result = append(result, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// TopToolErrors 返回 [start, end] 闭区间内按失败次数降序排列的工具错误排行。
+func (r *CallStatRepo) TopToolErrors(ctx context.Context, start, end time.Time, limit int) ([]ToolErrorRank, error) {
+	if err := validateRange(start, end); err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = 1
+	}
+	const q = `
+		SELECT
+			upstream_id,
+			original_name,
+			count(*) AS total_calls,
+			count(*) FILTER (WHERE NOT success) AS failure_calls,
+			max(called_at) FILTER (WHERE NOT success) AS last_failed_at,
+			coalesce(avg(latency_ms) FILTER (WHERE NOT success), 0)::float8 AS avg_latency_ms
+		FROM call_stat
+		WHERE called_at >= $1 AND called_at <= $2
+		GROUP BY upstream_id, original_name
+		HAVING count(*) FILTER (WHERE NOT success) > 0
+		ORDER BY failure_calls DESC, total_calls DESC, original_name ASC
+		LIMIT $3`
+	rows, err := r.pool.Query(ctx, q, start, end, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make([]ToolErrorRank, 0)
+	for rows.Next() {
+		var (
+			upstreamID pgtype.UUID
+			item       ToolErrorRank
+		)
+		if err := rows.Scan(&upstreamID, &item.OriginalName, &item.TotalCalls, &item.FailureCalls, &item.LastFailedAt, &item.AvgLatencyMS); err != nil {
+			return nil, err
+		}
+		item.UpstreamID = uuidString(upstreamID)
+		result = append(result, item)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

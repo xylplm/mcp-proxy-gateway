@@ -27,10 +27,16 @@ type fakeQuerier struct {
 	upstreamCounts []store.DimensionCount
 	apiKeyCounts   []store.DimensionCount
 	topTools       []store.ToolRank
+	summary        store.StatsSummary
+	daily          []store.DailyCount
+	topErrors      []store.ToolErrorRank
 
 	upstreamErr error
 	apiKeyErr   error
 	topErr      error
+	summaryErr  error
+	dailyErr    error
+	errorErr    error
 
 	// 记录最近一次各方法收到的入参，用于断言透传与 limit 收敛。
 	lastStart    time.Time
@@ -60,6 +66,30 @@ func (q *fakeQuerier) TopTools(_ context.Context, start, end time.Time, limit in
 		return nil, q.topErr
 	}
 	return q.topTools, nil
+}
+
+func (q *fakeQuerier) Summary(_ context.Context, start, end time.Time) (store.StatsSummary, error) {
+	q.lastStart, q.lastEnd = start, end
+	if q.summaryErr != nil {
+		return store.StatsSummary{}, q.summaryErr
+	}
+	return q.summary, nil
+}
+
+func (q *fakeQuerier) Daily(_ context.Context, start, end time.Time) ([]store.DailyCount, error) {
+	q.lastStart, q.lastEnd = start, end
+	if q.dailyErr != nil {
+		return nil, q.dailyErr
+	}
+	return q.daily, nil
+}
+
+func (q *fakeQuerier) TopToolErrors(_ context.Context, start, end time.Time, limit int) ([]store.ToolErrorRank, error) {
+	q.lastStart, q.lastEnd, q.lastTopLimit = start, end, limit
+	if q.errorErr != nil {
+		return nil, q.errorErr
+	}
+	return q.topErrors, nil
 }
 
 // fakeQueryCfg 是 ConfigProvider 的内存实现：返回固定的工具排行默认条数。
@@ -240,5 +270,32 @@ func TestTopToolsPropagatesRangeError(t *testing.T) {
 
 	if _, err := svc.TopTools(context.Background(), time.Now(), time.Now().Add(-time.Hour), 10); err == nil {
 		t.Error("开始晚于结束时应返回错误")
+	}
+}
+
+func TestSummaryDailyAndToolErrorsPassThrough(t *testing.T) {
+	start := time.Date(2024, 4, 1, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2024, 4, 30, 0, 0, 0, 0, time.UTC)
+	repo := &fakeQuerier{
+		summary:   store.StatsSummary{TotalCalls: 12, FailureCalls: 2},
+		daily:     []store.DailyCount{{Day: start, TotalCalls: 3}},
+		topErrors: []store.ToolErrorRank{{UpstreamID: "u1", OriginalName: "search", FailureCalls: 2}},
+	}
+	svc := newTestQueryService(t, repo, 10)
+
+	summary, err := svc.Summary(context.Background(), start, end)
+	if err != nil || summary.TotalCalls != 12 || summary.FailureCalls != 2 {
+		t.Fatalf("Summary 未透传：summary=%+v err=%v", summary, err)
+	}
+	daily, err := svc.Daily(context.Background(), start, end)
+	if err != nil || len(daily) != 1 || daily[0].TotalCalls != 3 {
+		t.Fatalf("Daily 未透传：daily=%+v err=%v", daily, err)
+	}
+	errors, err := svc.TopToolErrors(context.Background(), start, end, 0)
+	if err != nil || len(errors) != 1 || errors[0].FailureCalls != 2 {
+		t.Fatalf("TopToolErrors 未透传：errors=%+v err=%v", errors, err)
+	}
+	if repo.lastTopLimit != 10 {
+		t.Fatalf("TopToolErrors 应复用排行默认条数，实际 %d", repo.lastTopLimit)
 	}
 }

@@ -1,60 +1,61 @@
 <script setup lang="ts">
-/**
- * 统计排行页（任务 26.5）。
- *
- * 以 TailAdmin 风格（分区卡片、表格、ApexCharts 图表）展示调用统计：
- * - 时间区间选择（start/end，本地 datetime-local → RFC3339）；
- * - 「按上游 MCP」「按 API Key」两个维度的区间调用条数（卡片网格 + 表格，大屏并排）；
- * - 工具调用排行（ApexCharts 横向柱状图，可配置 limit）。
- *
- * 覆盖 Req 16.2（按上游维度统计）、16.3（工具排行降序）、16.5（时间区间）、17.5（管理 REST API）。
- *
- * 容错：无记录时展示空态而非报错；开始晚于结束由后端返回 VALIDATION（400），
- * 前端捕获后给出整体错误提示并提供清晰说明（Req 16.7）。
- * 响应式：useBreakpoint.isLargeScreen 决定上游/API Key 两块统计为并排（大屏）或堆叠（小屏）。
- */
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import type { ApexOptions } from 'apexcharts'
 import AdminLayout from '@/components/layout/AdminLayout.vue'
 import PageBreadcrumb from '@/components/common/PageBreadcrumb.vue'
-import { useBreakpoint } from '@/composables/useBreakpoint'
 import {
-  statsByUpstream,
+  dailyStats,
   statsByAPIKey,
+  statsByUpstream,
+  statsSummary,
+  topToolErrors,
   topTools,
+  type DailyCount,
   type DimensionCount,
+  type StatsSummary,
+  type TimeRangeQuery,
+  type ToolErrorRank,
   type ToolRank,
 } from '@/api/stats'
-import { listUpstreams } from '@/api/upstreams'
 import { listAPIKeys } from '@/api/apikeys'
+import { listUpstreams } from '@/api/upstreams'
 
-const { isLargeScreen } = useBreakpoint()
-
-/** 两块维度统计的栅格类：大屏并排两列、小屏堆叠单列。 */
-const dimensionGridClass = computed(() =>
-  isLargeScreen.value ? 'grid grid-cols-2 gap-6' : 'grid grid-cols-1 gap-6',
-)
-
-// ── 查询条件 ──────────────────────────────────────────────────────────────
-/** datetime-local 形式的起止时间（本地时区，无时区后缀）。 */
 const startLocal = ref('')
 const endLocal = ref('')
-/** 工具排行返回条数（缺省由后端取配置默认值）。 */
-const toolLimit = ref(10)
-
-// ── 数据与状态 ──────────────────────────────────────────────────────────────
+const loading = ref(false)
+const queryError = ref('')
+const summary = ref<StatsSummary>(emptySummary())
+const daily = ref<DailyCount[]>([])
 const upstreamCounts = ref<DimensionCount[]>([])
 const apiKeyCounts = ref<DimensionCount[]>([])
 const toolRanks = ref<ToolRank[]>([])
-
-/** ID → 名称映射，用于把维度标识渲染为可读名称。 */
+const toolErrors = ref<ToolErrorRank[]>([])
 const upstreamNames = ref<Record<string, string>>({})
 const apiKeyNames = ref<Record<string, string>>({})
+let queryTimer: number | undefined
+let statsRequestSeq = 0
+const heatmapDayCount = 364
+const heatmapLegendLevels = [0, 1, 2, 3, 4] as const
 
-const loading = ref(false)
-const queryError = ref('')
+const cardClass =
+  'rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03]'
+const inputClass =
+  'h-10 rounded-lg border border-gray-300 bg-transparent px-3 text-sm text-gray-800 shadow-sm focus:border-brand-300 focus:ring-3 focus:ring-brand-500/10 focus:outline-none dark:border-gray-700 dark:text-white/90'
+const labelClass = 'text-xs font-medium text-gray-500 dark:text-gray-400'
 
-/** 将 datetime-local 值转换为 RFC3339；空串返回 undefined（表示不传该参数）。 */
+function emptySummary(): StatsSummary {
+  return {
+    TotalCalls: 0,
+    SuccessCalls: 0,
+    FailureCalls: 0,
+    ActiveUpstreams: 0,
+    ActiveAPIKeys: 0,
+    UniqueTools: 0,
+    AvgLatencyMS: 0,
+    P95LatencyMS: 0,
+  }
+}
+
 function toRFC3339(local: string): string | undefined {
   if (local === '') return undefined
   const d = new Date(local)
@@ -62,248 +63,493 @@ function toRFC3339(local: string): string | undefined {
   return d.toISOString()
 }
 
-/** 解析后端统一错误体的 message，回退到通用文案。 */
-function errorMessage(err: unknown): string {
-  // 请求层已将失败统一为 Error（ApiError），其 message 即后端中文提示。
-  return err instanceof Error ? err.message : '查询失败，请稍后重试'
+function range(): TimeRangeQuery {
+  return { start: toRFC3339(startLocal.value), end: toRFC3339(endLocal.value) }
 }
 
-/** 维度标识的可读展示：优先名称，空标识显示「(未知)」，无名称回退标识本身。 */
+function formatInt(value: number): string {
+  return Math.round(value).toLocaleString('zh-CN')
+}
+
+function formatMs(value: number): string {
+  if (value <= 0) return '0 ms'
+  return `${Math.round(value).toLocaleString('zh-CN')} ms`
+}
+
+function formatPercent(value: number): string {
+  return `${value.toFixed(1)}%`
+}
+
+function formatDate(value: string | Date): string {
+  const d = typeof value === 'string' ? new Date(value) : value
+  if (Number.isNaN(d.getTime())) return '-'
+  return d.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })
+}
+
+function formatFullDate(value: string | Date): string {
+  const d = typeof value === 'string' ? new Date(value) : value
+  if (Number.isNaN(d.getTime())) return '-'
+  return d.toLocaleDateString('zh-CN')
+}
+
 function upstreamLabel(id: string): string {
   if (id === '') return '(未知上游)'
   return upstreamNames.value[id] ?? id
 }
+
 function apiKeyLabel(id: string): string {
   if (id === '') return '(未知 Key)'
   return apiKeyNames.value[id] ?? id
 }
-/** 工具排行项的可读名称：上游名 / 原始工具名。 */
-function toolLabel(t: ToolRank): string {
-  const up = t.UpstreamID === '' ? '(未知上游)' : (upstreamNames.value[t.UpstreamID] ?? t.UpstreamID)
-  return `${up} / ${t.OriginalName}`
+
+function toolLabel(t: Pick<ToolRank, 'UpstreamID' | 'OriginalName'>): string {
+  return `${upstreamLabel(t.UpstreamID)} / ${t.OriginalName}`
 }
 
-/** 各维度合计调用条数（卡片汇总展示）。 */
-const upstreamTotal = computed(() => upstreamCounts.value.reduce((s, c) => s + c.Count, 0))
-const apiKeyTotal = computed(() => apiKeyCounts.value.reduce((s, c) => s + c.Count, 0))
+function heatmapLevelClass(level: number): string {
+  if (level === 1) return 'bg-success-100 dark:bg-success-500/20'
+  if (level === 2) return 'bg-success-300 dark:bg-success-500/40'
+  if (level === 3) return 'bg-success-500/80 dark:bg-success-500/70'
+  if (level >= 4) return 'bg-success-600 dark:bg-success-400'
+  return 'bg-gray-100 dark:bg-gray-800'
+}
 
-// ── 工具排行图表（ApexCharts 横向柱状图）──────────────────────────────────
-/** 图表分类标签（工具可读名，与 series 数据一一对应）。 */
-const chartCategories = computed(() => toolRanks.value.map(toolLabel))
-/** 图表数据系列（调用次数）。 */
-const chartSeries = computed(() => [
+function successRate(item = summary.value): number {
+  return item.TotalCalls === 0 ? 0 : (item.SuccessCalls / item.TotalCalls) * 100
+}
+
+function failureRate(item = summary.value): number {
+  return item.TotalCalls === 0 ? 0 : (item.FailureCalls / item.TotalCalls) * 100
+}
+
+const busiestDay = computed(() =>
+  daily.value.reduce<DailyCount | null>((best, item) => {
+    if (best === null || item.TotalCalls > best.TotalCalls) return item
+    return best
+  }, null),
+)
+
+const recentSeven = computed(() => daily.value.slice(-7))
+const previousSeven = computed(() => daily.value.slice(-14, -7))
+
+const recentSevenTotal = computed(() =>
+  recentSeven.value.reduce((sum, item) => sum + item.TotalCalls, 0),
+)
+const previousSevenTotal = computed(() =>
+  previousSeven.value.reduce((sum, item) => sum + item.TotalCalls, 0),
+)
+const weeklyDelta = computed(() => {
+  if (previousSevenTotal.value === 0) return recentSevenTotal.value > 0 ? 100 : 0
+  return ((recentSevenTotal.value - previousSevenTotal.value) / previousSevenTotal.value) * 100
+})
+
+const busiestTool = computed(() => toolRanks.value[0] ?? null)
+const topErrorTool = computed(() => toolErrors.value[0] ?? null)
+
+const heatmapDays = computed(() => {
+  const byDay = new Map<string, DailyCount>()
+  for (const item of daily.value) {
+    byDay.set(new Date(item.Day).toISOString().slice(0, 10), item)
+  }
+  const end = endLocal.value === '' ? new Date() : new Date(endLocal.value)
+  if (Number.isNaN(end.getTime())) end.setTime(Date.now())
+  end.setHours(0, 0, 0, 0)
+  const start = new Date(end)
+  start.setDate(start.getDate() - (heatmapDayCount - 1))
+  const days: Array<{ key: string; date: Date; item: DailyCount | null; level: number }> = []
+  const max = Math.max(1, ...daily.value.map((item) => item.TotalCalls))
+  for (let i = 0; i < heatmapDayCount; i += 1) {
+    const date = new Date(start)
+    date.setDate(start.getDate() + i)
+    const key = date.toISOString().slice(0, 10)
+    const item = byDay.get(key) ?? null
+    const count = item?.TotalCalls ?? 0
+    const level = count === 0 ? 0 : Math.min(4, Math.ceil((count / max) * 4))
+    days.push({ key, date, item, level })
+  }
+  return days
+})
+
+const heatmapTotal = computed(() =>
+  heatmapDays.value.reduce((sum, day) => sum + (day.item?.TotalCalls ?? 0), 0),
+)
+
+const trendCategories = computed(() => daily.value.map((item) => formatDate(item.Day)))
+const trendSeries = computed(() => [
+  { name: '成功', data: daily.value.map((item) => item.SuccessCalls) },
+  { name: '失败', data: daily.value.map((item) => item.FailureCalls) },
+])
+const trendOptions = computed<ApexOptions>(() => ({
+  chart: { type: 'area', toolbar: { show: false }, fontFamily: 'Outfit, sans-serif' },
+  colors: ['#12b76a', '#f04438'],
+  dataLabels: { enabled: false },
+  stroke: { curve: 'smooth', width: 2 },
+  fill: { type: 'gradient', gradient: { opacityFrom: 0.28, opacityTo: 0.02 } },
+  grid: { borderColor: '#e5e7eb', strokeDashArray: 4 },
+  xaxis: { categories: trendCategories.value, labels: { rotate: 0 } },
+  yaxis: { labels: { formatter: (value: number) => Math.round(value).toString() } },
+  tooltip: { y: { formatter: (value: number) => `${formatInt(value)} 次` } },
+  legend: { position: 'top', horizontalAlign: 'right' },
+}))
+
+const toolRankSeries = computed(() => [
   { name: '调用次数', data: toolRanks.value.map((t) => t.Count) },
 ])
-
-/** ApexCharts 配置：横向柱状图，按次数降序（数据已由后端排序）。 */
-const chartOptions = computed<ApexOptions>(() => ({
-  chart: {
-    type: 'bar',
-    fontFamily: 'Outfit, sans-serif',
-    toolbar: { show: false },
-  },
-  plotOptions: {
-    bar: { horizontal: true, borderRadius: 4, barHeight: '60%' },
-  },
+const toolRankOptions = computed<ApexOptions>(() => ({
+  chart: { type: 'bar', toolbar: { show: false }, fontFamily: 'Outfit, sans-serif' },
+  plotOptions: { bar: { horizontal: true, borderRadius: 4, barHeight: '58%' } },
   colors: ['#465fff'],
   dataLabels: { enabled: false },
   grid: { borderColor: '#e5e7eb', strokeDashArray: 4 },
-  xaxis: {
-    categories: chartCategories.value,
-    title: { text: '调用次数' },
-  },
-  tooltip: { y: { formatter: (v: number) => `${v} 次` } },
+  xaxis: { categories: toolRanks.value.map(toolLabel) },
+  tooltip: { y: { formatter: (value: number) => `${formatInt(value)} 次` } },
 }))
 
-/** 触发一次查询（按当前条件刷新三类统计）。 */
-async function runQuery(): Promise<void> {
-  if (loading.value) return
-  loading.value = true
-  queryError.value = ''
-  const range = { start: toRFC3339(startLocal.value), end: toRFC3339(endLocal.value) }
-  try {
-    const [ups, keys, tools] = await Promise.all([
-      statsByUpstream(range),
-      statsByAPIKey(range),
-      topTools(range, toolLimit.value),
-    ])
-    upstreamCounts.value = ups
-    apiKeyCounts.value = keys
-    toolRanks.value = tools
-  } catch (err) {
-    queryError.value = errorMessage(err)
-  } finally {
-    loading.value = false
-  }
+const upstreamDistribution = computed(() => topDimensionItems(upstreamCounts.value, upstreamLabel))
+const apiKeyDistribution = computed(() => topDimensionItems(apiKeyCounts.value, apiKeyLabel))
+
+function topDimensionItems(items: DimensionCount[], labeler: (id: string) => string) {
+  const total = items.reduce((sum, item) => sum + item.Count, 0)
+  return items.slice(0, 6).map((item) => ({
+    id: item.ID,
+    label: labeler(item.ID),
+    count: item.Count,
+    percent: total === 0 ? 0 : (item.Count / total) * 100,
+  }))
 }
 
-/** 加载维度名称映射（上游、API Key），失败不阻塞统计展示。 */
 async function loadNameMaps(): Promise<void> {
   try {
     const [ups, keys] = await Promise.all([listUpstreams(), listAPIKeys()])
     upstreamNames.value = Object.fromEntries(ups.map((u) => [u.id, u.config.name]))
     apiKeyNames.value = Object.fromEntries(keys.map((k) => [k.id, k.name]))
   } catch {
-    // 名称映射失败时回退为标识展示，不影响统计查询。
+    // 名称映射失败时回退为标识展示。
   }
 }
 
+async function loadStats(): Promise<void> {
+  const requestSeq = ++statsRequestSeq
+  loading.value = true
+  queryError.value = ''
+  const currentRange = range()
+  try {
+    const [sum, days, ups, keys, tools, errors] = await Promise.all([
+      statsSummary(currentRange),
+      dailyStats(currentRange),
+      statsByUpstream(currentRange),
+      statsByAPIKey(currentRange),
+      topTools(currentRange),
+      topToolErrors(currentRange),
+    ])
+    if (requestSeq !== statsRequestSeq) return
+    summary.value = sum
+    daily.value = days
+    upstreamCounts.value = ups
+    apiKeyCounts.value = keys
+    toolRanks.value = tools
+    toolErrors.value = errors
+  } catch (err) {
+    if (requestSeq !== statsRequestSeq) return
+    queryError.value = err instanceof Error ? err.message : '加载统计失败'
+  } finally {
+    if (requestSeq === statsRequestSeq) loading.value = false
+  }
+}
+
+function scheduleLoadStats(): void {
+  if (queryTimer !== undefined) window.clearTimeout(queryTimer)
+  queryTimer = window.setTimeout(() => void loadStats(), 350)
+}
+
+watch([startLocal, endLocal], scheduleLoadStats)
+
 onMounted(async () => {
   await loadNameMaps()
-  await runQuery()
+  await loadStats()
 })
-
-/** 通用样式类（TailAdmin 风格）。 */
-const inputClass =
-  'h-11 w-full rounded-lg border border-gray-300 bg-transparent px-4 text-sm text-gray-800 shadow-sm placeholder:text-gray-400 focus:border-brand-300 focus:ring-3 focus:ring-brand-500/10 focus:outline-none dark:border-gray-700 dark:text-white/90'
-const labelClass = 'mb-1.5 block text-sm font-medium text-gray-700 dark:text-gray-400'
-const cardClass =
-  'rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03]'
 </script>
 
 <template>
   <AdminLayout>
     <PageBreadcrumb pageTitle="调用统计" />
 
-    <!-- 查询条件 -->
-    <section :class="cardClass">
-      <h3 class="mb-1 text-base font-semibold text-gray-800 dark:text-white/90">查询条件</h3>
-      <p class="mb-5 text-sm text-gray-500 dark:text-gray-400">
-        选择时间区间与工具排行条数后查询；区间为空表示自最早记录起至当前时刻（Req 16.5）。
-      </p>
-      <div class="grid grid-cols-1 gap-x-6 gap-y-5 md:grid-cols-2 xl:grid-cols-4">
-        <div>
-          <label :class="labelClass">开始时间</label>
-          <input v-model="startLocal" type="datetime-local" :class="inputClass" />
-        </div>
-        <div>
-          <label :class="labelClass">结束时间</label>
-          <input v-model="endLocal" type="datetime-local" :class="inputClass" />
-        </div>
-        <div>
-          <label :class="labelClass">工具排行条数</label>
-          <input
-            v-model.number="toolLimit"
-            type="number"
-            min="1"
-            max="100"
-            :class="inputClass"
-          />
-          <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">范围 1 – 100，默认取系统配置。</p>
-        </div>
-        <div class="flex items-end">
-          <button
-            type="button"
-            class="h-11 w-full rounded-lg bg-brand-500 px-5 text-sm font-medium text-white transition hover:bg-brand-600 disabled:opacity-60"
-            :disabled="loading"
-            @click="runQuery"
-          >
-            {{ loading ? '查询中…' : '查询' }}
-          </button>
-        </div>
+    <div class="mb-5 flex flex-wrap items-end justify-between gap-3">
+      <div>
+        <h2 class="text-lg font-semibold text-gray-800 dark:text-white/90">调用概览</h2>
+        <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+          调整时间后自动刷新；时间为空时统计全部记录。
+        </p>
       </div>
+      <div class="flex flex-wrap items-end gap-3">
+        <label class="block">
+          <span :class="labelClass">开始时间</span>
+          <input v-model="startLocal" type="datetime-local" :class="inputClass" />
+        </label>
+        <label class="block">
+          <span :class="labelClass">结束时间</span>
+          <input v-model="endLocal" type="datetime-local" :class="inputClass" />
+        </label>
+      </div>
+    </div>
 
-      <p
-        v-if="queryError !== ''"
-        class="mt-4 rounded-lg bg-error-50 px-4 py-2.5 text-sm text-error-600 dark:bg-error-500/10 dark:text-error-400"
-      >
-        {{ queryError }}
-      </p>
-    </section>
+    <p
+      v-if="queryError !== ''"
+      class="bg-error-50 text-error-600 dark:bg-error-500/10 dark:text-error-400 mb-4 rounded-lg px-4 py-2.5 text-sm"
+    >
+      {{ queryError }}
+    </p>
 
-    <!-- 维度统计：上游 MCP / API Key（大屏并排，小屏堆叠）-->
-    <div :class="dimensionGridClass" class="mt-6">
-      <!-- 按上游 MCP -->
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
       <section :class="cardClass">
-        <div class="mb-4 flex items-center justify-between">
-          <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">按上游 MCP</h3>
-          <span class="rounded-full bg-brand-50 px-3 py-1 text-xs font-medium text-brand-600 dark:bg-brand-500/10 dark:text-brand-400">
-            合计 {{ upstreamTotal }} 次
-          </span>
+        <div class="text-sm text-gray-500 dark:text-gray-400">总调用</div>
+        <div class="mt-2 text-2xl font-semibold text-gray-800 dark:text-white/90">
+          {{ formatInt(summary.TotalCalls) }}
         </div>
-        <div class="overflow-x-auto">
-          <table class="min-w-full text-sm">
-            <thead>
-              <tr class="border-b border-gray-100 text-left text-gray-500 dark:border-gray-800 dark:text-gray-400">
-                <th class="px-3 py-2.5 font-medium">上游 MCP</th>
-                <th class="px-3 py-2.5 text-right font-medium">调用条数</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr
-                v-for="c in upstreamCounts"
-                :key="c.ID"
-                class="border-b border-gray-50 text-gray-700 dark:border-gray-800/60 dark:text-gray-300"
-              >
-                <td class="px-3 py-2.5">{{ upstreamLabel(c.ID) }}</td>
-                <td class="px-3 py-2.5 text-right tabular-nums">{{ c.Count }}</td>
-              </tr>
-              <tr v-if="upstreamCounts.length === 0">
-                <td colspan="2" class="px-3 py-8 text-center text-gray-400 dark:text-gray-500">
-                  暂无统计数据
-                </td>
-              </tr>
-            </tbody>
-          </table>
+        <div class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+          近 7 日 {{ weeklyDelta >= 0 ? '+' : '' }}{{ formatPercent(weeklyDelta) }}
         </div>
       </section>
-
-      <!-- 按 API Key -->
       <section :class="cardClass">
-        <div class="mb-4 flex items-center justify-between">
-          <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">按 API Key</h3>
-          <span class="rounded-full bg-brand-50 px-3 py-1 text-xs font-medium text-brand-600 dark:bg-brand-500/10 dark:text-brand-400">
-            合计 {{ apiKeyTotal }} 次
-          </span>
+        <div class="text-sm text-gray-500 dark:text-gray-400">成功率</div>
+        <div class="mt-2 text-2xl font-semibold text-gray-800 dark:text-white/90">
+          {{ formatPercent(successRate()) }}
         </div>
-        <div class="overflow-x-auto">
-          <table class="min-w-full text-sm">
-            <thead>
-              <tr class="border-b border-gray-100 text-left text-gray-500 dark:border-gray-800 dark:text-gray-400">
-                <th class="px-3 py-2.5 font-medium">API Key</th>
-                <th class="px-3 py-2.5 text-right font-medium">调用条数</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr
-                v-for="c in apiKeyCounts"
-                :key="c.ID"
-                class="border-b border-gray-50 text-gray-700 dark:border-gray-800/60 dark:text-gray-300"
-              >
-                <td class="px-3 py-2.5">{{ apiKeyLabel(c.ID) }}</td>
-                <td class="px-3 py-2.5 text-right tabular-nums">{{ c.Count }}</td>
-              </tr>
-              <tr v-if="apiKeyCounts.length === 0">
-                <td colspan="2" class="px-3 py-8 text-center text-gray-400 dark:text-gray-500">
-                  暂无统计数据
-                </td>
-              </tr>
-            </tbody>
-          </table>
+        <div class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+          失败 {{ formatInt(summary.FailureCalls) }} 次，{{ formatPercent(failureRate()) }}
+        </div>
+      </section>
+      <section :class="cardClass">
+        <div class="text-sm text-gray-500 dark:text-gray-400">响应耗时</div>
+        <div class="mt-2 text-2xl font-semibold text-gray-800 dark:text-white/90">
+          {{ formatMs(summary.P95LatencyMS) }}
+        </div>
+        <div class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+          平均 {{ formatMs(summary.AvgLatencyMS) }}
+        </div>
+      </section>
+      <section :class="cardClass">
+        <div class="text-sm text-gray-500 dark:text-gray-400">活跃资源</div>
+        <div class="mt-2 text-2xl font-semibold text-gray-800 dark:text-white/90">
+          {{ formatInt(summary.UniqueTools) }} 工具
+        </div>
+        <div class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+          {{ formatInt(summary.ActiveUpstreams) }} 上游 / {{ formatInt(summary.ActiveAPIKeys) }} Key
         </div>
       </section>
     </div>
 
-    <!-- 工具调用排行（ApexCharts 横向柱状图）-->
-    <section :class="cardClass" class="mt-6">
-      <h3 class="mb-1 text-base font-semibold text-gray-800 dark:text-white/90">工具调用排行</h3>
-      <p class="mb-5 text-sm text-gray-500 dark:text-gray-400">
-        按调用次数降序排列，至多展示 {{ toolLimit }} 条（Req 16.3）。
-      </p>
-      <div v-if="toolRanks.length > 0">
+    <div class="mt-6 grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.6fr)_minmax(360px,1fr)]">
+      <section :class="cardClass">
+        <div class="mb-4 flex items-center justify-between gap-3">
+          <div>
+            <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">调用趋势</h3>
+            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">按天查看成功与失败调用。</p>
+          </div>
+          <span
+            v-if="busiestDay"
+            class="rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600 dark:bg-gray-800 dark:text-gray-300"
+          >
+            峰值 {{ formatFullDate(busiestDay.Day) }} · {{ formatInt(busiestDay.TotalCalls) }} 次
+          </span>
+        </div>
         <apexchart
-          type="bar"
-          :height="Math.max(240, toolRanks.length * 44)"
-          :options="chartOptions"
-          :series="chartSeries"
+          v-if="daily.length > 0"
+          type="area"
+          height="320"
+          :options="trendOptions"
+          :series="trendSeries"
         />
+        <div v-else class="py-16 text-center text-sm text-gray-400 dark:text-gray-500">
+          暂无趋势数据
+        </div>
+      </section>
+
+      <section :class="cardClass">
+        <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">趋势摘要</h3>
+        <div class="mt-4 grid grid-cols-1 gap-3">
+          <div class="rounded-lg bg-gray-50 px-4 py-3 dark:bg-gray-800/60">
+            <div class="text-xs text-gray-500 dark:text-gray-400">近 7 日调用</div>
+            <div class="mt-1 text-xl font-semibold text-gray-800 dark:text-white/90">
+              {{ formatInt(recentSevenTotal) }}
+            </div>
+            <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              较前 7 日 {{ weeklyDelta >= 0 ? '+' : '' }}{{ formatPercent(weeklyDelta) }}
+            </div>
+          </div>
+          <div class="rounded-lg bg-gray-50 px-4 py-3 dark:bg-gray-800/60">
+            <div class="text-xs text-gray-500 dark:text-gray-400">最热工具</div>
+            <div class="mt-1 truncate text-xl font-semibold text-gray-800 dark:text-white/90">
+              {{ busiestTool ? busiestTool.OriginalName : '-' }}
+            </div>
+            <div class="mt-1 truncate text-xs text-gray-500 dark:text-gray-400">
+              {{ busiestTool ? upstreamLabel(busiestTool.UpstreamID) : '暂无调用记录' }}
+            </div>
+          </div>
+          <div class="rounded-lg bg-gray-50 px-4 py-3 dark:bg-gray-800/60">
+            <div class="text-xs text-gray-500 dark:text-gray-400">最高错误工具</div>
+            <div class="mt-1 truncate text-xl font-semibold text-gray-800 dark:text-white/90">
+              {{ topErrorTool ? topErrorTool.OriginalName : '-' }}
+            </div>
+            <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ topErrorTool ? `${formatInt(topErrorTool.FailureCalls)} 次失败` : '暂无错误记录' }}
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <section :class="[cardClass, 'mt-6']">
+      <div class="mb-4 flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">调用热力图</h3>
+          <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">按天查看最近 52 周调用密度。</p>
+        </div>
+        <div class="flex flex-wrap items-center gap-4 text-xs text-gray-500 dark:text-gray-400">
+          <span>合计 {{ formatInt(heatmapTotal) }} 次</span>
+          <span>近 7 日 {{ formatInt(recentSevenTotal) }} 次</span>
+          <div class="flex items-center gap-1.5">
+            <span>少</span>
+            <span
+              v-for="level in heatmapLegendLevels"
+              :key="level"
+              class="h-3 w-3 rounded-[3px] border border-gray-200 dark:border-gray-800"
+              :class="heatmapLevelClass(level)"
+            />
+            <span>多</span>
+          </div>
+        </div>
       </div>
-      <div
-        v-else
-        class="py-12 text-center text-sm text-gray-400 dark:text-gray-500"
-      >
-        暂无工具调用记录
+      <div class="overflow-x-auto pb-1">
+        <div class="grid w-max grid-flow-col grid-rows-7 gap-1">
+          <Tooltip
+            v-for="day in heatmapDays"
+            :key="day.key"
+            :content="`${formatFullDate(day.date)}：${formatInt(day.item?.TotalCalls ?? 0)} 次，失败 ${formatInt(day.item?.FailureCalls ?? 0)} 次`"
+            placement="top"
+          >
+            <span
+              class="block h-3.5 w-3.5 shrink-0 rounded-[4px] border border-gray-200 dark:border-gray-800"
+              :class="heatmapLevelClass(day.level)"
+            />
+          </Tooltip>
+        </div>
       </div>
     </section>
+
+    <div class="mt-6 grid grid-cols-1 gap-5 xl:grid-cols-2">
+      <section :class="cardClass">
+        <h3 class="mb-4 text-base font-semibold text-gray-800 dark:text-white/90">上游调用分布</h3>
+        <div class="space-y-3">
+          <div v-for="item in upstreamDistribution" :key="item.id">
+            <div class="mb-1 flex justify-between gap-3 text-sm">
+              <span class="truncate text-gray-700 dark:text-gray-300">{{ item.label }}</span>
+              <span class="shrink-0 text-gray-500 tabular-nums">{{ formatInt(item.count) }}</span>
+            </div>
+            <div class="h-2 rounded-full bg-gray-100 dark:bg-gray-800">
+              <div
+                class="bg-brand-500 h-2 rounded-full"
+                :style="{ width: `${item.percent}%` }"
+              ></div>
+            </div>
+          </div>
+          <div
+            v-if="upstreamDistribution.length === 0"
+            class="py-8 text-center text-sm text-gray-400"
+          >
+            暂无上游统计
+          </div>
+        </div>
+      </section>
+
+      <section :class="cardClass">
+        <h3 class="mb-4 text-base font-semibold text-gray-800 dark:text-white/90">
+          API Key 调用分布
+        </h3>
+        <div class="space-y-3">
+          <div v-for="item in apiKeyDistribution" :key="item.id">
+            <div class="mb-1 flex justify-between gap-3 text-sm">
+              <span class="truncate text-gray-700 dark:text-gray-300">{{ item.label }}</span>
+              <span class="shrink-0 text-gray-500 tabular-nums">{{ formatInt(item.count) }}</span>
+            </div>
+            <div class="h-2 rounded-full bg-gray-100 dark:bg-gray-800">
+              <div
+                class="bg-success-500 h-2 rounded-full"
+                :style="{ width: `${item.percent}%` }"
+              ></div>
+            </div>
+          </div>
+          <div
+            v-if="apiKeyDistribution.length === 0"
+            class="py-8 text-center text-sm text-gray-400"
+          >
+            暂无 API Key 统计
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div class="mt-6 grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.35fr)_minmax(360px,1fr)]">
+      <section :class="cardClass">
+        <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">工具调用排行</h3>
+        <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">优先排查高频工具的流量集中度。</p>
+        <apexchart
+          v-if="toolRanks.length > 0"
+          type="bar"
+          :height="Math.max(260, toolRanks.length * 42)"
+          :options="toolRankOptions"
+          :series="toolRankSeries"
+        />
+        <div v-else class="py-12 text-center text-sm text-gray-400 dark:text-gray-500">
+          暂无工具调用记录
+        </div>
+      </section>
+
+      <section :class="cardClass">
+        <div class="mb-4 flex items-center justify-between gap-3">
+          <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">工具错误排行</h3>
+          <span
+            v-if="topErrorTool"
+            class="bg-error-50 text-error-600 dark:bg-error-500/10 dark:text-error-400 rounded-full px-3 py-1 text-xs font-medium"
+          >
+            最高 {{ formatInt(topErrorTool.FailureCalls) }} 次
+          </span>
+        </div>
+        <div class="space-y-3">
+          <div
+            v-for="item in toolErrors"
+            :key="`${item.UpstreamID}:${item.OriginalName}`"
+            class="rounded-lg border border-gray-200 p-3 dark:border-gray-800"
+          >
+            <div class="flex items-start justify-between gap-3">
+              <div class="min-w-0">
+                <div class="truncate text-sm font-medium text-gray-800 dark:text-white/90">
+                  {{ toolLabel(item) }}
+                </div>
+                <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  最近失败 {{ formatFullDate(item.LastFailedAt) }}
+                </div>
+              </div>
+              <div class="shrink-0 text-right">
+                <div class="text-error-600 dark:text-error-400 text-sm font-semibold">
+                  {{ formatInt(item.FailureCalls) }}
+                </div>
+                <div class="text-xs text-gray-500">失败</div>
+              </div>
+            </div>
+            <div class="mt-3 flex flex-wrap gap-2 text-xs text-gray-500 dark:text-gray-400">
+              <span>总调用 {{ formatInt(item.TotalCalls) }}</span>
+              <span>平均耗时 {{ formatMs(item.AvgLatencyMS) }}</span>
+            </div>
+          </div>
+          <div
+            v-if="toolErrors.length === 0"
+            class="py-10 text-center text-sm text-gray-400 dark:text-gray-500"
+          >
+            暂无错误记录
+          </div>
+        </div>
+      </section>
+    </div>
   </AdminLayout>
 </template>
