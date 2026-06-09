@@ -314,7 +314,9 @@ defineExpose({ reload: load })
         class="flex flex-col rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-white/[0.03]"
       >
         <div class="mb-3 flex items-start justify-between gap-2">
-          <code class="min-w-0 flex-1 truncate rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-800 dark:bg-gray-800 dark:text-gray-200" :title="rule.pattern">{{ rule.pattern }}</code>
+          <Tooltip :content="rule.pattern" placement="bottom-start" class="min-w-0 flex-1">
+            <code class="block truncate rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-800 dark:bg-gray-800 dark:text-gray-200">{{ rule.pattern }}</code>
+          </Tooltip>
           <div class="flex shrink-0 items-center gap-2">
             <span
               class="inline-flex items-center rounded-full px-2 py-0.5 text-xs"
@@ -413,10 +415,22 @@ defineExpose({ reload: load })
                 class="w-full rounded-lg border border-gray-300 px-3.5 py-2.5 text-sm text-gray-800 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white/90"
               />
             </div>
-            <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
-              <input v-model="form.isRegex" type="checkbox" class="h-4 w-4 rounded border-gray-300 text-brand-500 focus:ring-brand-400" />
-              使用正则匹配（完整匹配）
-            </label>
+            <div class="flex items-center justify-between gap-4 rounded-lg border border-gray-200 px-3 py-2.5 dark:border-gray-700">
+              <span class="text-sm text-gray-700 dark:text-gray-300">使用正则匹配（完整匹配）</span>
+              <button
+                type="button"
+                role="switch"
+                :aria-checked="form.isRegex"
+                class="relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition"
+                :class="form.isRegex ? 'bg-brand-500' : 'bg-gray-300 dark:bg-gray-700'"
+                @click="form.isRegex = !form.isRegex"
+              >
+                <span
+                  class="inline-block h-4 w-4 transform rounded-full bg-white transition"
+                  :class="form.isRegex ? 'translate-x-6' : 'translate-x-1'"
+                ></span>
+              </button>
+            </div>
             <div>
               <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">作用范围</label>
               <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -441,10 +455,22 @@ defineExpose({ reload: load })
                 <p v-if="upstreams.length === 0" class="text-sm text-gray-400">暂无上游 MCP</p>
               </div>
             </div>
-            <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
-              <input v-model="form.enabled" type="checkbox" class="h-4 w-4 rounded border-gray-300 text-brand-500 focus:ring-brand-400" />
-              启用该规则
-            </label>
+            <div class="flex items-center justify-between gap-4 rounded-lg border border-gray-200 px-3 py-2.5 dark:border-gray-700">
+              <span class="text-sm text-gray-700 dark:text-gray-300">启用该规则</span>
+              <button
+                type="button"
+                role="switch"
+                :aria-checked="form.enabled"
+                class="relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition"
+                :class="form.enabled ? 'bg-brand-500' : 'bg-gray-300 dark:bg-gray-700'"
+                @click="form.enabled = !form.enabled"
+              >
+                <span
+                  class="inline-block h-4 w-4 transform rounded-full bg-white transition"
+                  :class="form.enabled ? 'translate-x-6' : 'translate-x-1'"
+                ></span>
+              </button>
+            </div>
           </div>
 
           <div class="mt-6 flex justify-end gap-3">

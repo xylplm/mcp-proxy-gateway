@@ -323,14 +323,22 @@ watch(
                   @keyup.enter="addFilter"
                 />
               </div>
-              <label class="flex items-center gap-2 pb-2 text-sm text-gray-600 dark:text-gray-300">
-                <input
-                  v-model="newFilterIsRegex"
-                  type="checkbox"
-                  class="h-4 w-4 rounded border-gray-300 text-brand-500 focus:ring-brand-400 dark:border-gray-600 dark:bg-gray-800"
-                />
-                正则
-              </label>
+              <div class="flex items-center gap-2 pb-2 text-sm text-gray-600 dark:text-gray-300">
+                <span>正则</span>
+                <button
+                  type="button"
+                  role="switch"
+                  :aria-checked="newFilterIsRegex"
+                  class="relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition"
+                  :class="newFilterIsRegex ? 'bg-brand-500' : 'bg-gray-300 dark:bg-gray-700'"
+                  @click="newFilterIsRegex = !newFilterIsRegex"
+                >
+                  <span
+                    class="inline-block h-4 w-4 transform rounded-full bg-white transition"
+                    :class="newFilterIsRegex ? 'translate-x-6' : 'translate-x-1'"
+                  ></span>
+                </button>
+              </div>
               <button
                 type="button"
                 class="rounded-lg bg-brand-500 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-brand-600 disabled:opacity-60"
@@ -353,7 +361,9 @@ watch(
                 :key="rule.id"
                 class="flex items-center gap-3 rounded-xl border border-gray-200 bg-white p-3 dark:border-gray-800 dark:bg-white/[0.03]"
               >
-                <code class="min-w-0 flex-1 truncate font-mono text-xs text-gray-700 dark:text-gray-300" :title="rule.pattern">{{ rule.pattern }}</code>
+                <Tooltip :content="rule.pattern" placement="bottom-start" class="min-w-0 flex-1">
+                  <code class="block truncate font-mono text-xs text-gray-700 dark:text-gray-300">{{ rule.pattern }}</code>
+                </Tooltip>
                 <span
                   class="shrink-0 inline-flex items-center rounded-full px-2 py-0.5 text-xs"
                   :class="

@@ -18,6 +18,7 @@
  *   POST   /upstreams/:id/refresh  手动刷新工具列表
  */
 import request from '@/api/request'
+import type { ToolDef } from '@/api/tools'
 
 /** 上游 MCP 传输类型，与后端 domain.TransportType 对齐。 */
 export type TransportType = 'stdio' | 'sse' | 'streamable-http' | 'websocket'
@@ -115,6 +116,13 @@ interface ListUpstreamsResponse {
   upstreams: Upstream[] | null
 }
 
+export interface UpstreamToolsResult {
+  id: string
+  tools: ToolDef[]
+  count: number
+  updatedAt?: string | null
+}
+
 /**
  * 列出全部上游 MCP 及其连接状态（Req 2.3、2.8）。
  * 后端可能返回 null（空集合），此处归一化为空数组。
@@ -166,4 +174,17 @@ export async function refreshUpstream(id: string): Promise<number> {
     `/upstreams/${encodeURIComponent(id)}/refresh`,
   )
   return res.data?.count ?? 0
+}
+
+/** 读取某个上游 MCP 当前缓存的工具列表。 */
+export async function listUpstreamTools(id: string): Promise<UpstreamToolsResult> {
+  const res = await request.get<UpstreamToolsResult>(
+    `/upstreams/${encodeURIComponent(id)}/tools`,
+  )
+  return {
+    id: res.data?.id ?? id,
+    tools: res.data?.tools ?? [],
+    count: res.data?.count ?? 0,
+    updatedAt: res.data?.updatedAt ?? null,
+  }
 }

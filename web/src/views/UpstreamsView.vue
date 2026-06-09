@@ -8,7 +8,7 @@
  * 风格：Tailwind 工具类 + TailAdmin 组件风格（卡片、徽章、按钮、分页）；
  * 响应式：分页条数来自 useBreakpoint，小屏单列，大屏提升卡片密度。
  */
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import AdminLayout from '@/components/layout/AdminLayout.vue'
 import PageBreadcrumb from '@/components/common/PageBreadcrumb.vue'
 import ConnStateBadge from '@/components/upstreams/ConnStateBadge.vue'
@@ -19,18 +19,21 @@ import {
   listUpstreams,
   setUpstreamEnabled,
   deleteUpstream,
+  listUpstreamTools,
   reorderUpstreams,
   refreshUpstream,
   reconnectUpstream,
   TRANSPORT_OPTIONS,
   type Upstream,
 } from '@/api/upstreams'
+import type { ToolDef } from '@/api/tools'
 import type { PrefillForm } from '@/api/templates'
 
 const { pageSize } = useBreakpoint()
 
 /** 全量上游列表（按 sortOrder 升序）。 */
 const upstreams = ref<Upstream[]>([])
+const toolCounts = ref<Record<string, number>>({})
 /** 列表加载/错误状态。 */
 const loading = ref(false)
 const errorMessage = ref('')
@@ -59,6 +62,16 @@ const sortSelectedID = ref('')
 const sortTargetPosition = ref('')
 const sortMoveMessage = ref('')
 
+const toolModalOpen = ref(false)
+const toolModalUpstream = ref<Upstream | null>(null)
+const toolModalTools = ref<ToolDef[]>([])
+const toolModalUpdatedAt = ref<string | null>(null)
+const toolModalLoading = ref(false)
+const toolModalError = ref('')
+
+let statusPollTimer: number | undefined
+let statusPollingUntil = 0
+
 /** 总页数。 */
 const totalPages = computed(() => Math.max(1, Math.ceil(upstreams.value.length / pageSize.value)))
 
@@ -72,6 +85,7 @@ const allTags = computed(() => normalizeTags(upstreams.value.flatMap((up) => up.
 const nextSortOrder = computed(
   () => upstreams.value.reduce((max, up) => Math.max(max, up.config.sortOrder), -1) + 1,
 )
+const hasConnectingUpstream = computed(() => upstreams.value.some((up) => up.state === 'connecting'))
 
 function normalizeTags(tags: string[]): string[] {
   const seen = new Set<string>()
@@ -114,22 +128,61 @@ function showToast(msg: string): void {
 }
 
 /** 加载上游列表（按 sortOrder 排序）。 */
-async function loadUpstreams(): Promise<void> {
-  loading.value = true
+async function loadUpstreams(showLoading = true): Promise<void> {
+  if (showLoading) loading.value = true
   errorMessage.value = ''
   try {
     const list = await listUpstreams()
     list.sort((a, b) => a.config.sortOrder - b.config.sortOrder)
     upstreams.value = list
+    await loadToolCounts(list)
     if (currentPage.value > totalPages.value) currentPage.value = totalPages.value
+    if (hasConnectingUpstream.value) ensureStatusPolling(60_000)
   } catch (err) {
     errorMessage.value = err instanceof Error ? err.message : '加载上游列表失败'
   } finally {
-    loading.value = false
+    if (showLoading) loading.value = false
   }
 }
 
 onMounted(loadUpstreams)
+onUnmounted(stopStatusPolling)
+
+async function loadToolCounts(list: Upstream[]): Promise<void> {
+  const next = { ...toolCounts.value }
+  const results = await Promise.allSettled(
+    list.map(async (up) => {
+      const result = await listUpstreamTools(up.id)
+      return [up.id, result.count] as const
+    }),
+  )
+  for (const result of results) {
+    if (result.status === 'fulfilled') {
+      const [id, count] = result.value
+      next[id] = count
+    }
+  }
+  toolCounts.value = next
+}
+
+function ensureStatusPolling(durationMs: number): void {
+  statusPollingUntil = Math.max(statusPollingUntil, Date.now() + durationMs)
+  if (statusPollTimer !== undefined) return
+  statusPollTimer = window.setInterval(() => {
+    if (!hasConnectingUpstream.value && Date.now() > statusPollingUntil) {
+      stopStatusPolling()
+      return
+    }
+    void loadUpstreams(false)
+  }, 3000)
+}
+
+function stopStatusPolling(): void {
+  if (statusPollTimer !== undefined) {
+    window.clearInterval(statusPollTimer)
+    statusPollTimer = undefined
+  }
+}
 
 /** 打开新建抽屉（手动）。 */
 function openCreate(): void {
@@ -160,6 +213,7 @@ async function onSaved(): Promise<void> {
   editing.value = null
   showToast('保存成功')
   await loadUpstreams()
+  ensureStatusPolling(60_000)
 }
 
 /** 启用/停用切换（Req 3.1、3.2）。 */
@@ -170,6 +224,7 @@ async function toggleEnabled(up: Upstream): Promise<void> {
   try {
     await setUpstreamEnabled(up.id, !up.config.enabled)
     await loadUpstreams()
+    if (!up.config.enabled) ensureStatusPolling(45_000)
   } catch (err) {
     showToast(err instanceof Error ? err.message : '操作失败')
   } finally {
@@ -184,6 +239,7 @@ async function refresh(up: Upstream): Promise<void> {
   setBusy(key, true)
   try {
     const count = await refreshUpstream(up.id)
+    toolCounts.value = { ...toolCounts.value, [up.id]: count }
     showToast(`已刷新「${up.config.name}」，共 ${count} 个工具`)
     await loadUpstreams()
   } catch (err) {
@@ -202,10 +258,46 @@ async function reconnect(up: Upstream): Promise<void> {
     await reconnectUpstream(up.id)
     showToast(`已触发「${up.config.name}」重连`)
     await loadUpstreams()
+    ensureStatusPolling(60_000)
   } catch (err) {
     showToast(err instanceof Error ? err.message : '重连失败')
   } finally {
     setBusy(key, false)
+  }
+}
+
+function formatToolUpdatedAt(value: string | null): string {
+  if (value === null || value === '') return '暂无同步时间'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '暂无同步时间'
+  return date.toLocaleString('zh-CN', { hour12: false })
+}
+
+function schemaPreview(schema: unknown): string {
+  if (schema === null || schema === undefined) return '{}'
+  try {
+    return JSON.stringify(schema)
+  } catch {
+    return String(schema)
+  }
+}
+
+async function openToolModal(up: Upstream): Promise<void> {
+  toolModalOpen.value = true
+  toolModalUpstream.value = up
+  toolModalTools.value = []
+  toolModalUpdatedAt.value = null
+  toolModalError.value = ''
+  toolModalLoading.value = true
+  try {
+    const result = await listUpstreamTools(up.id)
+    toolModalTools.value = result.tools
+    toolModalUpdatedAt.value = result.updatedAt ?? null
+    toolCounts.value = { ...toolCounts.value, [up.id]: result.count }
+  } catch (err) {
+    toolModalError.value = err instanceof Error ? err.message : '加载工具列表失败'
+  } finally {
+    toolModalLoading.value = false
   }
 }
 
@@ -390,7 +482,7 @@ function goPage(p: number): void {
           type="button"
           class="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 px-3.5 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:opacity-60 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
           :disabled="loading"
-          @click="loadUpstreams"
+          @click="() => loadUpstreams()"
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
             <path
@@ -539,38 +631,47 @@ function goPage(p: number): void {
 
           <!-- 操作 -->
           <div
-            class="mt-auto flex flex-wrap items-center justify-end gap-1.5 border-t border-gray-100 pt-3 dark:border-gray-800"
+            class="mt-auto flex flex-wrap items-center justify-between gap-2 border-t border-gray-100 pt-3 dark:border-gray-800"
           >
             <button
               type="button"
-              class="rounded-lg px-2.5 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-100 disabled:opacity-50 dark:text-gray-300 dark:hover:bg-gray-800"
-              :disabled="isBusy(up.id, 'refresh')"
-              @click="refresh(up)"
+              class="rounded-lg bg-gray-50 px-2.5 py-1.5 text-xs font-medium text-gray-600 transition hover:bg-brand-50 hover:text-brand-600 dark:bg-white/5 dark:text-gray-300 dark:hover:bg-brand-500/10 dark:hover:text-brand-400"
+              @click="openToolModal(up)"
             >
-              {{ isBusy(up.id, 'refresh') ? '刷新中…' : '刷新' }}
+              工具 {{ toolCounts[up.id] ?? 0 }}
             </button>
-            <button
-              type="button"
-              class="rounded-lg px-2.5 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-100 disabled:opacity-50 dark:text-gray-300 dark:hover:bg-gray-800"
-              :disabled="isBusy(up.id, 'reconnect')"
-              @click="reconnect(up)"
-            >
-              {{ isBusy(up.id, 'reconnect') ? '重连中…' : '重连' }}
-            </button>
-            <button
-              type="button"
-              class="text-brand-600 hover:bg-brand-50 dark:text-brand-400 dark:hover:bg-brand-500/10 rounded-lg px-2.5 py-1.5 text-xs font-medium"
-              @click="openEdit(up)"
-            >
-              编辑
-            </button>
-            <button
-              type="button"
-              class="text-error-600 hover:bg-error-50 dark:text-error-400 dark:hover:bg-error-500/10 rounded-lg px-2.5 py-1.5 text-xs font-medium"
-              @click="askDelete(up)"
-            >
-              删除
-            </button>
+            <div class="flex flex-wrap items-center justify-end gap-1.5">
+              <button
+                type="button"
+                class="rounded-lg px-2.5 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-100 disabled:opacity-50 dark:text-gray-300 dark:hover:bg-gray-800"
+                :disabled="isBusy(up.id, 'refresh')"
+                @click="refresh(up)"
+              >
+                {{ isBusy(up.id, 'refresh') ? '刷新中…' : '刷新' }}
+              </button>
+              <button
+                type="button"
+                class="rounded-lg px-2.5 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-100 disabled:opacity-50 dark:text-gray-300 dark:hover:bg-gray-800"
+                :disabled="isBusy(up.id, 'reconnect')"
+                @click="reconnect(up)"
+              >
+                {{ isBusy(up.id, 'reconnect') ? '重连中…' : '重连' }}
+              </button>
+              <button
+                type="button"
+                class="text-brand-600 hover:bg-brand-50 dark:text-brand-400 dark:hover:bg-brand-500/10 rounded-lg px-2.5 py-1.5 text-xs font-medium"
+                @click="openEdit(up)"
+              >
+                编辑
+              </button>
+              <button
+                type="button"
+                class="text-error-600 hover:bg-error-50 dark:text-error-400 dark:hover:bg-error-500/10 rounded-lg px-2.5 py-1.5 text-xs font-medium"
+                @click="askDelete(up)"
+              >
+                删除
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -618,6 +719,88 @@ function goPage(p: number): void {
       @close="marketOpen = false"
       @select="onTemplateSelected"
     />
+
+    <!-- 工具列表 -->
+    <transition name="fade">
+      <div
+        v-if="toolModalOpen && toolModalUpstream !== null"
+        class="fixed inset-0 z-[100001] flex items-center justify-center bg-gray-900/40 p-4 backdrop-blur-[1px]"
+        @click.self="toolModalOpen = false"
+      >
+        <div
+          class="flex max-h-[86vh] w-full max-w-3xl flex-col rounded-2xl border border-gray-200 bg-white shadow-xl dark:border-gray-800 dark:bg-gray-900"
+        >
+          <div
+            class="flex items-center justify-between gap-3 border-b border-gray-200 px-5 py-4 dark:border-gray-800"
+          >
+            <div class="min-w-0">
+              <h3 class="truncate text-base font-semibold text-gray-800 dark:text-white/90">
+                {{ toolModalUpstream.config.name }} 的工具
+              </h3>
+              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                {{ formatToolUpdatedAt(toolModalUpdatedAt) }} · 共 {{ toolModalTools.length }} 个
+              </p>
+            </div>
+            <button
+              v-tooltip:bottom-end="'关闭'"
+              type="button"
+              class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-800"
+              aria-label="关闭"
+              @click="toolModalOpen = false"
+            >
+              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none">
+                <path
+                  d="M6 6l12 12M6 18L18 6"
+                  stroke="currentColor"
+                  stroke-width="1.8"
+                  stroke-linecap="round"
+                />
+              </svg>
+            </button>
+          </div>
+
+          <div class="custom-scrollbar flex-1 overflow-y-auto p-5">
+            <p
+              v-if="toolModalError !== ''"
+              class="mb-4 rounded-lg bg-error-50 px-4 py-2.5 text-sm text-error-600 dark:bg-error-500/10 dark:text-error-400"
+            >
+              {{ toolModalError }}
+            </p>
+            <div v-if="toolModalLoading" class="py-12 text-center text-sm text-gray-400">
+              加载中…
+            </div>
+            <div
+              v-else-if="toolModalTools.length === 0"
+              class="rounded-xl border border-dashed border-gray-300 px-4 py-10 text-center text-sm text-gray-400 dark:border-gray-700"
+            >
+              暂无工具缓存，可先刷新工具列表
+            </div>
+            <div v-else class="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <article
+                v-for="tool in toolModalTools"
+                :key="`${tool.upstreamId}:${tool.originalName}:${tool.name}`"
+                class="rounded-xl border border-gray-200 p-4 dark:border-gray-800 dark:bg-white/[0.03]"
+              >
+                <div class="min-w-0">
+                  <p class="truncate text-sm font-semibold text-gray-800 dark:text-white/90">
+                    {{ tool.name }}
+                  </p>
+                  <p class="mt-1 truncate font-mono text-xs text-gray-400">
+                    {{ tool.originalName }}
+                  </p>
+                </div>
+                <p class="mt-3 line-clamp-3 text-sm leading-6 text-gray-500 dark:text-gray-400">
+                  {{ tool.description || '暂无描述' }}
+                </p>
+                <p class="mt-3 truncate rounded-lg bg-gray-50 px-3 py-2 font-mono text-xs text-gray-500 dark:bg-gray-800/60 dark:text-gray-400">
+                  {{ schemaPreview(tool.inputSchema) }}
+                </p>
+              </article>
+            </div>
+          </div>
+        </div>
+      </div>
+    </transition>
 
     <!-- 全量排序 -->
     <transition name="fade">

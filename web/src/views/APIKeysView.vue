@@ -262,9 +262,11 @@ async function copyKey(key: APIKey): Promise<void> {
           <!-- 头部：名称 + 启停 -->
           <div class="mb-3 flex items-start justify-between gap-3">
             <div class="min-w-0">
-              <div class="truncate font-medium text-gray-800 dark:text-white/90" :title="key.name">
-                {{ key.name }}
-              </div>
+              <Tooltip :content="key.name" placement="bottom-start">
+                <div class="truncate font-medium text-gray-800 dark:text-white/90">
+                  {{ key.name }}
+                </div>
+              </Tooltip>
               <div class="mt-1 flex flex-wrap items-center gap-1.5">
                 <span
                   class="inline-flex items-center rounded-full px-2 py-0.5 text-xs"
@@ -308,7 +310,8 @@ async function copyKey(key: APIKey): Promise<void> {
             <button
               type="button"
               class="shrink-0 rounded-md p-1.5 text-gray-500 transition hover:bg-gray-200 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-200"
-              :title="isRevealed(key.id) ? '隐藏' : '查看'"
+              v-tooltip:bottom="isRevealed(key.id) ? '隐藏' : '查看'"
+              :aria-label="isRevealed(key.id) ? '隐藏 API Key' : '查看 API Key'"
               @click="toggleReveal(key.id)"
             >
               <!-- 眼睛（显示）/ 斜杠眼睛（隐藏） -->
@@ -323,7 +326,8 @@ async function copyKey(key: APIKey): Promise<void> {
             <button
               type="button"
               class="shrink-0 rounded-md p-1.5 text-gray-500 transition hover:bg-gray-200 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-200"
-              title="复制"
+              v-tooltip:bottom="'复制'"
+              aria-label="复制 API Key"
               @click="copyKey(key)"
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
