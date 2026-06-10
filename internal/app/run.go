@@ -56,6 +56,11 @@ func (a *App) Run(ctx context.Context) error {
 
 // startBackground 启动各后台服务（Req 7、16）。
 func (a *App) startBackground(ctx context.Context) {
+	// 恢复数据库中已有上游的连接状态机登记，确保进程重启后可直接重连与展示状态。
+	if err := a.mgr.RestoreConnections(ctx); err != nil {
+		a.logger.Error("恢复上游连接状态失败，后续启用或重连时将按需恢复", "error", err)
+	}
+
 	// 统计异步落库 worker 与保留期清理（Req 16.8、16.10）。
 	a.statRecorder.Start(ctx)
 	a.statCleaner.Start(ctx)

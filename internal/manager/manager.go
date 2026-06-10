@@ -270,6 +270,53 @@ func (m *Manager) UpdateWithCredentialAction(ctx context.Context, id string, cfg
 	return m.toUpstream(row), nil
 }
 
+// RestoreConnections 从持久化仓储恢复全部上游的连接状态机登记。
+//
+// 该方法用于进程启动后把数据库中已有的上游重新放回内存连接池；配置中的鉴权凭证会
+// 解密后仅保存在内存中，供连接拨号使用。已启用上游会启动连接循环，停用上游仅登记
+// 为 unavailable，便于后续启用/重连时复用同一条恢复路径。
+func (m *Manager) RestoreConnections(ctx context.Context) error {
+	rows, err := m.repo.List(ctx)
+	if err != nil {
+		return err
+	}
+	for i := range rows {
+		cfg, err := m.configFromRow(&rows[i])
+		if err != nil {
+			return err
+		}
+		m.rebuildConnection(rows[i].ID, cfg)
+	}
+	return nil
+}
+
+func (m *Manager) restoreConnectionFromStore(ctx context.Context, id string, enabled bool) error {
+	row, err := m.repo.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	cfg, err := m.configFromRow(row)
+	if err != nil {
+		return err
+	}
+	cfg.Enabled = enabled
+	m.rebuildConnection(id, cfg)
+	return nil
+}
+
+func (m *Manager) configFromRow(row *store.UpstreamRow) (domain.UpstreamConfig, error) {
+	cfg := row.Config
+	if len(row.CredentialEnc) == 0 {
+		return cfg, nil
+	}
+	plain, err := m.enc.Decrypt(row.CredentialEnc)
+	if err != nil {
+		return domain.UpstreamConfig{}, err
+	}
+	cfg.Credential = string(plain)
+	return cfg, nil
+}
+
 func (m *Manager) currentCredential(ctx context.Context, id string) (string, error) {
 	m.connsMu.Lock()
 	c := m.conns[id]
@@ -285,14 +332,11 @@ func (m *Manager) currentCredential(ctx context.Context, id string) (string, err
 	if err != nil {
 		return "", err
 	}
-	if len(row.CredentialEnc) == 0 {
-		return "", nil
-	}
-	plain, err := m.enc.Decrypt(row.CredentialEnc)
+	cfg, err := m.configFromRow(row)
 	if err != nil {
 		return "", err
 	}
-	return string(plain), nil
+	return cfg.Credential, nil
 }
 
 // Delete 删除某个已存在的上游 MCP 服务并级联清理（Req 2.5、2.6、6.6）。
@@ -337,11 +381,12 @@ func (m *Manager) SetEnabled(ctx context.Context, id string, enabled bool) error
 	m.connsMu.Lock()
 	c := m.conns[id]
 	m.connsMu.Unlock()
-	if c != nil {
-		cfg := c.config()
-		cfg.Enabled = enabled
-		m.rebuildConnection(id, cfg)
+	if c == nil {
+		return m.restoreConnectionFromStore(ctx, id, enabled)
 	}
+	cfg := c.config()
+	cfg.Enabled = enabled
+	m.rebuildConnection(id, cfg)
 	return nil
 }
 
@@ -416,11 +461,8 @@ func (m *Manager) GetState(id string) (domain.ConnState, string) {
 
 // Reconnect 由管理员手动发起重连（Req 5.6）。
 //
-// 行为按连接当前状态分两类：
-//   - 若该连接处于 suspended（连续失败达阈值已暂停自动重试）：清零连续失败计数、
-//     置为 connecting 并唤醒重试循环，使其立即重新拨号并获得全新的重试预算；
-//   - 若重试循环未运行（如停用后被启用前的占位、或冷启动尚未启动）：按连接持有配置
-//     重新启动重试退避循环。
+// 行为：按连接持有的最新配置停止旧循环并重新启动，使可用、退避中、挂起中的连接
+// 都能真正重新拨号，而不是仅修改状态或唤醒等待。
 //
 // 标识不存在返回 NOT_FOUND。
 func (m *Manager) Reconnect(ctx context.Context, id string) error {
@@ -428,17 +470,9 @@ func (m *Manager) Reconnect(ctx context.Context, id string) error {
 	c := m.conns[id]
 	m.connsMu.Unlock()
 	if c == nil {
-		return domain.NewError(domain.CodeNotFound, "上游 MCP 不存在或未登记连接")
+		return m.restoreConnectionFromStore(ctx, id, true)
 	}
 
-	if c.isRunning() {
-		// 循环在运行（可能在 suspended 处阻塞或在退避等待）：清零失败预算并唤醒。
-		c.resetForManual()
-		c.signalWake()
-		return nil
-	}
-
-	// 循环未运行：按当前配置重新启动重试退避循环。
 	cfg := c.config()
 	cfg.Enabled = true
 	m.rebuildConnection(id, cfg)

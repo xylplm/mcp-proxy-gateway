@@ -160,6 +160,7 @@ func (a *App) build(enc *crypto.Service, envCfg config.EnvConfig) error {
 		Upstream:        mgr,
 		Refresher:       refresher,
 		ToolCache:       toolCache,
+		CacheEnsurer:    a.syncer,
 		Aggregation:     agg,
 		RuleValidator:   ruleEngine,
 		AliasStore:      repos.Alias,

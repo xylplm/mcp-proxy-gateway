@@ -68,6 +68,14 @@ type ToolCacheStore interface {
 	Get(ctx context.Context, upstreamID string) (tools []domain.ToolDef, updatedAt time.Time, found bool)
 }
 
+// ToolCacheEnsurer 是缓存缺失时按需补拉某上游工具列表的窄接口。
+//
+// *syncsvc.PeriodicSyncer 满足该接口。
+type ToolCacheEnsurer interface {
+	// EnsureCached 在指定上游缺失工具缓存时触发一次拉取。
+	EnsureCached(ctx context.Context, upstreamID string) (ran bool, err error)
+}
+
 // AggregationToolService 是管理台读取聚合后工具列表的窄接口。
 type AggregationToolService interface {
 	BuildToolSet(ctx context.Context, apiKeyID string) ([]domain.ToolDef, error)
@@ -247,6 +255,8 @@ type Router struct {
 	refresher ToolRefresher
 	// toolCache 为管理台读取上游已缓存工具列表的仓储。
 	toolCache ToolCacheStore
+	// cacheEnsurer 为工具缓存缺失时的按需补拉器。
+	cacheEnsurer ToolCacheEnsurer
 	// aggregation 为管理台读取聚合后真实工具列表的服务。
 	aggregation AggregationToolService
 	// ruleValidator 为别名/屏蔽规则的保存前校验器（领域规则引擎）。
@@ -284,6 +294,7 @@ type Deps struct {
 	Upstream        UpstreamService
 	Refresher       ToolRefresher
 	ToolCache       ToolCacheStore
+	CacheEnsurer    ToolCacheEnsurer
 	Aggregation     AggregationToolService
 	RuleValidator   RuleValidator
 	AliasStore      AliasStore
@@ -307,6 +318,7 @@ func NewRouter(d Deps) *Router {
 		upstream:        d.Upstream,
 		refresher:       d.Refresher,
 		toolCache:       d.ToolCache,
+		cacheEnsurer:    d.CacheEnsurer,
 		aggregation:     d.Aggregation,
 		ruleValidator:   d.RuleValidator,
 		aliasStore:      d.AliasStore,

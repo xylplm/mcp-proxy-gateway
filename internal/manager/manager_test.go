@@ -5,7 +5,9 @@ import (
 	"errors"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
 	"github.com/myGithub/mcp-proxy-gateway/internal/store"
@@ -26,6 +28,83 @@ import (
 type sortOrderCall struct {
 	id        string
 	sortOrder int
+}
+
+type reconnectTestDialer struct {
+	mu     sync.Mutex
+	conns  []*reconnectTestConn
+	dialCh chan *reconnectTestConn
+}
+
+func newReconnectTestDialer() *reconnectTestDialer {
+	return &reconnectTestDialer{dialCh: make(chan *reconnectTestConn, 4)}
+}
+
+func (d *reconnectTestDialer) Dial(ctx context.Context, id string, cfg domain.UpstreamConfig) (Conn, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	conn := &reconnectTestConn{closed: make(chan struct{})}
+	d.mu.Lock()
+	d.conns = append(d.conns, conn)
+	d.mu.Unlock()
+	d.dialCh <- conn
+	return conn, nil
+}
+
+func (d *reconnectTestDialer) dialCount() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return len(d.conns)
+}
+
+type reconnectTestConn struct {
+	closeOnce sync.Once
+	closed    chan struct{}
+}
+
+func (c *reconnectTestConn) Wait(ctx context.Context) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func (c *reconnectTestConn) Close() error {
+	c.closeOnce.Do(func() { close(c.closed) })
+	return nil
+}
+
+func waitReconnectDial(t *testing.T, d *reconnectTestDialer, label string) *reconnectTestConn {
+	t.Helper()
+	select {
+	case conn := <-d.dialCh:
+		return conn
+	case <-time.After(2 * time.Second):
+		t.Fatalf("等待 %s 拨号超时", label)
+		return nil
+	}
+}
+
+func waitReconnectClosed(t *testing.T, conn *reconnectTestConn, label string) {
+	t.Helper()
+	select {
+	case <-conn.closed:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("等待 %s 连接关闭超时", label)
+	}
+}
+
+func waitManagerState(t *testing.T, m *Manager, id string, want domain.ConnState) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		state, _ := m.GetState(id)
+		if state == want {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	state, lastErr := m.GetState(id)
+	t.Fatalf("等待上游 %s 状态变为 %s 超时，实际 state=%s lastErr=%q", id, want, state, lastErr)
 }
 
 // testUpstreamRepo 是 UpstreamRepository 的内存替身。
@@ -729,7 +808,8 @@ func TestSetEnabledPassesThrough(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			repo := &testUpstreamRepo{}
+			row := testUpstreamRowWithID("up-x")
+			repo := &testUpstreamRepo{getRow: &row}
 			m := New(repo, &testEncryptor{}, &testToolCacheCleaner{}, nil, nil)
 
 			if err := m.SetEnabled(context.Background(), "up-x", tc.enabled); err != nil {
@@ -824,4 +904,103 @@ func TestReorderListErrorPassthrough(t *testing.T) {
 	if len(repo.setSortOrderCalls) != 0 {
 		t.Errorf("列举失败时不应持久化排序，实际 %d 次", len(repo.setSortOrderCalls))
 	}
+}
+
+func TestReconnectRestartsRunningConnection(t *testing.T) {
+	cfg := testValidConfig()
+	row := store.UpstreamRow{}
+	row.ID = "up-reconnect"
+	row.Config = cfg
+	row.Config.Credential = ""
+	repo := &testUpstreamRepo{createRow: &row}
+	dialer := newReconnectTestDialer()
+	m := New(repo, &testEncryptor{}, &testToolCacheCleaner{}, nil, nil, WithDialer(dialer))
+	defer m.Shutdown()
+
+	if _, err := m.Create(context.Background(), cfg); err != nil {
+		t.Fatalf("创建上游不应失败：%v", err)
+	}
+	first := waitReconnectDial(t, dialer, "首次")
+	waitManagerState(t, m, "up-reconnect", domain.ConnAvailable)
+
+	if err := m.Reconnect(context.Background(), "up-reconnect"); err != nil {
+		t.Fatalf("重连不应失败：%v", err)
+	}
+	waitReconnectClosed(t, first, "旧")
+	second := waitReconnectDial(t, dialer, "重连后")
+	if second == first {
+		t.Fatal("重连后应创建新连接，而不是复用旧连接")
+	}
+	waitManagerState(t, m, "up-reconnect", domain.ConnAvailable)
+	if dialer.dialCount() != 2 {
+		t.Fatalf("期望重连前后共拨号 2 次，实际 %d 次", dialer.dialCount())
+	}
+}
+
+func TestRestoreConnectionsRegistersPersistedUpstreams(t *testing.T) {
+	cfg := testValidConfig()
+	cfg.Credential = ""
+	row := testUpstreamRowWithID("up-restore")
+	row.Config = cfg
+	row.CredentialEnc = []byte(testEncPrefix + "stored-token")
+	repo := &testUpstreamRepo{listRows: []store.UpstreamRow{row}}
+	dialer := newReconnectTestDialer()
+	m := New(repo, &testEncryptor{}, &testToolCacheCleaner{}, nil, nil, WithDialer(dialer))
+	defer m.Shutdown()
+
+	if err := m.RestoreConnections(context.Background()); err != nil {
+		t.Fatalf("恢复已有连接不应失败：%v", err)
+	}
+	waitReconnectDial(t, dialer, "恢复")
+	waitManagerState(t, m, "up-restore", domain.ConnAvailable)
+
+	m.connsMu.Lock()
+	conn := m.conns["up-restore"]
+	m.connsMu.Unlock()
+	if conn == nil {
+		t.Fatal("恢复后应登记连接条目")
+	}
+	if got := conn.config().Credential; got != "stored-token" {
+		t.Fatalf("恢复连接应解密凭证，实际 %q", got)
+	}
+}
+
+func TestSetEnabledRestoresMissingConnectionFromStore(t *testing.T) {
+	cfg := testValidConfig()
+	cfg.Enabled = false
+	cfg.Credential = ""
+	row := testUpstreamRowWithID("up-enable")
+	row.Config = cfg
+	row.CredentialEnc = []byte(testEncPrefix + "stored-token")
+	repo := &testUpstreamRepo{getRow: &row}
+	dialer := newReconnectTestDialer()
+	m := New(repo, &testEncryptor{}, &testToolCacheCleaner{}, nil, nil, WithDialer(dialer))
+	defer m.Shutdown()
+
+	if err := m.SetEnabled(context.Background(), "up-enable", true); err != nil {
+		t.Fatalf("启用未登记连接应从仓储恢复，不应失败：%v", err)
+	}
+	waitReconnectDial(t, dialer, "启用恢复")
+	waitManagerState(t, m, "up-enable", domain.ConnAvailable)
+	if repo.setEnabledCall != 1 || repo.lastEnabledID != "up-enable" || !repo.lastEnabled {
+		t.Fatalf("启用状态应先持久化，calls=%d id=%q enabled=%v", repo.setEnabledCall, repo.lastEnabledID, repo.lastEnabled)
+	}
+}
+
+func TestReconnectRestoresMissingConnectionFromStore(t *testing.T) {
+	cfg := testValidConfig()
+	cfg.Credential = ""
+	row := testUpstreamRowWithID("up-recover-reconnect")
+	row.Config = cfg
+	row.CredentialEnc = []byte(testEncPrefix + "stored-token")
+	repo := &testUpstreamRepo{getRow: &row}
+	dialer := newReconnectTestDialer()
+	m := New(repo, &testEncryptor{}, &testToolCacheCleaner{}, nil, nil, WithDialer(dialer))
+	defer m.Shutdown()
+
+	if err := m.Reconnect(context.Background(), "up-recover-reconnect"); err != nil {
+		t.Fatalf("重连未登记但已持久化的上游应从仓储恢复，不应失败：%v", err)
+	}
+	waitReconnectDial(t, dialer, "重连恢复")
+	waitManagerState(t, m, "up-recover-reconnect", domain.ConnAvailable)
 }

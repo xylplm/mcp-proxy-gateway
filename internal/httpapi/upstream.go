@@ -224,18 +224,30 @@ func (r *Router) refreshUpstream(c *gin.Context) {
 	respondOK(c, gin.H{"id": c.Param("id"), "tools": tools, "count": len(tools)})
 }
 
-// listUpstreamTools 返回某上游当前缓存的工具列表。
+// listUpstreamTools 返回某上游当前缓存的工具列表；缓存缺失时按需补拉一次。
 func (r *Router) listUpstreamTools(c *gin.Context) {
 	if r.toolCache == nil {
 		respondServiceUnavailable(c, "工具缓存服务未就绪")
 		return
 	}
-	tools, updatedAt, found := r.toolCache.Get(c.Request.Context(), c.Param("id"))
+	id := c.Param("id")
+	tools, updatedAt, found := r.toolCache.Get(c.Request.Context(), id)
 	if !found {
-		respondOK(c, gin.H{"id": c.Param("id"), "tools": []domain.ToolDef{}, "count": 0, "updatedAt": nil})
-		return
+		if r.cacheEnsurer == nil {
+			respondOK(c, gin.H{"id": id, "tools": []domain.ToolDef{}, "count": 0, "updatedAt": nil})
+			return
+		}
+		if _, err := r.cacheEnsurer.EnsureCached(c.Request.Context(), id); err != nil {
+			respondError(c, err)
+			return
+		}
+		tools, updatedAt, found = r.toolCache.Get(c.Request.Context(), id)
+		if !found {
+			respondOK(c, gin.H{"id": id, "tools": []domain.ToolDef{}, "count": 0, "updatedAt": nil})
+			return
+		}
 	}
-	respondOK(c, gin.H{"id": c.Param("id"), "tools": tools, "count": len(tools), "updatedAt": updatedAt})
+	respondOK(c, gin.H{"id": id, "tools": tools, "count": len(tools), "updatedAt": updatedAt})
 }
 
 // respondServiceUnavailable 以 503 返回服务未就绪错误，用于依赖未接线时的防御性拒绝。
