@@ -140,6 +140,10 @@ interface CallRecordResponse {
   record: CallRecord
 }
 
+interface ClearRecordsResponse {
+  deleted: number
+}
+
 /** 构造仅含非空 start/end 的查询参数对象，避免传空串触发后端格式校验。 */
 function buildRangeParams(range: TimeRangeQuery): Record<string, string> {
   const params: Record<string, string> = {}
@@ -248,4 +252,9 @@ export async function listCallRecords(query: {
 export async function getCallRecord(id: number | string): Promise<CallRecord> {
   const res = await request.get<CallRecordResponse>(`/stats/calls/${encodeURIComponent(String(id))}`)
   return res.data.record
+}
+
+export async function clearCallRecords(): Promise<number> {
+  const res = await request.delete<ClearRecordsResponse>('/stats/calls')
+  return res.data?.deleted ?? 0
 }

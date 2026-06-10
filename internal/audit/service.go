@@ -43,9 +43,9 @@ type AuditRepository interface {
 	// Insert 写入一条审计日志并回填生成标识与发生时间。
 	Insert(ctx context.Context, rec store.AuditRecord) (store.AuditRecord, error)
 	// List 按发生时间倒序分页返回审计记录（page 从 1 起，pageSize 为每页条数）。
-	List(ctx context.Context, page, pageSize int) ([]store.AuditRecord, error)
+	List(ctx context.Context, page, pageSize int, query Query) ([]store.AuditRecord, error)
 	// Count 返回审计记录总数，供分页计算总页数使用。
-	Count(ctx context.Context) (int64, error)
+	Count(ctx context.Context, query Query) (int64, error)
 	// DeleteOlderThan 清理发生时间早于 cutoff 的审计记录，返回删除条数。
 	DeleteOlderThan(ctx context.Context, cutoff time.Time) (int64, error)
 }

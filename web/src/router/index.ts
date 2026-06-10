@@ -102,6 +102,15 @@ const router = createRouter({
       },
     },
     {
+      path: '/system-logs',
+      name: 'SystemLogs',
+      component: () => import('../views/SystemLogsView.vue'),
+      meta: {
+        title: '系统日志',
+        requiresAuth: true,
+      },
+    },
+    {
       path: '/api-service',
       name: 'APIService',
       component: () => import('../views/APIServiceView.vue'),

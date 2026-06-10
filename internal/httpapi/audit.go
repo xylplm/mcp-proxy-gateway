@@ -2,10 +2,13 @@ package httpapi
 
 import (
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/myGithub/mcp-proxy-gateway/internal/audit"
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
+	"github.com/myGithub/mcp-proxy-gateway/internal/store"
 )
 
 // 本文件实现审计日志分页查询端点（Req 22.4、17.5）：
@@ -37,7 +40,11 @@ func (r *Router) queryAudit(c *gin.Context) {
 	if !ok {
 		return
 	}
-	result, err := r.audit.List(c.Request.Context(), page, pageSize)
+	query, ok := parseAuditQuery(c)
+	if !ok {
+		return
+	}
+	result, err := r.audit.List(c.Request.Context(), page, pageSize, query)
 	if err != nil {
 		respondError(c, err)
 		return
@@ -48,6 +55,59 @@ func (r *Router) queryAudit(c *gin.Context) {
 		"pageSize": result.PageSize,
 		"total":    result.Total,
 	})
+}
+
+func parseAuditQuery(c *gin.Context) (audit.Query, bool) {
+	var query audit.Query
+	query.EventType = c.Query("eventType")
+	if !validAuditEventType(query.EventType) {
+		respondError(c, domain.NewValidationError("审计事件类型参数非法", map[string]string{
+			"eventType": "仅支持 login、create、update、delete、access_denied",
+		}))
+		return audit.Query{}, false
+	}
+
+	start, ok := parseOptionalRFC3339(c, "start")
+	if !ok {
+		return audit.Query{}, false
+	}
+	end, ok := parseOptionalRFC3339(c, "end")
+	if !ok {
+		return audit.Query{}, false
+	}
+	if !start.IsZero() && !end.IsZero() && start.After(end) {
+		respondError(c, domain.NewValidationError("审计时间范围参数非法", map[string]string{
+			"start": "开始时间不得晚于结束时间",
+		}))
+		return audit.Query{}, false
+	}
+	query.Start = start
+	query.End = end
+	return query, true
+}
+
+func validAuditEventType(eventType string) bool {
+	switch eventType {
+	case "", store.AuditEventLogin, store.AuditEventCreate, store.AuditEventUpdate, store.AuditEventDelete, store.AuditEventAccessDenied:
+		return true
+	default:
+		return false
+	}
+}
+
+func parseOptionalRFC3339(c *gin.Context, name string) (time.Time, bool) {
+	value := c.Query(name)
+	if value == "" {
+		return time.Time{}, true
+	}
+	t, err := time.Parse(timeLayout, value)
+	if err != nil {
+		respondError(c, domain.NewValidationError("时间参数非法", map[string]string{
+			name: "时间格式需为 RFC3339",
+		}))
+		return time.Time{}, false
+	}
+	return t, true
 }
 
 // parseOptionalInt 解析可选整数查询参数；缺省返回 0（交由下层收敛），非整数则以

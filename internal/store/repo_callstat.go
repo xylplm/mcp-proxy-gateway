@@ -270,6 +270,16 @@ func (r *CallStatRepo) GetRecord(ctx context.Context, id int64) (CallRecordView,
 	return records[0], nil
 }
 
+// ClearRecordsBefore removes call records not newer than cutoff.
+func (r *CallStatRepo) ClearRecordsBefore(ctx context.Context, cutoff time.Time) (int64, error) {
+	const q = `DELETE FROM call_stat WHERE called_at <= $1`
+	tag, err := r.pool.Exec(ctx, q, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
 // CountByUpstream 统计 [start, end] 闭区间内各上游 MCP 的调用条数（含成功失败）（Req 16.2、16.5）。
 //   - start 晚于 end 返回 CodeValidation（Req 16.7）。
 //   - 无记录返回空切片而非错误（Req 16.6）。

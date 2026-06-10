@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/audit"
 	"github.com/myGithub/mcp-proxy-gateway/internal/store"
@@ -14,14 +15,16 @@ import (
 
 // fakeAudit 是 AuditService 的内存实现，记录最近一次入参以便断言。
 type fakeAudit struct {
-	result  audit.PageResult
-	err     error
-	gotPage int
-	gotSize int
+	result   audit.PageResult
+	err      error
+	gotPage  int
+	gotSize  int
+	gotQuery audit.Query
 }
 
-func (f *fakeAudit) List(_ context.Context, page, pageSize int) (audit.PageResult, error) {
+func (f *fakeAudit) List(_ context.Context, page, pageSize int, query audit.Query) (audit.PageResult, error) {
 	f.gotPage, f.gotSize = page, pageSize
+	f.gotQuery = query
 	if f.err != nil {
 		return audit.PageResult{}, f.err
 	}
@@ -75,6 +78,23 @@ func TestQueryAuditDefaultParams(t *testing.T) {
 	}
 }
 
+func TestQueryAuditParsesFilters(t *testing.T) {
+	a := &fakeAudit{result: audit.PageResult{Records: []store.AuditRecord{}, Page: 1, PageSize: 20}}
+	e := newTestEngine(Deps{Audit: a})
+
+	w := doJSON(e, http.MethodGet, "/api/admin/audit?eventType=update&start=2024-05-01T00:00:00Z&end=2024-05-02T00:00:00Z", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("期望 HTTP 200，实际 %d，响应体 %s", w.Code, w.Body.String())
+	}
+	if a.gotQuery.EventType != store.AuditEventUpdate {
+		t.Fatalf("eventType 未透传：%+v", a.gotQuery)
+	}
+	wantStart := time.Date(2024, 5, 1, 0, 0, 0, 0, time.UTC)
+	if !a.gotQuery.Start.Equal(wantStart) {
+		t.Fatalf("start 未正确解析：%v", a.gotQuery.Start)
+	}
+}
+
 // TestQueryAuditInvalidPageMapsTo400 验证非整数分页参数返回字段级 400。
 func TestQueryAuditInvalidPageMapsTo400(t *testing.T) {
 	a := &fakeAudit{}
@@ -83,6 +103,22 @@ func TestQueryAuditInvalidPageMapsTo400(t *testing.T) {
 	w := doJSON(e, http.MethodGet, "/api/admin/audit?page=abc", "")
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("非法分页参数期望 HTTP 400，实际 %d", w.Code)
+	}
+}
+
+func TestQueryAuditInvalidFilterMapsTo400(t *testing.T) {
+	a := &fakeAudit{}
+	e := newTestEngine(Deps{Audit: a})
+
+	for _, path := range []string{
+		"/api/admin/audit?eventType=unknown",
+		"/api/admin/audit?start=bad-time",
+		"/api/admin/audit?start=2024-05-02T00:00:00Z&end=2024-05-01T00:00:00Z",
+	} {
+		w := doJSON(e, http.MethodGet, path, "")
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("%s 期望 HTTP 400，实际 %d", path, w.Code)
+		}
 	}
 }
 

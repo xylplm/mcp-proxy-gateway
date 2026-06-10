@@ -42,6 +42,13 @@ type StatQuerier interface {
 	ListRecords(ctx context.Context, limit int, afterID int64, afterAt time.Time) ([]store.CallRecordView, error)
 	// GetRecord 按 ID 返回单条调用记录详情。
 	GetRecord(ctx context.Context, id int64) (store.CallRecordView, error)
+	// ClearRecordsBefore 清空指定时刻及以前的调用记录。
+	ClearRecordsBefore(ctx context.Context, cutoff time.Time) (int64, error)
+}
+
+// PendingDropper 丢弃仍滞留在异步缓冲中的旧调用记录。
+type PendingDropper interface {
+	DropBefore(cutoff time.Time)
 }
 
 // ConfigProvider 是统计查询服务读取排行默认条数配置的窄接口。
@@ -67,17 +74,35 @@ type QueryService struct {
 	repo StatQuerier
 	// cfg 为配置存储，提供工具排行默认条数配置。
 	cfg ConfigProvider
+	// dropper 用于清空记录时同步丢弃异步缓冲中的旧数据；可为空。
+	dropper PendingDropper
+}
+
+// QueryOption 为查询服务可选配置。
+type QueryOption func(*QueryService)
+
+// WithPendingDropper 注入异步缓冲清理器。
+func WithPendingDropper(dropper PendingDropper) QueryOption {
+	return func(s *QueryService) {
+		s.dropper = dropper
+	}
 }
 
 // NewQueryService 构造统计查询服务。repo 与 cfg 均为必需依赖，任一为空时返回校验错误。
-func NewQueryService(repo StatQuerier, cfg ConfigProvider) (*QueryService, error) {
+func NewQueryService(repo StatQuerier, cfg ConfigProvider, opts ...QueryOption) (*QueryService, error) {
 	if repo == nil {
 		return nil, domain.NewError(domain.CodeValidation, "统计查询服务初始化失败：统计仓储为空")
 	}
 	if cfg == nil {
 		return nil, domain.NewError(domain.CodeValidation, "统计查询服务初始化失败：配置存储为空")
 	}
-	return &QueryService{repo: repo, cfg: cfg}, nil
+	svc := &QueryService{repo: repo, cfg: cfg}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(svc)
+		}
+	}
+	return svc, nil
 }
 
 // CountByUpstream 返回 [start, end] 闭区间内各上游 MCP 的调用条数（含成功失败）（Req 16.2、16.5）。
@@ -132,6 +157,15 @@ func (s *QueryService) ListRecords(ctx context.Context, limit int, afterID int64
 // GetRecord 按 ID 返回单条调用记录详情。
 func (s *QueryService) GetRecord(ctx context.Context, id int64) (store.CallRecordView, error) {
 	return s.repo.GetRecord(ctx, id)
+}
+
+// ClearRecords 清空调用记录，返回删除条数。
+func (s *QueryService) ClearRecords(ctx context.Context) (int64, error) {
+	cutoff := time.Now().UTC()
+	if s.dropper != nil {
+		s.dropper.DropBefore(cutoff)
+	}
+	return s.repo.ClearRecordsBefore(ctx, cutoff)
 }
 
 // resolveTopLimit 计算生效的工具排行返回条数（Req 16.3）。

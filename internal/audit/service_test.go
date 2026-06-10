@@ -37,6 +37,7 @@ type testAuditRepo struct {
 	// lastPage / lastPageSize 记录最近一次 List 传入的分页参数，供断言收敛行为。
 	lastPage     int
 	lastPageSize int
+	lastQuery    Query
 }
 
 func (r *testAuditRepo) Insert(_ context.Context, rec store.AuditRecord) (store.AuditRecord, error) {
@@ -73,10 +74,11 @@ func (r *testAuditRepo) DeleteOlderThan(_ context.Context, cutoff time.Time) (in
 
 // List 模拟仓储的倒序分页查询：按 OccurredAt 倒序、相同则按 ID 倒序，再套用偏移与限长。
 // 该实现与 *store.AuditRepo.List 的排序/分页语义一致，便于在内存中验证审计服务的分页逻辑。
-func (r *testAuditRepo) List(_ context.Context, page, pageSize int) ([]store.AuditRecord, error) {
+func (r *testAuditRepo) List(_ context.Context, page, pageSize int, query Query) ([]store.AuditRecord, error) {
 	r.listCalls++
 	r.lastPage = page
 	r.lastPageSize = pageSize
+	r.lastQuery = query
 	if r.listErr != nil {
 		return nil, r.listErr
 	}
@@ -87,8 +89,7 @@ func (r *testAuditRepo) List(_ context.Context, page, pageSize int) ([]store.Aud
 		page = 1
 	}
 
-	sorted := make([]store.AuditRecord, len(r.rows))
-	copy(sorted, r.rows)
+	sorted := r.filtered(query)
 	sort.SliceStable(sorted, func(i, j int) bool {
 		if sorted[i].OccurredAt.Equal(sorted[j].OccurredAt) {
 			return sorted[i].ID > sorted[j].ID
@@ -108,12 +109,30 @@ func (r *testAuditRepo) List(_ context.Context, page, pageSize int) ([]store.Aud
 }
 
 // Count 返回内存中审计记录总数。
-func (r *testAuditRepo) Count(_ context.Context) (int64, error) {
+func (r *testAuditRepo) Count(_ context.Context, query Query) (int64, error) {
 	r.countCalls++
+	r.lastQuery = query
 	if r.countErr != nil {
 		return 0, r.countErr
 	}
-	return int64(len(r.rows)), nil
+	return int64(len(r.filtered(query))), nil
+}
+
+func (r *testAuditRepo) filtered(query Query) []store.AuditRecord {
+	rows := make([]store.AuditRecord, 0, len(r.rows))
+	for _, rec := range r.rows {
+		if query.EventType != "" && rec.EventType != query.EventType {
+			continue
+		}
+		if !query.Start.IsZero() && rec.OccurredAt.Before(query.Start) {
+			continue
+		}
+		if !query.End.IsZero() && rec.OccurredAt.After(query.End) {
+			continue
+		}
+		rows = append(rows, rec)
+	}
+	return rows
 }
 
 // fixedConfig 是 ConfigProvider 窄接口的内存实现，返回固定的保留期与分页配置。

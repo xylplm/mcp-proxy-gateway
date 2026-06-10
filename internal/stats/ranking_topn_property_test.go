@@ -67,6 +67,10 @@ func (q *rankingFakeQuerier) GetRecord(context.Context, int64) (store.CallRecord
 	return store.CallRecordView{}, nil
 }
 
+func (q *rankingFakeQuerier) ClearRecordsBefore(context.Context, time.Time) (int64, error) {
+	return 0, nil
+}
+
 // genToolRanks 生成一组按 (upstream_id, original_name) 稳定标识唯一的工具计数项。
 //
 // 通过对每条记录使用自增序号构造唯一稳定标识，避免聚合重复；调用次数取非负随机值

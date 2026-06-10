@@ -31,6 +31,9 @@ type PageResult struct {
 	Total int64
 }
 
+// Query describes optional audit log filters.
+type Query = store.AuditQuery
+
 // List 按发生时间倒序分页返回审计记录及总数（Req 22.4）。
 //
 // 入参收敛规则：
@@ -39,17 +42,17 @@ type PageResult struct {
 //   - pageSize 超过上界 200 收敛为 200。
 //
 // 倒序与偏移由底层仓储保证；无记录时 Records 为空切片。Count 与 List 任一失败均透传错误。
-func (s *Service) List(ctx context.Context, page, pageSize int) (PageResult, error) {
+func (s *Service) List(ctx context.Context, page, pageSize int, query Query) (PageResult, error) {
 	if page <= 0 {
 		page = 1
 	}
 	size := s.resolvePageSize(pageSize)
 
-	total, err := s.repo.Count(ctx)
+	total, err := s.repo.Count(ctx, query)
 	if err != nil {
 		return PageResult{}, err
 	}
-	records, err := s.repo.List(ctx, page, size)
+	records, err := s.repo.List(ctx, page, size, query)
 	if err != nil {
 		return PageResult{}, err
 	}

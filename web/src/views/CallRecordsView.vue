@@ -2,14 +2,17 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import AdminLayout from '@/components/layout/AdminLayout.vue'
 import PageBreadcrumb from '@/components/common/PageBreadcrumb.vue'
-import { listCallRecords, type CallRecord } from '@/api/stats'
-import { RefreshIcon } from '@/icons'
+import { clearCallRecords, listCallRecords, type CallRecord } from '@/api/stats'
+import { RefreshIcon, TrashIcon } from '@/icons'
 
 const records = ref<CallRecord[]>([])
 const loading = ref(false)
 const refreshing = ref(false)
 const errorMessage = ref('')
+const statusMessage = ref('')
 const newCount = ref(0)
+const autoRefresh = ref(true)
+const clearing = ref(false)
 let pollTimer: number | undefined
 const pageLimit = 30
 const maxLocalRecords = 120
@@ -97,6 +100,7 @@ function mergeLatest(nextRecords: CallRecord[]): void {
 async function loadInitial(): Promise<void> {
   loading.value = true
   errorMessage.value = ''
+  statusMessage.value = ''
   newCount.value = 0
   try {
     records.value = await listCallRecords({ limit: pageLimit })
@@ -128,17 +132,58 @@ async function refreshNow(): Promise<void> {
   }
 }
 
+async function clearRecords(): Promise<void> {
+  if (clearing.value) return
+  const confirmed = window.confirm('确定清空全部调用记录？此操作不可恢复。')
+  if (!confirmed) return
+  clearing.value = true
+  errorMessage.value = ''
+  statusMessage.value = ''
+  try {
+    const deleted = await clearCallRecords()
+    records.value = []
+    newCount.value = 0
+    statusMessage.value = `已清空 ${deleted.toLocaleString('zh-CN')} 条调用记录`
+  } catch (err) {
+    errorMessage.value = err instanceof Error ? err.message : '清空调用记录失败'
+  } finally {
+    clearing.value = false
+  }
+}
+
+function startPolling(): void {
+  stopPolling()
+  if (!autoRefresh.value) return
+  pollTimer = window.setInterval(() => void refreshNow(), 5000)
+}
+
+function stopPolling(): void {
+  if (pollTimer !== undefined) {
+    window.clearInterval(pollTimer)
+    pollTimer = undefined
+  }
+}
+
+function toggleAutoRefresh(): void {
+  if (autoRefresh.value) {
+    void refreshNow()
+    startPolling()
+    return
+  }
+  stopPolling()
+}
+
 function clearNewCount(): void {
   newCount.value = 0
 }
 
 onMounted(async () => {
   await loadInitial()
-  pollTimer = window.setInterval(() => void refreshNow(), 5000)
+  startPolling()
 })
 
 onUnmounted(() => {
-  if (pollTimer !== undefined) window.clearInterval(pollTimer)
+  stopPolling()
 })
 
 const cardClass =
@@ -165,6 +210,17 @@ const cardClass =
         >
           新增 {{ newCount }} 条
         </button>
+        <label
+          class="inline-flex h-10 items-center gap-2 rounded-lg border border-gray-200 px-3 text-sm text-gray-600 dark:border-gray-800 dark:text-gray-400"
+        >
+          <input
+            v-model="autoRefresh"
+            type="checkbox"
+            class="h-4 w-4 rounded border-gray-300 text-brand-500 focus:ring-brand-500 dark:border-gray-700"
+            @change="toggleAutoRefresh"
+          />
+          自动刷新
+        </label>
         <button
           v-tooltip:bottom-end="'立即刷新'"
           type="button"
@@ -175,6 +231,16 @@ const cardClass =
         >
           <RefreshIcon class="h-5 w-5" :class="refreshing ? 'animate-spin' : ''" />
         </button>
+        <button
+          v-tooltip:bottom-end="'清空调用记录'"
+          type="button"
+          class="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-gray-200 text-gray-600 transition hover:border-error-300 hover:bg-error-50 hover:text-error-600 disabled:opacity-60 dark:border-gray-800 dark:text-gray-400 dark:hover:border-error-500/40 dark:hover:bg-error-500/[0.08] dark:hover:text-error-400"
+          :disabled="loading || clearing || records.length === 0"
+          aria-label="清空调用记录"
+          @click="clearRecords"
+        >
+          <TrashIcon class="h-5 w-5" />
+        </button>
       </div>
     </div>
 
@@ -183,6 +249,12 @@ const cardClass =
       class="mb-4 rounded-lg bg-error-50 px-4 py-2.5 text-sm text-error-600 dark:bg-error-500/10 dark:text-error-400"
     >
       {{ errorMessage }}
+    </p>
+    <p
+      v-if="statusMessage !== ''"
+      class="mb-4 rounded-lg bg-success-50 px-4 py-2.5 text-sm text-success-700 dark:bg-success-500/10 dark:text-success-400"
+    >
+      {{ statusMessage }}
     </p>
 
     <div class="mb-5 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">

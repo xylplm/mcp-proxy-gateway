@@ -25,6 +25,9 @@ const records = ref<AuditRecord[]>([])
 const page = ref(1)
 const pageSize = ref(AUDIT_DEFAULT_PAGE_SIZE)
 const total = ref(0)
+const eventType = ref('')
+const startTime = ref('')
+const endTime = ref('')
 
 const loading = ref(false)
 const loadError = ref('')
@@ -34,6 +37,8 @@ const totalPages = computed(() => {
   if (total.value <= 0 || pageSize.value <= 0) return 1
   return Math.max(1, Math.ceil(total.value / pageSize.value))
 })
+
+const eventTypeOptions = computed(() => Object.entries(AUDIT_EVENT_LABELS))
 
 /** 事件类型徽章样式（按类别着色）。 */
 function eventBadgeClass(type: string): string {
@@ -83,7 +88,13 @@ async function load(): Promise<void> {
   loading.value = true
   loadError.value = ''
   try {
-    const res = await listAudit(page.value, pageSize.value)
+    const res = await listAudit({
+      page: page.value,
+      pageSize: pageSize.value,
+      eventType: eventType.value,
+      start: toRFC3339(startTime.value),
+      end: toRFC3339(endTime.value),
+    })
     records.value = res.records
     // 回显后端收敛后的实际分页参数与总数。
     page.value = res.page
@@ -94,6 +105,26 @@ async function load(): Promise<void> {
   } finally {
     loading.value = false
   }
+}
+
+function toRFC3339(value: string): string {
+  if (value === '') return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  return date.toISOString()
+}
+
+function applyFilters(): void {
+  page.value = 1
+  void load()
+}
+
+function resetFilters(): void {
+  eventType.value = ''
+  startTime.value = ''
+  endTime.value = ''
+  page.value = 1
+  void load()
 }
 
 /** 切换到上一页。 */
@@ -128,6 +159,8 @@ const cardClass =
   'rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03]'
 const inputClass =
   'h-9 w-20 rounded-lg border border-gray-300 bg-transparent px-3 text-sm text-gray-800 focus:border-brand-300 focus:ring-3 focus:ring-brand-500/10 focus:outline-none dark:border-gray-700 dark:text-white/90'
+const filterInputClass =
+  'h-10 w-full rounded-lg border border-gray-300 bg-transparent px-3 text-sm text-gray-800 focus:border-brand-300 focus:ring-3 focus:ring-brand-500/10 focus:outline-none dark:border-gray-700 dark:text-white/90'
 const pagerBtnClass =
   'rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800'
 </script>
@@ -141,7 +174,7 @@ const pagerBtnClass =
         <div>
           <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">审计日志</h3>
           <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-            按发生时间倒序排列，共 {{ total }} 条记录（Req 22.4）。
+            按发生时间倒序排列，共 {{ total }} 条记录。
           </p>
         </div>
         <div class="flex items-center gap-2">
@@ -156,6 +189,34 @@ const pagerBtnClass =
           />
           <button type="button" :class="pagerBtnClass" :disabled="loading" @click="applyPageSize">
             应用
+          </button>
+        </div>
+      </div>
+
+      <div class="mb-5 grid grid-cols-1 gap-3 rounded-xl bg-gray-50 p-3 sm:grid-cols-2 xl:grid-cols-[1fr_1fr_1fr_auto] dark:bg-white/[0.02]">
+        <label class="block">
+          <span class="mb-1.5 block text-xs font-medium text-gray-500 dark:text-gray-400">事件类型</span>
+          <select v-model="eventType" :class="filterInputClass">
+            <option value="">全部类型</option>
+            <option v-for="[value, label] in eventTypeOptions" :key="value" :value="value">
+              {{ label }}
+            </option>
+          </select>
+        </label>
+        <label class="block">
+          <span class="mb-1.5 block text-xs font-medium text-gray-500 dark:text-gray-400">开始时间</span>
+          <input v-model="startTime" type="datetime-local" :class="filterInputClass" />
+        </label>
+        <label class="block">
+          <span class="mb-1.5 block text-xs font-medium text-gray-500 dark:text-gray-400">结束时间</span>
+          <input v-model="endTime" type="datetime-local" :class="filterInputClass" />
+        </label>
+        <div class="flex items-end gap-2">
+          <button type="button" :class="pagerBtnClass" :disabled="loading" @click="applyFilters">
+            筛选
+          </button>
+          <button type="button" :class="pagerBtnClass" :disabled="loading" @click="resetFilters">
+            重置
           </button>
         </div>
       </div>

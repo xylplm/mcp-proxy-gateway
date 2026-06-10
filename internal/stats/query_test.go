@@ -42,6 +42,7 @@ type fakeQuerier struct {
 	lastStart    time.Time
 	lastEnd      time.Time
 	lastTopLimit int
+	clearCutoff  time.Time
 }
 
 func (q *fakeQuerier) CountByUpstream(_ context.Context, start, end time.Time) ([]store.DimensionCount, error) {
@@ -98,6 +99,19 @@ func (q *fakeQuerier) ListRecords(_ context.Context, _ int, _ int64, _ time.Time
 
 func (q *fakeQuerier) GetRecord(_ context.Context, _ int64) (store.CallRecordView, error) {
 	return store.CallRecordView{}, nil
+}
+
+func (q *fakeQuerier) ClearRecordsBefore(_ context.Context, cutoff time.Time) (int64, error) {
+	q.clearCutoff = cutoff
+	return 8, nil
+}
+
+type fakeDropper struct {
+	cutoff time.Time
+}
+
+func (d *fakeDropper) DropBefore(cutoff time.Time) {
+	d.cutoff = cutoff
 }
 
 // fakeQueryCfg 是 ConfigProvider 的内存实现：返回固定的工具排行默认条数。
@@ -305,5 +319,25 @@ func TestSummaryDailyAndToolErrorsPassThrough(t *testing.T) {
 	}
 	if repo.lastTopLimit != 10 {
 		t.Fatalf("TopToolErrors 应复用排行默认条数，实际 %d", repo.lastTopLimit)
+	}
+}
+
+func TestClearRecordsDropsPendingBeforeDeleting(t *testing.T) {
+	repo := &fakeQuerier{}
+	dropper := &fakeDropper{}
+	svc, err := NewQueryService(repo, fakeQueryCfg{topLimitDefault: 10}, WithPendingDropper(dropper))
+	if err != nil {
+		t.Fatalf("NewQueryService 不应返回错误：%v", err)
+	}
+
+	deleted, err := svc.ClearRecords(context.Background())
+	if err != nil {
+		t.Fatalf("ClearRecords 不应返回错误：%v", err)
+	}
+	if deleted != 8 {
+		t.Fatalf("删除条数未透传：%d", deleted)
+	}
+	if dropper.cutoff.IsZero() || repo.clearCutoff.IsZero() || !dropper.cutoff.Equal(repo.clearCutoff) {
+		t.Fatalf("清空截止时间未同时传给缓冲和仓储：drop=%v repo=%v", dropper.cutoff, repo.clearCutoff)
 	}
 }

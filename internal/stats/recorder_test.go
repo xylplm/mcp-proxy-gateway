@@ -315,6 +315,30 @@ func TestRecordAsyncFillsTimestamp(t *testing.T) {
 	}
 }
 
+func TestDropBeforeDropsQueuedAndBufferedOldRecords(t *testing.T) {
+	writer := &fakeWriter{}
+	r := New(nil, writer, WithQueueSize(8), WithBatchSize(10), WithFlushInterval(time.Hour))
+	cutoff := time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC)
+	r.DropBefore(cutoff)
+	r.Start(context.Background())
+	defer r.Stop()
+
+	r.RecordAsync(context.Background(), store.CallStatRecord{OriginalName: "old", CalledAt: cutoff.Add(-time.Second)})
+	r.RecordAsync(context.Background(), store.CallStatRecord{OriginalName: "same", CalledAt: cutoff})
+	r.RecordAsync(context.Background(), store.CallStatRecord{OriginalName: "new", CalledAt: cutoff.Add(time.Second)})
+	r.Stop()
+
+	if writer.count() != 1 {
+		t.Fatalf("只应落库 cutoff 之后的记录，实际 %d 条", writer.count())
+	}
+	writer.mu.Lock()
+	got := writer.records[0].OriginalName
+	writer.mu.Unlock()
+	if got != "new" {
+		t.Fatalf("应保留新记录，实际 %q", got)
+	}
+}
+
 // TestBufferRoundTripJSON 验证：经缓冲落库的记录在 JSON 序列化往返后字段保持一致。
 func TestBufferRoundTripJSON(t *testing.T) {
 	buffer := &fakeBuffer{}

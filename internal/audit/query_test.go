@@ -44,7 +44,7 @@ func TestList_ReturnsRecordsInDescendingOrder(t *testing.T) {
 	seedRecords(repo, 5)
 	svc := newQueryService(t, repo, defaultPageSize)
 
-	res, err := svc.List(context.Background(), 1, 10)
+	res, err := svc.List(context.Background(), 1, 10, Query{})
 	if err != nil {
 		t.Fatalf("List 不应返回错误：%v", err)
 	}
@@ -74,7 +74,7 @@ func TestList_DefaultPageSizeWhenNonPositive(t *testing.T) {
 	svc := newQueryService(t, repo, 20)
 
 	for _, size := range []int{0, -5} {
-		res, err := svc.List(context.Background(), 1, size)
+		res, err := svc.List(context.Background(), 1, size, Query{})
 		if err != nil {
 			t.Fatalf("List 不应返回错误：%v", err)
 		}
@@ -101,7 +101,7 @@ func TestList_DefaultPageSizeFallsBackWhenConfigOutOfRange(t *testing.T) {
 			seedRecords(repo, 25)
 			svc := newQueryService(t, repo, tc.pageSizeDefault)
 
-			res, err := svc.List(context.Background(), 1, 0)
+			res, err := svc.List(context.Background(), 1, 0, Query{})
 			if err != nil {
 				t.Fatalf("List 不应返回错误：%v", err)
 			}
@@ -117,7 +117,7 @@ func TestList_PageSizeClampedToUpperBound(t *testing.T) {
 	seedRecords(repo, 5)
 	svc := newQueryService(t, repo, defaultPageSize)
 
-	res, err := svc.List(context.Background(), 1, maxPageSize+50)
+	res, err := svc.List(context.Background(), 1, maxPageSize+50, Query{})
 	if err != nil {
 		t.Fatalf("List 不应返回错误：%v", err)
 	}
@@ -134,7 +134,7 @@ func TestList_PageNormalizedWhenNonPositive(t *testing.T) {
 	seedRecords(repo, 5)
 	svc := newQueryService(t, repo, defaultPageSize)
 
-	res, err := svc.List(context.Background(), 0, 10)
+	res, err := svc.List(context.Background(), 0, 10, Query{})
 	if err != nil {
 		t.Fatalf("List 不应返回错误：%v", err)
 	}
@@ -150,7 +150,7 @@ func TestList_EmptyResult(t *testing.T) {
 	repo := &testAuditRepo{}
 	svc := newQueryService(t, repo, defaultPageSize)
 
-	res, err := svc.List(context.Background(), 1, 20)
+	res, err := svc.List(context.Background(), 1, 20, Query{})
 	if err != nil {
 		t.Fatalf("List 不应返回错误：%v", err)
 	}
@@ -171,7 +171,7 @@ func TestList_PaginationOffset(t *testing.T) {
 	svc := newQueryService(t, repo, defaultPageSize)
 
 	// 第 1 页（每页 3 条）：应为 ID 7,6,5。
-	page1, err := svc.List(context.Background(), 1, 3)
+	page1, err := svc.List(context.Background(), 1, 3, Query{})
 	if err != nil {
 		t.Fatalf("List 第 1 页不应返回错误：%v", err)
 	}
@@ -179,21 +179,21 @@ func TestList_PaginationOffset(t *testing.T) {
 	assertIDs(t, "第 1 页", page1.Records, wantPage1)
 
 	// 第 2 页：应为 ID 4,3,2。
-	page2, err := svc.List(context.Background(), 2, 3)
+	page2, err := svc.List(context.Background(), 2, 3, Query{})
 	if err != nil {
 		t.Fatalf("List 第 2 页不应返回错误：%v", err)
 	}
 	assertIDs(t, "第 2 页", page2.Records, []int64{4, 3, 2})
 
 	// 第 3 页：仅剩 ID 1（不足一页）。
-	page3, err := svc.List(context.Background(), 3, 3)
+	page3, err := svc.List(context.Background(), 3, 3, Query{})
 	if err != nil {
 		t.Fatalf("List 第 3 页不应返回错误：%v", err)
 	}
 	assertIDs(t, "第 3 页", page3.Records, []int64{1})
 
 	// 第 4 页：越过末尾，返回空页且不报错。
-	page4, err := svc.List(context.Background(), 4, 3)
+	page4, err := svc.List(context.Background(), 4, 3, Query{})
 	if err != nil {
 		t.Fatalf("List 第 4 页不应返回错误：%v", err)
 	}
@@ -209,12 +209,38 @@ func TestList_PaginationOffset(t *testing.T) {
 	assertIDs(t, "合并全部页", merged, []int64{7, 6, 5, 4, 3, 2, 1})
 }
 
+func TestList_FiltersByTypeAndTimeRange(t *testing.T) {
+	repo := &testAuditRepo{rows: []store.AuditRecord{
+		{ID: 1, EventType: store.AuditEventLogin, OccurredAt: fixedNow.Add(-3 * time.Hour)},
+		{ID: 2, EventType: store.AuditEventUpdate, OccurredAt: fixedNow.Add(-2 * time.Hour)},
+		{ID: 3, EventType: store.AuditEventUpdate, OccurredAt: fixedNow.Add(-1 * time.Hour)},
+		{ID: 4, EventType: store.AuditEventDelete, OccurredAt: fixedNow},
+	}}
+	svc := newQueryService(t, repo, defaultPageSize)
+
+	res, err := svc.List(context.Background(), 1, 20, Query{
+		EventType: store.AuditEventUpdate,
+		Start:     fixedNow.Add(-150 * time.Minute),
+		End:       fixedNow.Add(-30 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("List 不应返回错误：%v", err)
+	}
+	if res.Total != 2 {
+		t.Fatalf("过滤后的总数应为 2，实际 %d", res.Total)
+	}
+	assertIDs(t, "过滤结果", res.Records, []int64{3, 2})
+	if repo.lastQuery.EventType != store.AuditEventUpdate {
+		t.Fatalf("过滤条件未透传：%+v", repo.lastQuery)
+	}
+}
+
 func TestList_PropagatesCountError(t *testing.T) {
 	wantErr := errors.New("统计失败")
 	repo := &testAuditRepo{countErr: wantErr}
 	svc := newQueryService(t, repo, defaultPageSize)
 
-	if _, err := svc.List(context.Background(), 1, 20); !errors.Is(err, wantErr) {
+	if _, err := svc.List(context.Background(), 1, 20, Query{}); !errors.Is(err, wantErr) {
 		t.Fatalf("应透传 Count 错误，实际 %v", err)
 	}
 }
@@ -224,7 +250,7 @@ func TestList_PropagatesListError(t *testing.T) {
 	repo := &testAuditRepo{listErr: wantErr}
 	svc := newQueryService(t, repo, defaultPageSize)
 
-	if _, err := svc.List(context.Background(), 1, 20); !errors.Is(err, wantErr) {
+	if _, err := svc.List(context.Background(), 1, 20, Query{}); !errors.Is(err, wantErr) {
 		t.Fatalf("应透传 List 错误，实际 %v", err)
 	}
 }

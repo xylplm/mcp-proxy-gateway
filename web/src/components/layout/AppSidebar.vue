@@ -89,11 +89,14 @@ import {
   HorizontalDots,
   PlugInIcon,
   ListIcon,
-  BoxCubeIcon,
   SettingsIcon,
   PieChartIcon,
-  TableIcon,
+  DocsIcon,
+  FlagIcon,
+  Message2Line,
   InfoCircleIcon,
+  UserGroupIcon,
+  SendIcon,
 } from '@/icons'
 import { useSidebar } from '@/composables/useSidebar'
 
@@ -136,17 +139,17 @@ const menuGroups = [
     title: 'API 管理',
     items: [
       {
-        icon: BoxCubeIcon,
+        icon: UserGroupIcon,
         name: 'API Key 管理',
         path: '/apikeys',
       },
       {
-        icon: BoxCubeIcon,
+        icon: SendIcon,
         name: 'API 服务',
         path: '/api-service',
       },
       {
-        icon: TableIcon,
+        icon: DocsIcon,
         name: '调用记录',
         path: '/call-records',
       },
@@ -161,9 +164,14 @@ const menuGroups = [
         path: '/settings',
       },
       {
-        icon: TableIcon,
+        icon: FlagIcon,
         name: '审计日志',
         path: '/audit',
+      },
+      {
+        icon: Message2Line,
+        name: '系统日志',
+        path: '/system-logs',
       },
       {
         icon: InfoCircleIcon,

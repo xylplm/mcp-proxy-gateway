@@ -27,6 +27,8 @@ import {
   BoxCubeIcon,
   ListIcon,
   SettingsIcon,
+  FlagIcon,
+  Message2Line,
 } from '@/icons'
 import { listUpstreams } from '@/api/upstreams'
 import { listAPIKeys } from '@/api/apikeys'
@@ -103,7 +105,8 @@ const quickLinks: ReadonlyArray<{ to: string; label: string; desc: string; icon:
   { to: '/apikeys', label: 'API Key 管理', desc: '签发与管控访问密钥', icon: UserGroupIcon },
   { to: '/rules', label: '规则管理', desc: '工具屏蔽与别名规则', icon: ListIcon },
   { to: '/statistics', label: '调用统计', desc: '查看调用排行与趋势', icon: BarChartIcon },
-  { to: '/audit', label: '审计日志', desc: '追溯关键操作记录', icon: BoxCubeIcon },
+  { to: '/audit', label: '审计日志', desc: '追溯关键操作记录', icon: FlagIcon },
+  { to: '/system-logs', label: '系统日志', desc: '查看运行时日志输出', icon: Message2Line },
   { to: '/settings', label: '系统设置', desc: '调整网关运行参数', icon: SettingsIcon },
 ]
 

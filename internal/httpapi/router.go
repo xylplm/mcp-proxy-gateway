@@ -12,6 +12,7 @@ import (
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
 	"github.com/myGithub/mcp-proxy-gateway/internal/manager"
 	"github.com/myGithub/mcp-proxy-gateway/internal/store"
+	"github.com/myGithub/mcp-proxy-gateway/internal/syslog"
 	"github.com/myGithub/mcp-proxy-gateway/internal/template"
 )
 
@@ -234,6 +235,8 @@ type StatsService interface {
 	ListRecords(ctx context.Context, limit int, afterID int64, afterAt time.Time) ([]store.CallRecordView, error)
 	// GetRecord 按 ID 返回单条调用记录详情。
 	GetRecord(ctx context.Context, id int64) (store.CallRecordView, error)
+	// ClearRecords 清空调用记录，返回删除条数。
+	ClearRecords(ctx context.Context) (int64, error)
 }
 
 // AuditService 是审计日志分页查询依赖的应用服务窄接口（Req 22.4）。
@@ -241,7 +244,13 @@ type StatsService interface {
 // *audit.Service 满足该接口。返回按发生时间倒序的分页结果。
 type AuditService interface {
 	// List 按发生时间倒序分页返回审计记录及总数（入参越界由下层收敛）。
-	List(ctx context.Context, page, pageSize int) (audit.PageResult, error)
+	List(ctx context.Context, page, pageSize int, query audit.Query) (audit.PageResult, error)
+}
+
+// SystemLogService 是进程运行日志查询依赖的窄接口。
+type SystemLogService interface {
+	List(afterID int64, level string, limit int) []syslog.Entry
+	Clear() int
 }
 
 // Router 汇集管理 REST API 的全部依赖，并提供路由装配方法。
@@ -285,6 +294,8 @@ type Router struct {
 	stats StatsService
 	// audit 为审计日志分页查询应用服务。
 	audit AuditService
+	// systemLogs 为进程运行日志缓冲。
+	systemLogs SystemLogService
 	// templates 为模板市场只读查询应用服务。
 	templates TemplateService
 }
@@ -309,6 +320,7 @@ type Deps struct {
 	ValidateCron    CronValidator
 	Stats           StatsService
 	Audit           AuditService
+	SystemLogs      SystemLogService
 	Templates       TemplateService
 }
 
@@ -333,6 +345,7 @@ func NewRouter(d Deps) *Router {
 		validateCron:    d.ValidateCron,
 		stats:           d.Stats,
 		audit:           d.Audit,
+		systemLogs:      d.SystemLogs,
 		templates:       d.Templates,
 	}
 }
@@ -365,6 +378,7 @@ func (r *Router) Register(router gin.IRouter, adminAuth gin.HandlerFunc) {
 	r.registerToolRoutes(admin)
 	r.registerStatsRoutes(admin)
 	r.registerAuditRoutes(admin)
+	r.registerSystemLogRoutes(admin)
 	r.registerTemplateRoutes(admin)
 	r.registerProtectedAuthRoutes(admin)
 }

@@ -68,7 +68,7 @@ func TestProperty24AuditLogReverseChronologicalPagination(t *testing.T) {
 		ctx := context.Background()
 
 		// 先取第 1 页确定生效页大小，并据此遍历所有页。
-		first, err := svc.List(ctx, 1, requestedSize)
+		first, err := svc.List(ctx, 1, requestedSize, Query{})
 		if err != nil {
 			t.Fatalf("List 不应返回错误：%v", err)
 		}
@@ -83,7 +83,7 @@ func TestProperty24AuditLogReverseChronologicalPagination(t *testing.T) {
 		// 逐页收集，直到出现空页（越过末尾）。
 		var merged []store.AuditRecord
 		for page := 1; ; page++ {
-			res, err := svc.List(ctx, page, requestedSize)
+			res, err := svc.List(ctx, page, requestedSize, Query{})
 			if err != nil {
 				t.Fatalf("List 第 %d 页不应返回错误：%v", page, err)
 			}

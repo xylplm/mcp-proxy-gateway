@@ -67,6 +67,7 @@ func (r *Router) registerStatsRoutes(g *gin.RouterGroup) {
 	st.GET("/daily", r.statsDaily)
 	st.GET("/tool-errors", r.statsTopToolErrors)
 	st.GET("/calls", r.statsCallRecords)
+	st.DELETE("/calls", r.clearStatsCallRecords)
 	st.GET("/calls/:id", r.statsCallRecordDetail)
 }
 
@@ -275,4 +276,18 @@ func (r *Router) statsCallRecordDetail(c *gin.Context) {
 		return
 	}
 	respondOK(c, gin.H{"record": record})
+}
+
+// clearStatsCallRecords 清空调用记录。
+func (r *Router) clearStatsCallRecords(c *gin.Context) {
+	if r.stats == nil {
+		respondServiceUnavailable(c, "统计查询服务未就绪")
+		return
+	}
+	deleted, err := r.stats.ClearRecords(c.Request.Context())
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	respondOK(c, gin.H{"deleted": deleted})
 }

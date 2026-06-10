@@ -14,10 +14,13 @@ import (
 	"syscall"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/app"
+	"github.com/myGithub/mcp-proxy-gateway/internal/syslog"
 )
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	systemLogs := syslog.NewStore(2000)
+	console := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})
+	logger := slog.New(syslog.NewHandler(console, systemLogs))
 	slog.SetDefault(logger)
 
 	// 监听 SIGINT/SIGTERM，触发上下文取消以驱动优雅停机。
@@ -26,7 +29,7 @@ func main() {
 
 	// 装配整个系统：配置 → DB/Redis/迁移 → 加密 → 各服务 → 领域核心 → 入站路由。
 	// 启动致命错误（缺失/非法环境变量、YAML 非法、加密密钥无效、迁移/连接失败）在此终止。
-	application, err := app.New(ctx, logger)
+	application, err := app.New(ctx, logger, app.WithSystemLogs(systemLogs))
 	if err != nil {
 		logger.Error("启动失败，进程退出", "error", err)
 		os.Exit(1)

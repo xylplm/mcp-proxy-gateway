@@ -29,6 +29,7 @@ import (
 	"github.com/myGithub/mcp-proxy-gateway/internal/stats"
 	"github.com/myGithub/mcp-proxy-gateway/internal/store"
 	syncsvc "github.com/myGithub/mcp-proxy-gateway/internal/sync"
+	"github.com/myGithub/mcp-proxy-gateway/internal/syslog"
 	"github.com/myGithub/mcp-proxy-gateway/internal/xiaozhi"
 )
 
@@ -37,6 +38,16 @@ const defaultHTTPAddr = ":8080"
 
 // shutdownTimeout 为优雅停机时等待在途请求结束的最长时长。
 const shutdownTimeout = 15 * time.Second
+
+// Option customizes application wiring.
+type Option func(*App)
+
+// WithSystemLogs injects the process-local runtime log store exposed by the admin API.
+func WithSystemLogs(store *syslog.Store) Option {
+	return func(a *App) {
+		a.systemLogs = store
+	}
+}
 
 // App 持有装配完成的全部组件与后台服务句柄，提供启动连通性探测、对外服务与优雅停机。
 type App struct {
@@ -49,6 +60,8 @@ type App struct {
 
 	engine *gin.Engine
 	server *http.Server
+
+	systemLogs *syslog.Store
 
 	// 后台服务（生命周期由 Run 管理）。
 	scheduler    *syncsvc.Scheduler
@@ -73,7 +86,7 @@ type App struct {
 //
 // 注意：New 完成「构造与接线」，但不启动后台服务，也不开始对外服务；启动连通性探测与
 // 服务循环由 Run 负责，从而保证「先探测、后服务」的启动顺序（Req 20.1）。
-func New(ctx context.Context, logger *slog.Logger) (*App, error) {
+func New(ctx context.Context, logger *slog.Logger, opts ...Option) (*App, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -116,6 +129,11 @@ func New(ctx context.Context, logger *slog.Logger) (*App, error) {
 		cfg:    cfgMgr,
 		pool:   pool,
 		rdb:    rdb,
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(a)
+		}
 	}
 
 	// 4) 构造各应用服务、领域核心与入站路由。

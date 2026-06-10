@@ -54,6 +54,14 @@ export interface AuditPage {
   total: number
 }
 
+export interface AuditQuery {
+  page?: number
+  pageSize?: number
+  eventType?: string
+  start?: string
+  end?: string
+}
+
 /** GET /audit 的原始响应体；records 可能为 null，归一化为空数组。 */
 interface AuditResponse {
   records: AuditRecord[] | null
@@ -75,13 +83,22 @@ export const AUDIT_DEFAULT_PAGE_SIZE = 20
  * page/pageSize 均为可选：缺省或非正由后端收敛（page→1，pageSize→默认 20），
  * pageSize 超过 200 收敛为 200。响应回显实际生效的 page/pageSize 与总数。
  */
-export async function listAudit(page?: number, pageSize?: number): Promise<AuditPage> {
+export async function listAudit(query: AuditQuery = {}): Promise<AuditPage> {
   const params: Record<string, string> = {}
-  if (page !== undefined && page > 0) {
-    params.page = String(page)
+  if (query.page !== undefined && query.page > 0) {
+    params.page = String(query.page)
   }
-  if (pageSize !== undefined && pageSize > 0) {
-    params.pageSize = String(pageSize)
+  if (query.pageSize !== undefined && query.pageSize > 0) {
+    params.pageSize = String(query.pageSize)
+  }
+  if (query.eventType !== undefined && query.eventType !== '') {
+    params.eventType = query.eventType
+  }
+  if (query.start !== undefined && query.start !== '') {
+    params.start = query.start
+  }
+  if (query.end !== undefined && query.end !== '') {
+    params.end = query.end
   }
   const res = await request.get<AuditResponse>('/audit', { params })
   return {

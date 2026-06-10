@@ -37,6 +37,13 @@ type AuditRecord struct {
 	OccurredAt time.Time
 }
 
+// AuditQuery describes optional filters for audit log listing.
+type AuditQuery struct {
+	EventType string
+	Start     time.Time
+	End       time.Time
+}
+
 // AuditRepo 提供审计日志的写入、倒序分页查询与保留期清理。
 type AuditRepo struct {
 	pool *pgxpool.Pool
@@ -85,7 +92,7 @@ func (r *AuditRepo) Insert(ctx context.Context, rec AuditRecord) (AuditRecord, e
 //
 // pageSize 为每页条数，page 为页码（从 1 起）。非法入参按下界归正：
 // pageSize ≤ 0 取 1、page ≤ 0 取 1。无记录返回空切片而非错误。
-func (r *AuditRepo) List(ctx context.Context, page, pageSize int) ([]AuditRecord, error) {
+func (r *AuditRepo) List(ctx context.Context, page, pageSize int, query AuditQuery) ([]AuditRecord, error) {
 	if pageSize <= 0 {
 		pageSize = 1
 	}
@@ -97,9 +104,13 @@ func (r *AuditRepo) List(ctx context.Context, page, pageSize int) ([]AuditRecord
 	const q = `
 		SELECT id, event_type, target, detail, occurred_at
 		FROM audit_log
+		WHERE ($1 = '' OR event_type = $1)
+			AND ($2::timestamptz IS NULL OR occurred_at >= $2)
+			AND ($3::timestamptz IS NULL OR occurred_at <= $3)
 		ORDER BY occurred_at DESC, id DESC
-		LIMIT $1 OFFSET $2`
-	rows, err := r.pool.Query(ctx, q, pageSize, offset)
+		LIMIT $4 OFFSET $5`
+	start, end := auditTimeParams(query)
+	rows, err := r.pool.Query(ctx, q, query.EventType, start, end, pageSize, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -135,13 +146,29 @@ func (r *AuditRepo) List(ctx context.Context, page, pageSize int) ([]AuditRecord
 }
 
 // Count 返回审计记录总数，供分页计算总页数使用。
-func (r *AuditRepo) Count(ctx context.Context) (int64, error) {
-	const q = `SELECT count(*) FROM audit_log`
+func (r *AuditRepo) Count(ctx context.Context, query AuditQuery) (int64, error) {
+	const q = `
+		SELECT count(*)
+		FROM audit_log
+		WHERE ($1 = '' OR event_type = $1)
+			AND ($2::timestamptz IS NULL OR occurred_at >= $2)
+			AND ($3::timestamptz IS NULL OR occurred_at <= $3)`
 	var n int64
-	if err := r.pool.QueryRow(ctx, q).Scan(&n); err != nil {
+	start, end := auditTimeParams(query)
+	if err := r.pool.QueryRow(ctx, q, query.EventType, start, end).Scan(&n); err != nil {
 		return 0, err
 	}
 	return n, nil
+}
+
+func auditTimeParams(query AuditQuery) (start any, end any) {
+	if !query.Start.IsZero() {
+		start = query.Start
+	}
+	if !query.End.IsZero() {
+		end = query.End
+	}
+	return start, end
 }
 
 // DeleteOlderThan 清理 occurred_at 早于 cutoff 的审计记录，返回删除条数（Req 22.5）。

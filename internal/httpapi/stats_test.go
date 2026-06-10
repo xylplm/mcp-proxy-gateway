@@ -31,6 +31,7 @@ type fakeStats struct {
 	gotAfterID  int64
 	gotAfterAt  time.Time
 	gotRecordID int64
+	cleared     bool
 }
 
 func (f *fakeStats) CountByUpstream(_ context.Context, start, end time.Time) ([]store.DimensionCount, error) {
@@ -95,6 +96,14 @@ func (f *fakeStats) GetRecord(_ context.Context, id int64) (store.CallRecordView
 		return store.CallRecordView{}, f.err
 	}
 	return f.callRecord, nil
+}
+
+func (f *fakeStats) ClearRecords(_ context.Context) (int64, error) {
+	f.cleared = true
+	if f.err != nil {
+		return 0, f.err
+	}
+	return 12, nil
 }
 
 // TestStatsByUpstream 验证按上游统计端点返回计数并解析时间区间。
@@ -269,6 +278,26 @@ func TestStatsCallRecordDetailParsesID(t *testing.T) {
 	unmarshalData(t, w, &got)
 	if got.Record.ID != 42 || got.Record.ExposedName != "search" {
 		t.Fatalf("调用详情结果不符：%+v", got.Record)
+	}
+}
+
+func TestStatsCallRecordsCanBeCleared(t *testing.T) {
+	st := &fakeStats{}
+	e := newTestEngine(Deps{Stats: st})
+
+	w := doJSON(e, http.MethodDelete, "/api/admin/stats/calls", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("期望 HTTP 200，实际 %d，响应体 %s", w.Code, w.Body.String())
+	}
+	if !st.cleared {
+		t.Fatal("应调用 ClearRecords")
+	}
+	var got struct {
+		Deleted int64 `json:"deleted"`
+	}
+	unmarshalData(t, w, &got)
+	if got.Deleted != 12 {
+		t.Fatalf("删除条数未回填，got=%d", got.Deleted)
 	}
 }
 

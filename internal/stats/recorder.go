@@ -87,6 +87,10 @@ type Recorder struct {
 	// log 为结构化日志器；记录降级丢弃事件，便于观测（不向调用方报错）。
 	log *slog.Logger
 
+	// dropMu/dropBefore 用于清空调用记录后丢弃仍滞留在异步缓冲中的旧记录。
+	dropMu     sync.RWMutex
+	dropBefore time.Time
+
 	// mu 保护启停相关的可变状态（started/cancel）。
 	mu sync.Mutex
 	// started 标记 worker 是否在运行，保证 Start/Stop 幂等。
@@ -170,12 +174,27 @@ func (r *Recorder) RecordAsync(ctx context.Context, rec store.CallStatRecord) {
 	if rec.CalledAt.IsZero() {
 		rec.CalledAt = time.Now().UTC()
 	}
+	if r.shouldDrop(rec.CalledAt) {
+		return
+	}
 	select {
 	case r.queue <- rec:
 	default:
 		// 队列满：静默丢弃，绝不阻塞主流程（Req 16.9）。
 		r.log.Warn("统计缓冲队列已满，丢弃调用统计记录",
 			"upstreamID", rec.UpstreamID, "originalName", rec.OriginalName)
+	}
+}
+
+// DropBefore discards queued or buffered records whose CalledAt is not after cutoff.
+func (r *Recorder) DropBefore(cutoff time.Time) {
+	if cutoff.IsZero() {
+		return
+	}
+	r.dropMu.Lock()
+	defer r.dropMu.Unlock()
+	if cutoff.After(r.dropBefore) {
+		r.dropBefore = cutoff
 	}
 }
 
@@ -364,8 +383,33 @@ func (r *Recorder) insert(ctx context.Context, recs []store.CallStatRecord) {
 	if len(recs) == 0 {
 		return
 	}
+	r.dropMu.RLock()
+	defer r.dropMu.RUnlock()
+	recs = r.filterDroppedLocked(recs)
+	if len(recs) == 0 {
+		return
+	}
 	if err := r.writer.Insert(ctx, recs); err != nil {
 		// 落库失败：丢弃该批，不影响主流程（Req 16.9）。
 		r.log.Warn("批量写入 call_stat 失败，丢弃该批记录", "count", len(recs), "error", err)
 	}
+}
+
+func (r *Recorder) shouldDrop(at time.Time) bool {
+	r.dropMu.RLock()
+	defer r.dropMu.RUnlock()
+	return !r.dropBefore.IsZero() && !at.After(r.dropBefore)
+}
+
+func (r *Recorder) filterDroppedLocked(recs []store.CallStatRecord) []store.CallStatRecord {
+	if r.dropBefore.IsZero() {
+		return recs
+	}
+	kept := recs[:0]
+	for _, rec := range recs {
+		if rec.CalledAt.After(r.dropBefore) {
+			kept = append(kept, rec)
+		}
+	}
+	return kept
 }

@@ -75,7 +75,7 @@ func (a *App) build(enc *crypto.Service, envCfg config.EnvConfig) error {
 	statRecorder := stats.New(stats.NewRedisStatBuffer(a.rdb), repos.CallStat, stats.WithLogger(a.logger))
 	agg.SetRecorder(statRecorder)
 	a.statRecorder = statRecorder
-	statQuery, err := stats.NewQueryService(repos.CallStat, a.cfg)
+	statQuery, err := stats.NewQueryService(repos.CallStat, a.cfg, stats.WithPendingDropper(statRecorder))
 	if err != nil {
 		return err
 	}
@@ -175,6 +175,7 @@ func (a *App) build(enc *crypto.Service, envCfg config.EnvConfig) error {
 		ValidateCron:    syncsvc.ValidateCron,
 		Stats:           statQuery,
 		Audit:           auditSvc,
+		SystemLogs:      a.systemLogs,
 		Templates:       templateMarket,
 	})
 
