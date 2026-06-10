@@ -256,8 +256,7 @@ func TestIntegration_ReconnectsAfterDisconnect(t *testing.T) {
 		tools: []domain.ToolDef{{OriginalName: "raw_a", Name: "alias_a"}},
 	}
 
-	// 小退避：避免越界钳制（normalize 会把过小值回落到默认 1s），故取下界 1s 的初始值，
-	// 但用「总是重连」的快速调度器来主导时序断言，规避默认 1s 起步带来的等待，降低耗时与抖动。
+	// 用「总是重连」的快速调度器来主导时序断言，规避默认退避等待，降低耗时与抖动。
 	c := NewConnector(endpoint.wsURL(), true, agg,
 		WithReconnector(alwaysReconnect{delay: 20 * time.Millisecond}),
 	)

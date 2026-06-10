@@ -45,8 +45,8 @@ func ValidateYAMLConfig(cfg YAMLConfig) error {
 	if cfg.Connection.RetryMultiplier < 1 {
 		fields["connection.retry_multiplier"] = "退避倍数需大于等于 1"
 	}
-	// connection.retry_max_backoff_s 范围 1-3600（Req 5.3）。
-	rangeCheck(fields, "connection.retry_max_backoff_s", cfg.Connection.RetryMaxBackoffS, 1, 3600)
+	// connection.retry_max_backoff_s 范围 1-86400（Req 5.3）。
+	rangeCheck(fields, "connection.retry_max_backoff_s", cfg.Connection.RetryMaxBackoffS, 1, 86400)
 	// connection.failure_threshold 范围 1-100（Req 5.6）。
 	rangeCheck(fields, "connection.failure_threshold", cfg.Connection.FailureThreshold, 1, 100)
 

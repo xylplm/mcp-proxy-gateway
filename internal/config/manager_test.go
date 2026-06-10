@@ -85,8 +85,8 @@ func TestLoadReadsExistingConfigAndAppliesDefaults(t *testing.T) {
 	if got.MCPAPI.Mode != ModeSmart {
 		t.Errorf("mcp_api.mode 期望默认值 %q，实际 %q", ModeSmart, got.MCPAPI.Mode)
 	}
-	if got.Connection.FailureThreshold != 5 {
-		t.Errorf("connection.failure_threshold 期望默认值 5，实际 %d", got.Connection.FailureThreshold)
+	if got.Connection.FailureThreshold != 10 {
+		t.Errorf("connection.failure_threshold 期望默认值 10，实际 %d", got.Connection.FailureThreshold)
 	}
 }
 

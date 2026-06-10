@@ -22,14 +22,14 @@ type RetryPolicy struct {
 
 // DefaultRetryPolicy 返回与设计默认值一致的退避策略。
 //
-// 对应 config 默认值：连接超时 30s、初始退避 1s、退避上限 60s、倍数 2、失败阈值 5。
+// 对应 config 默认值：连接超时 30s、初始退避 5s、退避上限 3600s、倍数 5、失败阈值 10。
 func DefaultRetryPolicy() RetryPolicy {
 	return RetryPolicy{
 		ConnectTimeout:   30 * time.Second,
-		InitialBackoff:   1 * time.Second,
-		MaxBackoff:       60 * time.Second,
-		Multiplier:       2,
-		FailureThreshold: 5,
+		InitialBackoff:   5 * time.Second,
+		MaxBackoff:       3600 * time.Second,
+		Multiplier:       5,
+		FailureThreshold: 10,
 	}
 }
 
@@ -43,16 +43,16 @@ func (p RetryPolicy) normalize() RetryPolicy {
 		p.ConnectTimeout = 30 * time.Second
 	}
 	if p.InitialBackoff <= 0 {
-		p.InitialBackoff = time.Second
+		p.InitialBackoff = 5 * time.Second
 	}
 	if p.MaxBackoff <= 0 {
-		p.MaxBackoff = 60 * time.Second
+		p.MaxBackoff = 3600 * time.Second
 	}
 	if p.Multiplier < 1 {
-		p.Multiplier = 2
+		p.Multiplier = 5
 	}
 	if p.FailureThreshold < 1 {
-		p.FailureThreshold = 5
+		p.FailureThreshold = 10
 	}
 	return p
 }

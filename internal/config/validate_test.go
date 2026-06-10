@@ -79,7 +79,7 @@ func TestValidateYAMLConfigBoundaryValues(t *testing.T) {
 	cfg.Auth.SessionTimeoutS = 300             // 下限
 	cfg.Sync.TimeoutS = 300                    // 上限
 	cfg.Connection.RetryInitialBackoffS = 60   // 上限
-	cfg.Connection.RetryMaxBackoffS = 1        // 下限
+	cfg.Connection.RetryMaxBackoffS = 86400    // 上限
 	cfg.Connection.FailureThreshold = 100      // 上限
 	cfg.Aggregation.UpstreamCallTimeoutS = 600 // 上限
 	cfg.MCPAPI.SmartDiscoveryLimit = 1         // 下限

@@ -120,17 +120,16 @@ func TestReconfigureDisabledSkipsAddressValidation(t *testing.T) {
 func TestBackoffReconnectorSequenceWithDefaults(t *testing.T) {
 	r := newBackoffReconnector(DefaultBackoffPolicy())
 
-	// 默认：初始 1s、倍数 2、上限 60s → 1,2,4,8,16,32,60,60,...（封顶 60s）。
+	// 默认：初始 5s、倍数 5、上限 3600s → 5,25,125,625,3125,3600,...（封顶 3600s）。
 	want := []time.Duration{
-		1 * time.Second,
-		2 * time.Second,
-		4 * time.Second,
-		8 * time.Second,
-		16 * time.Second,
-		32 * time.Second,
-		60 * time.Second, // min(64, 60) 封顶
-		60 * time.Second,
-		60 * time.Second,
+		5 * time.Second,
+		25 * time.Second,
+		125 * time.Second,
+		625 * time.Second,
+		3125 * time.Second,
+		3600 * time.Second, // min(15625, 3600) 封顶
+		3600 * time.Second,
+		3600 * time.Second,
 	}
 
 	var prev time.Duration
@@ -143,8 +142,8 @@ func TestBackoffReconnectorSequenceWithDefaults(t *testing.T) {
 			t.Fatalf("第 %d 次退避间隔期望 %v，实际 %v", i, w, got)
 		}
 		// 任何单次退避不超过上限，且封顶前单调不减（Req 15.4）。
-		if got > 60*time.Second {
-			t.Fatalf("第 %d 次退避 %v 超过上限 60s", i, got)
+		if got > 3600*time.Second {
+			t.Fatalf("第 %d 次退避 %v 超过上限 3600s", i, got)
 		}
 		if got < prev {
 			t.Fatalf("退避序列递减：第 %d 次 %v < 前一次 %v", i, got, prev)
@@ -154,14 +153,14 @@ func TestBackoffReconnectorSequenceWithDefaults(t *testing.T) {
 }
 
 func TestBackoffReconnectorNormalizesOutOfRange(t *testing.T) {
-	// 初始退避越上限（>60s）应被钳到 60s；倍数 <1 应回落默认 2。
+	// 初始退避越上限（>60s）应被钳到 60s；倍数 <1 应回落默认 5。
 	r := newBackoffReconnector(BackoffPolicy{
 		Initial:    120 * time.Second,
 		Max:        10 * time.Second,
 		Multiplier: 0,
 	})
 
-	// Initial 钳到 60s，但 Max 钳到默认 60s（10s 在范围内？10s 合法，钳制仅对越界），
+	// Initial 钳到 60s，Max=10s 合法保留，
 	// 此处 Max=10s 合法保留；Initial=60s >= Max=10s，故首次即封顶到 Max=10s。
 	got, ok := r.NextDelay()
 	if !ok {
@@ -173,35 +172,35 @@ func TestBackoffReconnectorNormalizesOutOfRange(t *testing.T) {
 }
 
 func TestBackoffReconnectorMaxOutOfRangeClampedToBoundary(t *testing.T) {
-	// 上限越上界（>3600s）应钳到上界 3600s（默认 60s 仅在低于下界 1s 时回落）。
+	// 上限越上界（>86400s）应钳到上界 86400s（默认 3600s 仅在低于下界 1s 时回落）。
 	r := newBackoffReconnector(BackoffPolicy{
 		Initial:    1 * time.Second,
-		Max:        7200 * time.Second,
+		Max:        172800 * time.Second,
 		Multiplier: 2,
 	})
-	// 推进足够多次（2^12=4096s > 3600s）应封顶到上界 3600s。
+	// 推进足够多次（2^17=131072s > 86400s）应封顶到上界 86400s。
 	var last time.Duration
-	for i := 0; i < 14; i++ {
+	for i := 0; i < 18; i++ {
 		last, _ = r.NextDelay()
 	}
-	if last != 3600*time.Second {
-		t.Fatalf("上限越上界应钳到 3600s 并封顶，实际 %v", last)
+	if last != 86400*time.Second {
+		t.Fatalf("上限越上界应钳到 86400s 并封顶，实际 %v", last)
 	}
 }
 
 func TestBackoffReconnectorMaxBelowLowerBoundFallsBackToDefault(t *testing.T) {
-	// 上限低于下界（<1s）应回落默认 60s。
+	// 上限低于下界（<1s）应回落默认 3600s。
 	r := newBackoffReconnector(BackoffPolicy{
 		Initial:    1 * time.Second,
 		Max:        0, // 越下界
 		Multiplier: 2,
 	})
 	var last time.Duration
-	for i := 0; i < 12; i++ {
+	for i := 0; i < 13; i++ {
 		last, _ = r.NextDelay()
 	}
-	if last != 60*time.Second {
-		t.Fatalf("上限越下界应回落默认 60s 并封顶，实际 %v", last)
+	if last != 3600*time.Second {
+		t.Fatalf("上限越下界应回落默认 3600s 并封顶，实际 %v", last)
 	}
 }
 
@@ -209,18 +208,18 @@ func TestBackoffReconnectorReset(t *testing.T) {
 	r := newBackoffReconnector(DefaultBackoffPolicy())
 
 	// 推进几次使退避增长。
-	_, _ = r.NextDelay() // 1s
-	_, _ = r.NextDelay() // 2s
+	_, _ = r.NextDelay() // 5s
+	_, _ = r.NextDelay() // 25s
 	got, _ := r.NextDelay()
-	if got != 4*time.Second {
-		t.Fatalf("第 3 次退避期望 4s，实际 %v", got)
+	if got != 125*time.Second {
+		t.Fatalf("第 3 次退避期望 125s，实际 %v", got)
 	}
 
 	// 重置后应从初始退避重新开始（Req 15.4/15.5）。
 	r.Reset()
 	got, _ = r.NextDelay()
-	if got != 1*time.Second {
-		t.Fatalf("重置后首次退避应回到初始 1s，实际 %v", got)
+	if got != 5*time.Second {
+		t.Fatalf("重置后首次退避应回到初始 5s，实际 %v", got)
 	}
 }
 

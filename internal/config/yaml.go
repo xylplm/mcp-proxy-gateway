@@ -52,13 +52,13 @@ type SyncConfig struct {
 type ConnectionConfig struct {
 	// ConnectTimeoutS 为连接建立超时秒数，默认 30（Req 4.9）。
 	ConnectTimeoutS int `yaml:"connect_timeout_s" json:"connect_timeout_s"`
-	// RetryInitialBackoffS 为初始退避秒数，范围 1 至 60，默认 1（Req 5.1）。
+	// RetryInitialBackoffS 为初始退避秒数，范围 1 至 60，默认 5（Req 5.1）。
 	RetryInitialBackoffS int `yaml:"retry_initial_backoff_s" json:"retry_initial_backoff_s"`
-	// RetryMultiplier 为退避倍数，需大于等于 1，默认 2（Req 5.1）。
+	// RetryMultiplier 为退避倍数，需大于等于 1，默认 5（Req 5.1）。
 	RetryMultiplier int `yaml:"retry_multiplier" json:"retry_multiplier"`
-	// RetryMaxBackoffS 为退避上限秒数，范围 1 至 3600，默认 60（Req 5.3）。
+	// RetryMaxBackoffS 为退避上限秒数，范围 1 至 86400，默认 3600（Req 5.3）。
 	RetryMaxBackoffS int `yaml:"retry_max_backoff_s" json:"retry_max_backoff_s"`
-	// FailureThreshold 为连续失败阈值，范围 1 至 100，默认 5（Req 5.6）。
+	// FailureThreshold 为连续失败阈值，范围 1 至 100，默认 10（Req 5.6）。
 	FailureThreshold int `yaml:"failure_threshold" json:"failure_threshold"`
 }
 
@@ -128,10 +128,10 @@ func DefaultYAMLConfig() YAMLConfig {
 		},
 		Connection: ConnectionConfig{
 			ConnectTimeoutS:      30,
-			RetryInitialBackoffS: 1,
-			RetryMultiplier:      2,
-			RetryMaxBackoffS:     60,
-			FailureThreshold:     5,
+			RetryInitialBackoffS: 5,
+			RetryMultiplier:      5,
+			RetryMaxBackoffS:     3600,
+			FailureThreshold:     10,
 		},
 		Aggregation: AggregationConfig{
 			UpstreamCallTimeoutS: 30,

@@ -24,7 +24,7 @@ import (
 // p14GenDuration 生成覆盖各类边界的 time.Duration（以纳秒计）：
 //   - 负值（被规范化为 0，覆盖 initial/max 取负的边界）；
 //   - 0（覆盖零配置）；
-//   - 典型可配置范围（1s 至数小时，含 1..3600s 配置区间）；
+//   - 典型可配置范围（1s 至数小时，含 1..86400s 配置区间）；
 //   - 接近 int64 上限的极端值（覆盖防溢出路径）。
 func p14GenDuration() *rapid.Generator[time.Duration] {
 	return rapid.Custom(func(t *rapid.T) time.Duration {

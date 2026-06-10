@@ -214,7 +214,7 @@ const errClass = 'mt-1 text-xs text-error-500'
                 max="60"
                 :class="inputClass"
               />
-              <p :class="hintClass">范围 1 – 60，默认 1。</p>
+              <p :class="hintClass">范围 1 – 60，默认 5。</p>
               <p v-if="fieldErrors['connection.retry_initial_backoff_s']" :class="errClass">
                 {{ fieldErrors['connection.retry_initial_backoff_s'] }}
               </p>
@@ -227,7 +227,7 @@ const errClass = 'mt-1 text-xs text-error-500'
                 min="1"
                 :class="inputClass"
               />
-              <p :class="hintClass">需大于等于 1，默认 2。</p>
+              <p :class="hintClass">需大于等于 1，默认 5。</p>
               <p v-if="fieldErrors['connection.retry_multiplier']" :class="errClass">
                 {{ fieldErrors['connection.retry_multiplier'] }}
               </p>
@@ -238,10 +238,10 @@ const errClass = 'mt-1 text-xs text-error-500'
                 v-model.number="config.connection.retry_max_backoff_s"
                 type="number"
                 min="1"
-                max="3600"
+                max="86400"
                 :class="inputClass"
               />
-              <p :class="hintClass">范围 1 – 3600，默认 60。</p>
+              <p :class="hintClass">范围 1 – 86400，默认 3600。</p>
               <p v-if="fieldErrors['connection.retry_max_backoff_s']" :class="errClass">
                 {{ fieldErrors['connection.retry_max_backoff_s'] }}
               </p>
@@ -255,7 +255,7 @@ const errClass = 'mt-1 text-xs text-error-500'
                 max="100"
                 :class="inputClass"
               />
-              <p :class="hintClass">范围 1 – 100，默认 5；达到阈值后熔断暂停。</p>
+              <p :class="hintClass">范围 1 – 100，默认 10；达到阈值后熔断暂停。</p>
               <p v-if="fieldErrors['connection.failure_threshold']" :class="errClass">
                 {{ fieldErrors['connection.failure_threshold'] }}
               </p>

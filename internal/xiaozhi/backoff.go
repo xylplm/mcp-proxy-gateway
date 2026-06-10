@@ -18,19 +18,19 @@ import (
 
 // 小智退避策略的默认值与可配置取值范围（Req 15.4）。
 const (
-	// defaultInitialBackoff 为默认初始退避间隔（Req 15.4：默认 1 秒）。
-	defaultInitialBackoff = 1 * time.Second
-	// defaultMaxBackoff 为默认退避上限（Req 15.4：默认 60 秒）。
-	defaultMaxBackoff = 60 * time.Second
-	// defaultMultiplier 为默认退避倍数（Req 15.4：倍数 2）。
-	defaultMultiplier = 2
+	// defaultInitialBackoff 为默认初始退避间隔（默认 5 秒）。
+	defaultInitialBackoff = 5 * time.Second
+	// defaultMaxBackoff 为默认退避上限（默认 3600 秒）。
+	defaultMaxBackoff = 3600 * time.Second
+	// defaultMultiplier 为默认退避倍数（倍数 5）。
+	defaultMultiplier = 5
 
 	// minInitialBackoff/maxInitialBackoff 为初始退避的可配置范围（Req 15.4：1 至 60 秒）。
 	minInitialBackoff = 1 * time.Second
 	maxInitialBackoff = 60 * time.Second
-	// minMaxBackoff/maxMaxBackoff 为退避上限的可配置范围（Req 15.4：1 至 3600 秒）。
+	// minMaxBackoff/maxMaxBackoff 为退避上限的可配置范围（1 至 86400 秒）。
 	minMaxBackoff = 1 * time.Second
-	maxMaxBackoff = 3600 * time.Second
+	maxMaxBackoff = 86400 * time.Second
 )
 
 // BackoffPolicy 为小智重连的指数退避参数（Req 15.4）。
@@ -38,15 +38,15 @@ const (
 // 装配层（任务 27.2）据 config.XiaoZhiConfig / config.ConnectionConfig 构造该策略并通过
 // WithBackoffPolicy 注入；各字段越界或为零时由 normalize 钳制到合法范围与默认值。
 type BackoffPolicy struct {
-	// Initial 为初始退避间隔，默认 1s、范围 1-60s。
+	// Initial 为初始退避间隔，默认 5s、范围 1-60s。
 	Initial time.Duration
-	// Max 为退避间隔上限，默认 60s、范围 1-3600s。
+	// Max 为退避间隔上限，默认 3600s、范围 1-86400s。
 	Max time.Duration
-	// Multiplier 为退避倍数，默认 2、需大于等于 1。
+	// Multiplier 为退避倍数，默认 5、需大于等于 1。
 	Multiplier int
 }
 
-// DefaultBackoffPolicy 返回与需求默认值一致的退避策略（初始 1s、上限 60s、倍数 2）。
+// DefaultBackoffPolicy 返回与连接重试默认值一致的退避策略（初始 5s、上限 3600s、倍数 5）。
 func DefaultBackoffPolicy() BackoffPolicy {
 	return BackoffPolicy{
 		Initial:    defaultInitialBackoff,
@@ -58,7 +58,7 @@ func DefaultBackoffPolicy() BackoffPolicy {
 // normalize 将非法/越界字段钳制到合法范围与默认值，保证退避计算稳健（Req 15.4 的取值范围）。
 //
 // 钳制语义：低于下界回落到默认值（更安全的保守退避），高于上界钳到上界。该归一化是纯防御性的
-// （正常路径下配置已在 config 层按 1-60s / 1-3600s 校验并拒绝非法值），仅用于防范编程错误。
+// （正常路径下配置已在 config 层按 1-60s / 1-86400s 校验并拒绝非法值），仅用于防范编程错误。
 //
 // 注意：不强制 Max >= Initial——若上限小于初始值，ComputeBackoff 会统一钳到上限，
 // 与 backoff = min(initial × 倍数^n, 上限) 的语义一致。

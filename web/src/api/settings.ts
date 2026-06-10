@@ -55,13 +55,13 @@ export interface SyncConfig {
 export interface ConnectionConfig {
   /** 连接建立超时秒数，需为正整数，默认 30。 */
   connect_timeout_s: number
-  /** 初始退避秒数，范围 1-60，默认 1。 */
+  /** 初始退避秒数，范围 1-60，默认 5。 */
   retry_initial_backoff_s: number
-  /** 退避倍数，需大于等于 1，默认 2。 */
+  /** 退避倍数，需大于等于 1，默认 5。 */
   retry_multiplier: number
-  /** 退避上限秒数，范围 1-3600，默认 60。 */
+  /** 退避上限秒数，范围 1-86400，默认 3600。 */
   retry_max_backoff_s: number
-  /** 连续失败阈值，范围 1-100，默认 5。 */
+  /** 连续失败阈值，范围 1-100，默认 10。 */
   failure_threshold: number
 }
 

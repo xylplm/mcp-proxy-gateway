@@ -114,7 +114,7 @@ func genValidYAMLConfig(t *rapid.T) config.YAMLConfig {
 	cfg.Connection.ConnectTimeoutS = rapid.IntRange(1, 3600).Draw(t, "connectTimeout")
 	cfg.Connection.RetryInitialBackoffS = rapid.IntRange(1, 60).Draw(t, "retryInitial")
 	cfg.Connection.RetryMultiplier = rapid.IntRange(1, 10).Draw(t, "retryMultiplier")
-	cfg.Connection.RetryMaxBackoffS = rapid.IntRange(1, 3600).Draw(t, "retryMax")
+	cfg.Connection.RetryMaxBackoffS = rapid.IntRange(1, 86400).Draw(t, "retryMax")
 	cfg.Connection.FailureThreshold = rapid.IntRange(1, 100).Draw(t, "failureThreshold")
 	cfg.Aggregation.UpstreamCallTimeoutS = rapid.IntRange(1, 600).Draw(t, "aggTimeout")
 	cfg.MCPAPI.Mode = rapid.SampledFrom([]string{config.ModeSmart, config.ModeFull}).Draw(t, "mcpMode")
