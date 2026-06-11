@@ -31,6 +31,25 @@ func (f *fakeSettings) Save(cfg config.YAMLConfig) error {
 }
 
 // TestGetSettingsHidesAdminCredentials 验证读取设置不泄露管理员密码哈希（但保留初始化标志）。
+type fakeSettingsRuntime struct {
+	server           config.ServerConfig
+	applied          config.YAMLConfig
+	restartRequested bool
+}
+
+func (f *fakeSettingsRuntime) ApplySettings(cfg config.YAMLConfig) error {
+	f.applied = cfg
+	return nil
+}
+
+func (f *fakeSettingsRuntime) RuntimeServerConfig() config.ServerConfig {
+	return f.server
+}
+
+func (f *fakeSettingsRuntime) RequestRestart() {
+	f.restartRequested = true
+}
+
 func TestGetSettingsHidesAdminCredentials(t *testing.T) {
 	s := &fakeSettings{cfg: config.YAMLConfig{
 		Admin: config.AdminConfig{Username: "admin", PasswordHash: "secret-hash", Initialized: true},
@@ -56,6 +75,28 @@ func TestGetSettingsHidesAdminCredentials(t *testing.T) {
 }
 
 // TestUpdateSettingsValidCron 验证合法配置经 cron 校验后落盘，且管理员凭证沿用既有值。
+func TestGetSettingsReturnsRuntimeServerConfig(t *testing.T) {
+	s := &fakeSettings{cfg: config.YAMLConfig{
+		Server: config.ServerConfig{AdminAddr: ":8080", PublicMCPAddr: ":8081", ExposeMCPOnAdminAddr: false},
+		Admin:  config.AdminConfig{Username: "admin", PasswordHash: "secret-hash", Initialized: true},
+	}}
+	runtime := &fakeSettingsRuntime{server: config.ServerConfig{AdminAddr: ":8080", ExposeMCPOnAdminAddr: true}}
+	e := newTestEngine(Deps{Settings: s, SettingsRuntime: runtime})
+
+	w := doJSON(e, http.MethodGet, "/api/admin/settings", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("want HTTP 200, got %d", w.Code)
+	}
+	var got settingsResponse
+	unmarshalData(t, w, &got)
+	if got.Settings.Server.PublicMCPAddr != ":8081" {
+		t.Fatalf("want saved public_mcp_addr=:8081, got %q", got.Settings.Server.PublicMCPAddr)
+	}
+	if got.Runtime.Server.PublicMCPAddr != "" || !got.Runtime.Server.ExposeMCPOnAdminAddr {
+		t.Fatalf("want runtime listener config, got %+v", got.Runtime.Server)
+	}
+}
+
 func TestUpdateSettingsValidCron(t *testing.T) {
 	s := &fakeSettings{cfg: config.YAMLConfig{
 		Admin: config.AdminConfig{Username: "admin", PasswordHash: "keep-hash", Initialized: true},
@@ -82,6 +123,23 @@ func TestUpdateSettingsValidCron(t *testing.T) {
 }
 
 // TestUpdateSettingsInvalidCronRejected 验证非法 cron 返回 400 且不持久化（Req 7.3、7.4）。
+func TestUpdateSettingsCanRequestRestart(t *testing.T) {
+	s := &fakeSettings{cfg: config.YAMLConfig{
+		Admin: config.AdminConfig{Username: "admin", PasswordHash: "keep-hash", Initialized: true},
+	}}
+	runtime := &fakeSettingsRuntime{}
+	e := newTestEngine(Deps{Settings: s, SettingsRuntime: runtime})
+
+	body := `{"sync":{"cron":"0 0 * * * *","timeout_s":30},"mcp_api":{"mode":"smart","smart_discovery_limit":50}}`
+	w := doJSON(e, http.MethodPut, "/api/admin/settings?restart=true", body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("want HTTP 200, got %d", w.Code)
+	}
+	if !runtime.restartRequested {
+		t.Fatalf("want restart requested after successful save")
+	}
+}
+
 func TestUpdateSettingsInvalidCronRejected(t *testing.T) {
 	s := &fakeSettings{cfg: config.YAMLConfig{Admin: config.AdminConfig{Initialized: true}}}
 	validateCron := func(expr string) error {

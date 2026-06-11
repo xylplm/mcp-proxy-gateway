@@ -15,9 +15,10 @@ import { listAPIKeys } from '@/api/apikeys'
 import { getHealth, type DetailHealthReport } from '@/api/health'
 import {
   extractAPIError,
-  getSettings,
+  getSettingsSnapshot,
   updateSettings,
   type MCPMode,
+  type ServerConfig,
   type YAMLConfig,
 } from '@/api/settings'
 import { getAggregatedTools, type GatewayTool, type ToolDef } from '@/api/tools'
@@ -67,6 +68,7 @@ const { copy } = useClipboard()
 const toast = useToast()
 
 const settings = ref<YAMLConfig | null>(null)
+const runtimeServer = ref<ServerConfig | null>(null)
 const health = ref<DetailHealthReport | null>(null)
 const apiKeyTotal = ref(0)
 const apiKeyEnabled = ref(0)
@@ -94,9 +96,15 @@ const modeOptions: ReadonlyArray<{
   },
 ]
 
+const effectiveServer = computed<ServerConfig | null>(() => runtimeServer.value ?? settings.value?.server ?? null)
+const listenerReused = computed(() => (effectiveServer.value?.public_mcp_addr.trim() ?? '') === '')
+const listenerPendingRestart = computed(
+  () => settings.value !== null && runtimeServer.value !== null && JSON.stringify(settings.value.server) !== JSON.stringify(runtimeServer.value),
+)
+
 const mcpOrigin = computed(() => {
   if (typeof window === 'undefined') return ''
-  const configured = settings.value?.server.public_mcp_addr.trim() ?? ''
+  const configured = effectiveServer.value?.public_mcp_addr.trim() ?? ''
   if (configured === '') return window.location.origin
   const protocol = window.location.protocol
   const host = hostWithConfiguredPort(configured)
@@ -106,21 +114,37 @@ const mcpOrigin = computed(() => {
 const wsOrigin = computed(() => {
   if (typeof window === 'undefined') return ''
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-  const configured = settings.value?.server.public_mcp_addr.trim() ?? ''
+  const configured = effectiveServer.value?.public_mcp_addr.trim() ?? ''
   const host = configured === '' ? window.location.host : hostWithConfiguredPort(configured)
   return `${protocol}//${host}`
 })
 
 const mcpPortModeLabel = computed(() => {
-  if ((settings.value?.server.public_mcp_addr.trim() ?? '') !== '') return '独立 MCP 端口'
+  if (effectiveServer.value === null) return '加载中'
+  if (!listenerReused.value) return '独立 MCP 端口'
   return '管理端口复用'
 })
 
 const mcpPortSecurityText = computed(() => {
-  if (settings.value === null) return '加载监听配置中'
-  if (settings.value.server.public_mcp_addr.trim() === '') return '当前对外 MCP 与管理台共用监听端口。'
-  if (settings.value.server.expose_mcp_on_admin_addr) return '已启用独立 MCP 端口，但管理端口仍保留 /mcp/* 兼容入口。'
-  return '已启用独立 MCP 端口，管理端口不再暴露 /mcp/*。'
+  if (effectiveServer.value === null) return '加载监听配置中'
+  if (listenerPendingRestart.value) return '监听配置已保存，网关重启完成后会按新配置生效。当前地址仍按运行中配置生成。'
+  if (listenerReused.value) return '当前对外 MCP 与管理台共用监听端口。公网暴露时建议启用独立 MCP 端口，并关闭管理端口 MCP 入口。'
+  if (effectiveServer.value.expose_mcp_on_admin_addr) return '独立 MCP 端口已运行，但管理端口仍保留 /mcp/* 兼容入口。公网部署建议关闭兼容入口。'
+  return '独立 MCP 端口已运行，管理端口不暴露 /mcp/*。'
+})
+
+const mcpPortNoticeClass = computed(() => {
+  if (listenerReused.value || listenerPendingRestart.value || effectiveServer.value?.expose_mcp_on_admin_addr) {
+    return 'mt-5 rounded-xl border border-warning-200 bg-warning-50/80 p-4 dark:border-warning-500/30 dark:bg-warning-500/10'
+  }
+  return 'mt-5 rounded-xl border border-success-200 bg-success-50/70 p-4 dark:border-success-500/30 dark:bg-success-500/10'
+})
+
+const mcpPortBadgeClass = computed(() => {
+  if (listenerReused.value || listenerPendingRestart.value || effectiveServer.value?.expose_mcp_on_admin_addr) {
+    return 'shrink-0 rounded-full bg-white px-2.5 py-1 text-xs font-medium text-warning-700 dark:bg-white/10 dark:text-warning-300'
+  }
+  return 'shrink-0 rounded-full bg-white px-2.5 py-1 text-xs font-medium text-success-700 dark:bg-white/10 dark:text-success-300'
 })
 
 const endpoints = computed<EndpointItem[]>(() => [
@@ -480,13 +504,15 @@ async function loadAPIService(): Promise<void> {
   loading.value = true
   loadError.value = ''
   try {
-    const [cfg, report, keys, tools] = await Promise.all([
-      getSettings(),
+    const [snapshot, report, keys, tools] = await Promise.all([
+      getSettingsSnapshot(),
       getHealth(),
       listAPIKeys(),
       getAggregatedTools(),
     ])
+    const cfg = snapshot.settings
     settings.value = cfg
+    runtimeServer.value = snapshot.runtime.server
     health.value = report
     apiKeyTotal.value = keys.length
     apiKeyEnabled.value = keys.filter((item) => item.enabled).length
@@ -790,15 +816,21 @@ const errClass = 'mt-1 text-xs text-error-500'
           </article>
         </div>
 
-        <div class="mt-5 rounded-xl border border-brand-100 bg-brand-50/60 p-4 dark:border-brand-500/20 dark:bg-brand-500/[0.08]">
-          <div class="flex flex-wrap items-start justify-between gap-3">
-            <div>
+        <div :class="mcpPortNoticeClass">
+          <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div class="min-w-0">
               <h4 class="text-sm font-semibold text-gray-800 dark:text-white/90">监听模式</h4>
               <p class="mt-1 text-xs leading-5 text-gray-600 dark:text-gray-300">{{ mcpPortSecurityText }}</p>
             </div>
-            <span class="shrink-0 rounded-full bg-white px-2.5 py-1 text-xs font-medium text-brand-600 dark:bg-white/10 dark:text-brand-300">
-              {{ mcpPortModeLabel }}
-            </span>
+            <div class="flex shrink-0 items-center gap-2">
+              <span :class="mcpPortBadgeClass">{{ mcpPortModeLabel }}</span>
+              <router-link
+                to="/settings"
+                class="inline-flex h-8 items-center rounded-lg border border-warning-200 bg-white px-3 text-xs font-medium text-warning-700 transition hover:bg-warning-100 dark:border-warning-500/30 dark:bg-white/10 dark:text-warning-300 dark:hover:bg-warning-500/10"
+              >
+                去设置
+              </router-link>
+            </div>
           </div>
         </div>
 

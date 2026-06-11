@@ -24,8 +24,12 @@ import (
 // 内嵌完整 YAML 配置便于一次性读写，但管理员凭证（用户名/哈希/初始化标志）不在此暴露，
 // 改密走专用的 /api/admin/auth/change-password 端点。
 type settingsResponse struct {
-	// Settings 为去除管理员凭证后的常规配置快照。
-	Settings config.YAMLConfig `json:"settings"`
+	Settings config.YAMLConfig       `json:"settings"`
+	Runtime  settingsRuntimeResponse `json:"runtime"`
+}
+
+type settingsRuntimeResponse struct {
+	Server config.ServerConfig `json:"server"`
 }
 
 // registerSettingsRoutes 在管理分组下注册系统设置读写端点（Req 18.4）。
@@ -43,8 +47,7 @@ func (r *Router) getSettings(c *gin.Context) {
 		return
 	}
 	cfg := r.settings.Config()
-	cfg.Admin = config.AdminConfig{Initialized: cfg.Admin.Initialized}
-	respondOK(c, settingsResponse{Settings: cfg})
+	respondOK(c, r.settingsView(cfg))
 }
 
 // updateSettings 校验并回写常规配置（Req 7.3、7.4、18.4）。
@@ -59,6 +62,7 @@ func (r *Router) updateSettings(c *gin.Context) {
 		respondServiceUnavailable(c, "系统设置服务未就绪")
 		return
 	}
+	restartRequested := c.Query("restart") == "true"
 	var req config.YAMLConfig
 	if !bindJSON(c, &req) {
 		return
@@ -86,8 +90,22 @@ func (r *Router) updateSettings(c *gin.Context) {
 	}
 
 	saved := r.settings.Config()
-	saved.Admin = config.AdminConfig{Initialized: saved.Admin.Initialized}
-	respondOK(c, settingsResponse{Settings: saved})
+	respondOK(c, r.settingsView(saved))
+	if restartRequested && r.settingsRuntime != nil {
+		r.settingsRuntime.RequestRestart()
+	}
+}
+
+func (r *Router) settingsView(cfg config.YAMLConfig) settingsResponse {
+	cfg.Admin = config.AdminConfig{Initialized: cfg.Admin.Initialized}
+	runtimeServer := cfg.Server
+	if r.settingsRuntime != nil {
+		runtimeServer = r.settingsRuntime.RuntimeServerConfig()
+	}
+	return settingsResponse{
+		Settings: cfg,
+		Runtime:  settingsRuntimeResponse{Server: runtimeServer},
+	}
 }
 
 // wrapCronError 将 cron 校验错误归一为携带字段定位的 VALIDATION 错误。

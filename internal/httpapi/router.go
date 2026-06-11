@@ -208,6 +208,8 @@ type SettingsService interface {
 // 或后台连接生命周期；具体实现由 app 装配层注入，本层只负责在设置落盘成功后调用。
 type SettingsRuntimeApplier interface {
 	ApplySettings(cfg config.YAMLConfig) error
+	RuntimeServerConfig() config.ServerConfig
+	RequestRestart()
 }
 
 // CronValidator 是同步 cron 表达式保存前校验的窄接口（Req 7.3、7.4）。

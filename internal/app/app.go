@@ -65,6 +65,7 @@ type App struct {
 	publicMCPEngine *gin.Engine
 	adminServer     *http.Server
 	publicMCPServer *http.Server
+	restartCh       chan struct{}
 
 	systemLogs *syslog.Store
 
@@ -135,6 +136,7 @@ func New(ctx context.Context, logger *slog.Logger, opts ...Option) (*App, error)
 		cfg:                  cfgMgr,
 		pool:                 pool,
 		rdb:                  rdb,
+		restartCh:            make(chan struct{}, 1),
 	}
 	for _, opt := range opts {
 		if opt != nil {

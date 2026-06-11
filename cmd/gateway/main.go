@@ -8,6 +8,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -29,15 +30,20 @@ func main() {
 
 	// 装配整个系统：配置 → DB/Redis/迁移 → 加密 → 各服务 → 领域核心 → 入站路由。
 	// 启动致命错误（缺失/非法环境变量、YAML 非法、加密密钥无效、迁移/连接失败）在此终止。
-	application, err := app.New(ctx, logger, app.WithSystemLogs(systemLogs))
-	if err != nil {
-		logger.Error("启动失败，进程退出", "error", err)
-		os.Exit(1)
-	}
+	for ctx.Err() == nil {
+		application, err := app.New(ctx, logger, app.WithSystemLogs(systemLogs))
+		if err != nil {
+			logger.Error("startup failed", "error", err)
+			os.Exit(1)
+		}
 
-	// 先做连通性探测，再对外提供服务，直至收到停机信号优雅退出（Req 20.1）。
-	if err := application.Run(ctx); err != nil {
-		logger.Error("服务运行期发生错误，进程退出", "error", err)
-		os.Exit(1)
+		if err := application.Run(ctx); errors.Is(err, app.ErrRestart) {
+			logger.Info("restart app with latest settings")
+			continue
+		} else if err != nil {
+			logger.Error("service runtime failed", "error", err)
+			os.Exit(1)
+		}
+		return
 	}
 }

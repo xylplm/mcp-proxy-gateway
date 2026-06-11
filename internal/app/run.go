@@ -13,14 +13,19 @@ import (
 	"github.com/myGithub/mcp-proxy-gateway/internal/config"
 )
 
+var ErrRestart = errors.New("restart requested")
+
 // Run 先做启动连通性探测（Req 20.1），随后启动后台服务与 HTTP 服务对外提供服务，
 // 并在 ctx 取消时优雅停机（Req 20.1 的「先探测再对外服务」顺序）。
 //
 // 探测仅记录结构化日志，不因单项依赖失败而拒绝启动——是否对外服务由运维据日志判断；
 // 但若 PG/Redis 等关键依赖在 New 阶段就连接失败，启动早已终止（见 New）。
 func (a *App) Run(ctx context.Context) error {
+	runCtx, cancelRun := context.WithCancel(ctx)
+	defer cancelRun()
+
 	// 1) 启动连通性探测：按序记录 PG/Redis/各启用上游/小智的连通性（Req 20.1-20.5）。
-	report := a.prober.ProbeStartup(ctx)
+	report := a.prober.ProbeStartup(runCtx)
 	if report.AllOK() {
 		a.logger.Info("启动连通性探测全部通过", "checks", len(report.Results))
 	} else {
@@ -28,7 +33,7 @@ func (a *App) Run(ctx context.Context) error {
 	}
 
 	// 2) 启动后台服务（统计 worker/清理、审计清理、同步 cron、小智连接）。
-	a.startBackground(ctx)
+	a.startBackground(runCtx)
 
 	// 3) 启动 HTTP 服务并等待 ctx 取消后优雅停机。
 	servers := a.httpServers()
@@ -47,10 +52,17 @@ func (a *App) Run(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
 		a.logger.Info("收到停机信号，开始优雅停机")
+		cancelRun()
 		a.shutdown()
 		return nil
+	case <-a.restartCh:
+		a.logger.Info("restart requested, shutting down current app")
+		cancelRun()
+		a.shutdown()
+		return ErrRestart
 	case err := <-errCh:
 		// HTTP 服务异常退出：停止后台服务并清理。
+		cancelRun()
 		a.shutdown()
 		return err
 	}
@@ -152,7 +164,30 @@ func (a *App) ApplySettings(cfg config.YAMLConfig) error {
 	return nil
 }
 
-// startAuditRetention 启动审计保留期清理循环：立即清理一次，随后每 24 小时清理一次（Req 22.5）。
+// RequestRestart asks Run to gracefully stop and let main rebuild the App.
+func (a *App) RequestRestart() {
+	if a.restartCh == nil {
+		return
+	}
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		select {
+		case a.restartCh <- struct{}{}:
+		default:
+		}
+	}()
+}
+
+// RuntimeServerConfig returns the listener config currently effective in this process.
+func (a *App) RuntimeServerConfig() config.ServerConfig {
+	return config.ServerConfig{
+		AdminAddr:            a.adminAddr,
+		PublicMCPAddr:        a.publicMCPAddr,
+		ExposeMCPOnAdminAddr: a.exposeMCPOnAdminAddr,
+	}
+}
+
+// startAuditRetention starts audit retention cleanup.
 func (a *App) startAuditRetention(ctx context.Context) {
 	go func() {
 		ticker := time.NewTicker(24 * time.Hour)

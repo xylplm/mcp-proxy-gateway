@@ -18,6 +18,7 @@ import FieldLabel from '@/components/common/FieldLabel.vue'
 import FloatingActionBar from '@/components/common/FloatingActionBar.vue'
 import { useBreakpoint } from '@/composables/useBreakpoint'
 import { useToast } from '@/composables/useToast'
+import { useConfirm } from '@/composables/useConfirm'
 import {
   getSettings,
   updateSettings,
@@ -27,6 +28,7 @@ import {
 
 const { isLargeScreen } = useBreakpoint()
 const toast = useToast()
+const { confirm } = useConfirm()
 
 /** 分区内表单栅格类：大屏两列、小屏单列。 */
 const gridClass = computed(() =>
@@ -85,14 +87,21 @@ function applyServerError(err: unknown): void {
 /** 保存常规配置（Req 7.3、18.4）。 */
 async function saveSettings(): Promise<void> {
   if (config.value === null || saving.value) return
+  const ok = await confirm({
+    title: '确认保存系统设置',
+    message: '保存后网关会自动重启以应用最新配置。重启期间管理台和对外 MCP 服务会短暂不可用，请确认当前没有关键调用正在进行。',
+    confirmText: '保存并重启',
+    cancelText: '取消',
+    tone: 'warning',
+  })
+  if (!ok) return
+
   clearErrors()
   saving.value = true
-  const serverChanged = snapshotServerConfig(config.value) !== serverSnapshot.value
   try {
-    config.value = await updateSettings(config.value)
+    config.value = await updateSettings(config.value, { restart: true })
     serverSnapshot.value = snapshotServerConfig(config.value)
-    if (serverChanged) toast.warning('系统设置已保存，服务监听配置需重启后生效')
-    else toast.success('系统设置已保存')
+    toast.success('系统设置已保存，网关正在重启')
   } catch (err) {
     applyServerError(err)
   } finally {

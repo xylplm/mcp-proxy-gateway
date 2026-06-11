@@ -132,8 +132,22 @@ export interface YAMLConfig {
 }
 
 /** GET/PUT /settings 的响应体：{ settings: YAMLConfig }。 */
+export interface SettingsRuntime {
+  server: ServerConfig
+}
+
+export interface SettingsSnapshot {
+  settings: YAMLConfig
+  runtime: SettingsRuntime
+}
+
+export interface UpdateSettingsOptions {
+  restart?: boolean
+}
+
 interface SettingsResponse {
   settings: YAMLConfig
+  runtime?: SettingsRuntime
 }
 
 /**
@@ -163,6 +177,18 @@ export function extractAPIError(err: unknown): APIErrorBody | null {
 }
 
 /** 读取当前常规配置快照（Req 17.5、18.4）。 */
+function normalizeSettingsSnapshot(data: SettingsResponse): SettingsSnapshot {
+  return {
+    settings: data.settings,
+    runtime: data.runtime ?? { server: data.settings.server },
+  }
+}
+
+export async function getSettingsSnapshot(): Promise<SettingsSnapshot> {
+  const res = await request.get<SettingsResponse>('/settings')
+  return normalizeSettingsSnapshot(res.data)
+}
+
 export async function getSettings(): Promise<YAMLConfig> {
   const res = await request.get<SettingsResponse>('/settings')
   return res.data.settings
@@ -174,8 +200,10 @@ export async function getSettings(): Promise<YAMLConfig> {
  * cron 非法或字段越界时后端返回 VALIDATION（HTTP 400，含 fields），由调用方按字段展示；
  * 成功时返回回写后的配置快照（管理员凭证已清空）。
  */
-export async function updateSettings(payload: YAMLConfig): Promise<YAMLConfig> {
-  const res = await request.put<SettingsResponse>('/settings', payload)
+export async function updateSettings(payload: YAMLConfig, options?: UpdateSettingsOptions): Promise<YAMLConfig> {
+  const res = await request.put<SettingsResponse>('/settings', payload, {
+    params: options?.restart ? { restart: 'true' } : undefined,
+  })
   return res.data.settings
 }
 
