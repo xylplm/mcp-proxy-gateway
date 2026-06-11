@@ -46,6 +46,14 @@ const (
 	GatewayToolCallTool    = "call_tool"
 )
 
+// 智能模式网关工具描述。描述会直接暴露给 AI 客户端，需强调使用顺序与入参约束。
+const (
+	GatewayToolListToolsDescription   = "分页浏览当前可见工具目录，仅返回工具名和简述；用于先了解可用工具。"
+	GatewayToolSearchToolsDescription = "按关键词查找可见工具，仅返回匹配工具的名称和简述；不确定工具名时先用它缩小范围。"
+	GatewayToolGetToolDescription     = "根据工具名称获取完整定义和 inputSchema；调用前用它确认参数结构和必填字段。"
+	GatewayToolCallToolDescription    = "调用指定名称的真实聚合工具；name 必须来自工具目录或检索结果，arguments 必须符合该工具 inputSchema。"
+)
+
 // 各网关工具的入参 JSON Schema。这些 Schema 在智能模式 tools/list 中作为网关工具定义对外
 // 暴露，供客户端构造网关工具调用入参。
 var (
@@ -111,22 +119,22 @@ func (h *SmartModeHandler) GatewayTools() []*mcp.Tool {
 	return []*mcp.Tool{
 		{
 			Name:        GatewayToolListTools,
-			Description: "分页列出当前可见的聚合工具（仅名称与简述），用于概览。",
+			Description: GatewayToolListToolsDescription,
 			InputSchema: listToolsInputSchema,
 		},
 		{
 			Name:        GatewayToolSearchTools,
-			Description: "按关键字检索可见聚合工具，返回名称或描述命中关键字的工具（仅名称与简述）。",
+			Description: GatewayToolSearchToolsDescription,
 			InputSchema: searchToolsInputSchema,
 		},
 		{
 			Name:        GatewayToolGetTool,
-			Description: "按对外名称获取单个工具的完整定义（含 inputSchema），用于构造调用入参。",
+			Description: GatewayToolGetToolDescription,
 			InputSchema: getToolInputSchema,
 		},
 		{
 			Name:        GatewayToolCallTool,
-			Description: "按对外名称调用具体聚合工具，路由到对应上游并返回执行结果。",
+			Description: GatewayToolCallToolDescription,
 			InputSchema: callToolInputSchema,
 		},
 	}

@@ -39,19 +39,19 @@ func gatewayTools() []gatewayToolView {
 	return []gatewayToolView{
 		{
 			Name:        mcpapi.GatewayToolListTools,
-			Description: "分页列出当前可见的聚合工具摘要。",
+			Description: mcpapi.GatewayToolListToolsDescription,
 		},
 		{
 			Name:        mcpapi.GatewayToolSearchTools,
-			Description: "按关键字检索可见聚合工具。",
+			Description: mcpapi.GatewayToolSearchToolsDescription,
 		},
 		{
 			Name:        mcpapi.GatewayToolGetTool,
-			Description: "获取单个聚合工具的完整定义。",
+			Description: mcpapi.GatewayToolGetToolDescription,
 		},
 		{
 			Name:        mcpapi.GatewayToolCallTool,
-			Description: "按名称调用具体聚合工具并返回执行结果。",
+			Description: mcpapi.GatewayToolCallToolDescription,
 		},
 	}
 }
