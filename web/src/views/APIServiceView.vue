@@ -81,19 +81,16 @@ const modeOptions: ReadonlyArray<{
   value: MCPMode
   title: string
   desc: string
-  note: string
 }> = [
   {
     value: 'smart',
     title: '智能模式',
-    desc: '智能发现并按需调度真实工具，让客户端少加载、更精准、更省上下文。',
-    note: '工具越多越能减少上下文占用，并提升发现和调用效率',
+    desc: '智能发现并按需调度真实工具，减少客户端工具噪音和上下文占用。',
   },
   {
     value: 'full',
     title: '全量模式',
-    desc: '外部客户端连接后直接看到当前聚合后的真实工具列表。',
-    note: '工具较少时最直观',
+    desc: '直接暴露全部真实工具，配置简单、兼容性高，适合需要完整清单的客户端。',
   },
 ]
 
@@ -521,7 +518,7 @@ async function switchMode(mode: MCPMode): Promise<void> {
   }
   try {
     settings.value = await updateSettings(next)
-    toast.success('服务模式已切换')
+    toast.success('对外服务模式已切换')
     await refreshStatus()
   } catch (err) {
     formError.value = errorMessage(err)
@@ -587,7 +584,7 @@ const errClass = 'mt-1 text-xs text-error-500'
         <div>
           <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">服务概览</h3>
           <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-            外部客户端接入、服务模式、真实工具与第三方连接状态集中在这里查看和调整。
+            外部客户端接入、对外服务模式、真实工具与第三方连接状态集中在这里查看和调整。
           </p>
         </div>
         <button
@@ -646,7 +643,7 @@ const errClass = 'mt-1 text-xs text-error-500'
             <InfoCircleIcon class="h-5 w-5" />
           </span>
           <div class="min-w-0 flex-1">
-            <p class="text-xs text-gray-400 dark:text-gray-500">对外模式</p>
+            <p class="text-xs text-gray-400 dark:text-gray-500">对外服务模式</p>
             <p class="mt-0.5 truncate text-sm font-semibold text-gray-800 dark:text-white/90">{{ currentModeLabel }}</p>
             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">真实工具 {{ aggregatedToolCount }} 个</p>
           </div>
@@ -657,7 +654,7 @@ const errClass = 'mt-1 text-xs text-error-500'
     <section :class="cardClass" class="mb-6">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">服务模式</h3>
+          <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">对外服务模式</h3>
           <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
             控制外部客户端连接后看到的是网关工具，还是直接看到聚合后的真实工具。
           </p>
@@ -672,7 +669,7 @@ const errClass = 'mt-1 text-xs text-error-500'
           v-for="mode in modeOptions"
           :key="mode.value"
           type="button"
-          class="group flex min-h-32 flex-col rounded-xl border p-4 text-left transition disabled:cursor-not-allowed disabled:opacity-70"
+          class="group flex items-start gap-3 rounded-xl border px-4 py-3 text-left transition disabled:cursor-not-allowed disabled:opacity-70"
           :class="
             currentMode === mode.value
               ? 'border-brand-300 bg-brand-50/60 shadow-theme-sm dark:border-brand-500/50 dark:bg-brand-500/[0.08]'
@@ -681,21 +678,20 @@ const errClass = 'mt-1 text-xs text-error-500'
           :disabled="loading || settings === null || modeSaving"
           @click="switchMode(mode.value)"
         >
-          <span class="flex items-center justify-between gap-3">
-            <span class="text-sm font-semibold text-gray-800 dark:text-white/90">{{ mode.title }}</span>
-            <span
-              class="flex h-5 w-5 items-center justify-center rounded-full border transition"
-              :class="
-                currentMode === mode.value
-                  ? 'border-brand-500 bg-brand-500 text-white'
-                  : 'border-gray-300 text-transparent dark:border-gray-700'
-              "
-            >
-              <span class="h-2 w-2 rounded-full bg-current"></span>
-            </span>
+          <span
+            class="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border transition"
+            :class="
+              currentMode === mode.value
+                ? 'border-brand-500 bg-brand-500 text-white'
+                : 'border-gray-300 text-transparent dark:border-gray-700'
+            "
+          >
+            <span class="h-2 w-2 rounded-full bg-current"></span>
           </span>
-          <span class="mt-3 text-sm leading-6 text-gray-600 dark:text-gray-300">{{ mode.desc }}</span>
-          <span class="mt-auto pt-4 text-xs text-gray-400 dark:text-gray-500">{{ mode.note }}</span>
+          <span class="min-w-0 flex-1">
+            <span class="block text-sm font-semibold text-gray-800 dark:text-white/90">{{ mode.title }}</span>
+            <span class="mt-1 block text-sm leading-5 text-gray-600 dark:text-gray-300">{{ mode.desc }}</span>
+          </span>
         </button>
       </div>
     </section>

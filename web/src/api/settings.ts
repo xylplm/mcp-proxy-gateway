@@ -19,7 +19,7 @@
  */
 import request, { ApiError } from '@/api/request'
 
-/** 对外 MCP 模式取值，与后端 config.ModeSmart / ModeFull 对齐。 */
+/** 对外服务模式取值，与后端 config.ModeSmart / ModeFull 对齐。 */
 export type MCPMode = 'smart' | 'full'
 
 /**
@@ -73,7 +73,7 @@ export interface AggregationConfig {
 
 /** 对外 MCP API 配置（对应后端 MCPAPIConfig）。 */
 export interface MCPAPIConfig {
-  /** 对外模式，smart 或 full，默认 smart。 */
+  /** 对外服务模式，smart 或 full，默认 smart。 */
   mode: MCPMode
   /** 智能模式工具发现返回数，范围 1-200，默认 50。 */
   smart_discovery_limit: number
