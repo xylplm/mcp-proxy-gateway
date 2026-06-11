@@ -15,6 +15,8 @@ import ConnStateBadge from '@/components/upstreams/ConnStateBadge.vue'
 import UpstreamFormDrawer from '@/components/upstreams/UpstreamFormDrawer.vue'
 import TemplateMarketModal from '@/components/upstreams/TemplateMarketModal.vue'
 import { useBreakpoint } from '@/composables/useBreakpoint'
+import { useConfirm } from '@/composables/useConfirm'
+import { useToast } from '@/composables/useToast'
 import {
   listUpstreams,
   setUpstreamEnabled,
@@ -30,6 +32,8 @@ import type { ToolDef } from '@/api/tools'
 import type { PrefillForm } from '@/api/templates'
 
 const { pageSize } = useBreakpoint()
+const toast = useToast()
+const { confirm } = useConfirm()
 
 /** 全量上游列表（按 sortOrder 升序）。 */
 const upstreams = ref<Upstream[]>([])
@@ -39,8 +43,6 @@ const loading = ref(false)
 const errorMessage = ref('')
 /** 行级操作进行中标记（key = upstream id + action）。 */
 const busy = ref<Set<string>>(new Set())
-/** 操作结果提示。 */
-const toast = ref('')
 
 /** 分页：当前页（1 起）。 */
 const currentPage = ref(1)
@@ -52,8 +54,6 @@ const marketOpen = ref(false)
 const editing = ref<Upstream | null>(null)
 const prefill = ref<PrefillForm | null>(null)
 
-/** 删除确认目标。 */
-const deleting = ref<Upstream | null>(null)
 const sortingOpen = ref(false)
 const sortDraft = ref<Upstream[]>([])
 const sortDraggingID = ref<string | null>(null)
@@ -119,12 +119,8 @@ function isBusy(id: string, action: string): boolean {
   return busy.value.has(`${id}:${action}`)
 }
 
-/** 展示短暂提示。 */
-function showToast(msg: string): void {
-  toast.value = msg
-  setTimeout(() => {
-    if (toast.value === msg) toast.value = ''
-  }, 2500)
+function showError(err: unknown, fallback: string): void {
+  toast.error(err instanceof Error ? err.message : fallback)
 }
 
 /** 加载上游列表（按 sortOrder 排序）。 */
@@ -211,7 +207,7 @@ async function onSaved(): Promise<void> {
   drawerOpen.value = false
   prefill.value = null
   editing.value = null
-  showToast('保存成功')
+  toast.success('保存成功')
   await loadUpstreams()
   ensureStatusPolling(60_000)
 }
@@ -226,7 +222,7 @@ async function toggleEnabled(up: Upstream): Promise<void> {
     await loadUpstreams()
     if (!up.config.enabled) ensureStatusPolling(45_000)
   } catch (err) {
-    showToast(err instanceof Error ? err.message : '操作失败')
+    showError(err, '操作失败')
   } finally {
     setBusy(key, false)
   }
@@ -240,10 +236,10 @@ async function refresh(up: Upstream): Promise<void> {
   try {
     const count = await refreshUpstream(up.id)
     toolCounts.value = { ...toolCounts.value, [up.id]: count }
-    showToast(`已刷新「${up.config.name}」，共 ${count} 个工具`)
+    toast.success(`已刷新「${up.config.name}」，共 ${count} 个工具`)
     await loadUpstreams()
   } catch (err) {
-    showToast(err instanceof Error ? err.message : '刷新失败')
+    showError(err, '刷新失败')
   } finally {
     setBusy(key, false)
   }
@@ -256,11 +252,11 @@ async function reconnect(up: Upstream): Promise<void> {
   setBusy(key, true)
   try {
     await reconnectUpstream(up.id)
-    showToast(`已触发「${up.config.name}」重连`)
+    toast.success(`已触发「${up.config.name}」重连`)
     await loadUpstreams()
     ensureStatusPolling(60_000)
   } catch (err) {
-    showToast(err instanceof Error ? err.message : '重连失败')
+    showError(err, '重连失败')
   } finally {
     setBusy(key, false)
   }
@@ -432,10 +428,10 @@ async function saveSorting(): Promise<void> {
     await reorderUpstreams(reordered.map((u) => u.id))
     upstreams.value = reordered
     sortingOpen.value = false
-    showToast('排序已保存')
+    toast.success('排序已保存')
     await loadUpstreams()
   } catch (err) {
-    showToast(err instanceof Error ? err.message : '排序失败')
+    showError(err, '排序失败')
     await loadUpstreams()
   } finally {
     setBusy('reorder', false)
@@ -443,21 +439,20 @@ async function saveSorting(): Promise<void> {
 }
 
 /** 请求删除确认。 */
-function askDelete(up: Upstream): void {
-  deleting.value = up
-}
-
-/** 确认删除（Req 2.5）。 */
-async function confirmDelete(): Promise<void> {
-  if (deleting.value === null) return
-  const up = deleting.value
+async function askDelete(up: Upstream): Promise<void> {
+  const ok = await confirm({
+    title: '确认删除',
+    message: `确定删除上游 MCP「${up.config.name}」吗？该操作将级联清理其工具缓存与规则，且不可恢复。`,
+    confirmText: '删除',
+    tone: 'danger',
+  })
+  if (!ok) return
   try {
     await deleteUpstream(up.id)
-    showToast(`已删除「${up.config.name}」`)
-    deleting.value = null
+    toast.success(`已删除「${up.config.name}」`)
     await loadUpstreams()
   } catch (err) {
-    showToast(err instanceof Error ? err.message : '删除失败')
+    showError(err, '删除失败')
   }
 }
 
@@ -543,14 +538,6 @@ function goPage(p: number): void {
         </button>
       </div>
     </div>
-
-    <!-- 操作提示 -->
-    <p
-      v-if="toast !== ''"
-      class="bg-success-50 text-success-700 dark:bg-success-500/10 dark:text-success-400 mb-4 rounded-lg px-4 py-2.5 text-sm"
-    >
-      {{ toast }}
-    </p>
 
     <!-- 列表：卡片网格（响应式，移动端友好，替代表格） -->
     <div>
@@ -1036,41 +1023,6 @@ function goPage(p: number): void {
       </div>
     </transition>
 
-    <!-- 删除确认 -->
-    <transition name="fade">
-      <div
-        v-if="deleting !== null"
-        class="fixed inset-0 z-[100001] flex items-center justify-center bg-gray-900/40 p-4 backdrop-blur-[1px]"
-        @click.self="deleting = null"
-      >
-        <div
-          class="w-full max-w-sm rounded-2xl border border-gray-200 bg-white p-6 shadow-xl dark:border-gray-800 dark:bg-gray-900"
-        >
-          <h3 class="mb-2 text-base font-semibold text-gray-800 dark:text-white/90">确认删除</h3>
-          <p class="mb-5 text-sm text-gray-500 dark:text-gray-400">
-            确定删除上游 MCP「{{
-              deleting.config.name
-            }}」吗？该操作将级联清理其工具缓存与规则，且不可恢复。
-          </p>
-          <div class="flex justify-end gap-3">
-            <button
-              type="button"
-              class="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
-              @click="deleting = null"
-            >
-              取消
-            </button>
-            <button
-              type="button"
-              class="bg-error-500 hover:bg-error-600 rounded-lg px-4 py-2 text-sm font-medium text-white transition"
-              @click="confirmDelete"
-            >
-              删除
-            </button>
-          </div>
-        </div>
-      </div>
-    </transition>
   </AdminLayout>
 </template>
 

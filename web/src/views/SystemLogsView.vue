@@ -9,13 +9,17 @@ import {
   type SystemLogLevel,
 } from '@/api/systemLogs'
 import { RefreshIcon, TrashIcon } from '@/icons'
+import { useConfirm } from '@/composables/useConfirm'
+import { useToast } from '@/composables/useToast'
+
+const toast = useToast()
+const { confirm } = useConfirm()
 
 const logs = ref<SystemLogEntry[]>([])
 const loading = ref(false)
 const refreshing = ref(false)
 const clearing = ref(false)
 const errorMessage = ref('')
-const statusMessage = ref('')
 const autoRefresh = ref(true)
 const level = ref<SystemLogLevel>('')
 const consoleRef = ref<HTMLElement | null>(null)
@@ -105,7 +109,6 @@ function mergeLatest(nextLogs: SystemLogEntry[]): void {
 async function loadInitial(): Promise<void> {
   loading.value = true
   errorMessage.value = ''
-  statusMessage.value = ''
   try {
     logs.value = await listSystemLogs({ level: level.value, limit: pageLimit })
     void scrollToBottom()
@@ -141,17 +144,21 @@ async function refreshNow(): Promise<void> {
 
 async function clearLogs(): Promise<void> {
   if (clearing.value) return
-  const confirmed = window.confirm('确定清空当前进程内的系统日志？')
-  if (!confirmed) return
+  const ok = await confirm({
+    title: '清空系统日志',
+    message: '确定清空当前进程内的系统日志？该操作只影响当前进程内缓存。',
+    confirmText: '清空',
+    tone: 'danger',
+  })
+  if (!ok) return
   clearing.value = true
   errorMessage.value = ''
-  statusMessage.value = ''
   try {
     const deleted = await clearSystemLogs()
     logs.value = []
-    statusMessage.value = `已清空 ${deleted.toLocaleString('zh-CN')} 条系统日志`
+    toast.success(`已清空 ${deleted.toLocaleString('zh-CN')} 条系统日志`)
   } catch (err) {
-    errorMessage.value = err instanceof Error ? err.message : '清空系统日志失败'
+    toast.error(err instanceof Error ? err.message : '清空系统日志失败')
   } finally {
     clearing.value = false
   }
@@ -256,13 +263,6 @@ const controlClass =
     >
       {{ errorMessage }}
     </p>
-    <p
-      v-if="statusMessage !== ''"
-      class="mb-4 rounded-lg bg-success-50 px-4 py-2.5 text-sm text-success-700 dark:bg-success-500/10 dark:text-success-400"
-    >
-      {{ statusMessage }}
-    </p>
-
     <div class="mb-5 grid grid-cols-2 gap-3 md:grid-cols-5">
       <section :class="cardClass">
         <p class="text-xs text-gray-500 dark:text-gray-400">当前缓存</p>

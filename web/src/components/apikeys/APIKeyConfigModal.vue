@@ -24,6 +24,8 @@ import {
   type APIKeyFilter,
   type ACLEntry,
 } from '@/api/apikeys'
+import { useConfirm } from '@/composables/useConfirm'
+import { useToast } from '@/composables/useToast'
 
 const props = defineProps<{
   /** 目标 API Key；为 null 时不渲染。 */
@@ -31,20 +33,18 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{ (e: 'close'): void }>()
+const { confirm } = useConfirm()
+const toast = useToast()
 
 /** 当前激活的分页签。 */
 type Tab = 'filters' | 'acl' | 'ratelimit'
 const activeTab = ref<Tab>('filters')
 
 /** 通用提示与加载状态。 */
-const toast = ref('')
 const errorMessage = ref('')
 
 function showToast(msg: string): void {
-  toast.value = msg
-  setTimeout(() => {
-    if (toast.value === msg) toast.value = ''
-  }, 2500)
+  toast.success(msg)
 }
 
 function showError(err: unknown, fallback: string): void {
@@ -109,6 +109,13 @@ async function toggleFilter(rule: APIKeyFilter): Promise<void> {
 
 async function removeFilter(rule: APIKeyFilter): Promise<void> {
   if (props.apiKey === null) return
+  const ok = await confirm({
+    title: '确认删除',
+    message: `确定删除屏蔽规则「${rule.pattern}」吗？该操作不可恢复。`,
+    confirmText: '删除',
+    tone: 'danger',
+  })
+  if (!ok) return
   try {
     await deleteAPIKeyFilter(rule.id)
     await loadFilters(props.apiKey.id)
@@ -157,6 +164,13 @@ async function addACL(): Promise<void> {
 
 async function removeACL(entry: ACLEntry): Promise<void> {
   if (props.apiKey === null) return
+  const ok = await confirm({
+    title: '确认删除',
+    message: `确定删除来源白名单「${entry.CIDR}」吗？该操作不可恢复。`,
+    confirmText: '删除',
+    tone: 'danger',
+  })
+  if (!ok) return
   try {
     await deleteACL(entry.ID)
     await loadACL(props.apiKey.id)
@@ -219,7 +233,6 @@ watch(
   (key) => {
     if (key === null) return
     activeTab.value = 'filters'
-    toast.value = ''
     errorMessage.value = ''
     newFilterPattern.value = ''
     newFilterIsRegex.value = false
@@ -296,12 +309,6 @@ watch(
             class="mb-3 rounded-lg bg-error-50 px-4 py-2.5 text-sm text-error-600 dark:bg-error-500/10 dark:text-error-400"
           >
             {{ errorMessage }}
-          </p>
-          <p
-            v-if="toast !== ''"
-            class="mb-3 rounded-lg bg-success-50 px-4 py-2.5 text-sm text-success-700 dark:bg-success-500/10 dark:text-success-400"
-          >
-            {{ toast }}
           </p>
         </div>
 

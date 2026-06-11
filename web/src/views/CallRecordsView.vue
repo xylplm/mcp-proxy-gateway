@@ -4,12 +4,16 @@ import AdminLayout from '@/components/layout/AdminLayout.vue'
 import PageBreadcrumb from '@/components/common/PageBreadcrumb.vue'
 import { clearCallRecords, listCallRecords, type CallRecord } from '@/api/stats'
 import { RefreshIcon, TrashIcon } from '@/icons'
+import { useConfirm } from '@/composables/useConfirm'
+import { useToast } from '@/composables/useToast'
+
+const toast = useToast()
+const { confirm } = useConfirm()
 
 const records = ref<CallRecord[]>([])
 const loading = ref(false)
 const refreshing = ref(false)
 const errorMessage = ref('')
-const statusMessage = ref('')
 const newCount = ref(0)
 const autoRefresh = ref(true)
 const clearing = ref(false)
@@ -100,7 +104,6 @@ function mergeLatest(nextRecords: CallRecord[]): void {
 async function loadInitial(): Promise<void> {
   loading.value = true
   errorMessage.value = ''
-  statusMessage.value = ''
   newCount.value = 0
   try {
     records.value = await listCallRecords({ limit: pageLimit })
@@ -134,18 +137,22 @@ async function refreshNow(): Promise<void> {
 
 async function clearRecords(): Promise<void> {
   if (clearing.value) return
-  const confirmed = window.confirm('确定清空全部调用记录？此操作不可恢复。')
-  if (!confirmed) return
+  const ok = await confirm({
+    title: '清空调用记录',
+    message: '确定清空全部调用记录？此操作不可恢复。',
+    confirmText: '清空',
+    tone: 'danger',
+  })
+  if (!ok) return
   clearing.value = true
   errorMessage.value = ''
-  statusMessage.value = ''
   try {
     const deleted = await clearCallRecords()
     records.value = []
     newCount.value = 0
-    statusMessage.value = `已清空 ${deleted.toLocaleString('zh-CN')} 条调用记录`
+    toast.success(`已清空 ${deleted.toLocaleString('zh-CN')} 条调用记录`)
   } catch (err) {
-    errorMessage.value = err instanceof Error ? err.message : '清空调用记录失败'
+    toast.error(err instanceof Error ? err.message : '清空调用记录失败')
   } finally {
     clearing.value = false
   }
@@ -250,13 +257,6 @@ const cardClass =
     >
       {{ errorMessage }}
     </p>
-    <p
-      v-if="statusMessage !== ''"
-      class="mb-4 rounded-lg bg-success-50 px-4 py-2.5 text-sm text-success-700 dark:bg-success-500/10 dark:text-success-400"
-    >
-      {{ statusMessage }}
-    </p>
-
     <div class="mb-5 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
       <section :class="cardClass">
         <p class="text-sm text-gray-500 dark:text-gray-400">当前列表</p>

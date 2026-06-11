@@ -35,6 +35,9 @@ import { listAPIKeys } from '@/api/apikeys'
 import { statsByUpstream } from '@/api/stats'
 import { getSettings, updateSettings, type MCPMode, type YAMLConfig } from '@/api/settings'
 import { getAggregatedTools } from '@/api/tools'
+import { useToast } from '@/composables/useToast'
+
+const toast = useToast()
 
 const loading = ref(true)
 const loadError = ref('')
@@ -55,7 +58,6 @@ const effectiveToolCount = ref(0)
 const settings = ref<YAMLConfig | null>(null)
 const modeSaving = ref(false)
 const modeError = ref('')
-const modeToast = ref('')
 
 /** 指标卡描述。 */
 interface MetricCard {
@@ -184,13 +186,6 @@ async function loadOverview(): Promise<void> {
   }
 }
 
-function showModeToast(msg: string): void {
-  modeToast.value = msg
-  setTimeout(() => {
-    if (modeToast.value === msg) modeToast.value = ''
-  }, 2500)
-}
-
 async function switchMode(mode: MCPMode): Promise<void> {
   if (settings.value === null || modeSaving.value || currentMode.value === mode) return
   modeError.value = ''
@@ -204,7 +199,7 @@ async function switchMode(mode: MCPMode): Promise<void> {
   }
   try {
     settings.value = await updateSettings(next)
-    showModeToast('对外服务模式已更新')
+    toast.success('对外服务模式已更新')
   } catch (err) {
     modeError.value = errorMessage(err)
   } finally {
@@ -275,12 +270,6 @@ const cardClass =
         </span>
       </div>
 
-      <p
-        v-if="modeToast !== ''"
-        class="mt-4 rounded-lg bg-success-50 px-4 py-2.5 text-sm text-success-700 dark:bg-success-500/10 dark:text-success-400"
-      >
-        {{ modeToast }}
-      </p>
       <p
         v-if="modeError !== ''"
         class="mt-4 rounded-lg bg-error-50 px-4 py-2.5 text-sm text-error-600 dark:bg-error-500/10 dark:text-error-400"

@@ -22,6 +22,7 @@ import {
 } from '@/api/settings'
 import { getAggregatedTools, type GatewayTool, type ToolDef } from '@/api/tools'
 import { useClipboard } from '@/composables/useClipboard'
+import { useToast } from '@/composables/useToast'
 
 type EndpointKey = 'sse' | 'http' | 'ws'
 type AuthKey = 'header' | 'bearer' | 'query'
@@ -55,8 +56,6 @@ const refreshing = ref(false)
 const saving = ref(false)
 const loadError = ref('')
 const formError = ref('')
-const toast = ref('')
-const copyError = ref('')
 const copiedKey = ref('')
 const modeSaving = ref(false)
 const guideOpen = ref(false)
@@ -65,6 +64,7 @@ const selectedGuideAuth = ref<AuthKey>('bearer')
 const guideCopiedKey = ref('')
 const guideCopyError = ref('')
 const { copy } = useClipboard()
+const toast = useToast()
 
 const settings = ref<YAMLConfig | null>(null)
 const health = ref<DetailHealthReport | null>(null)
@@ -267,13 +267,6 @@ function clearFieldErrors(): void {
   }
 }
 
-function showToast(message: string): void {
-  toast.value = message
-  setTimeout(() => {
-    if (toast.value === message) toast.value = ''
-  }, 2500)
-}
-
 function openGuide(): void {
   guideCopyError.value = ''
   guideCopiedKey.value = ''
@@ -436,6 +429,7 @@ async function copyGuideText(key: string, value: string): Promise<void> {
   const ok = await copy(value)
   if (!ok) {
     guideCopyError.value = '复制失败，请手动选择内容'
+    toast.error('复制失败，请手动选择内容')
     return
   }
   guideCopiedKey.value = key
@@ -471,7 +465,6 @@ async function loadAPIService(): Promise<void> {
 async function refreshStatus(): Promise<void> {
   if (refreshing.value) return
   refreshing.value = true
-  copyError.value = ''
   try {
     const [report, keys, tools] = await Promise.all([getHealth(), listAPIKeys(), getAggregatedTools()])
     health.value = report
@@ -480,7 +473,7 @@ async function refreshStatus(): Promise<void> {
     aggregatedTools.value = tools.tools
     gatewayTools.value = tools.gatewayTools
   } catch (err) {
-    copyError.value = errorMessage(err)
+    toast.error(errorMessage(err))
   } finally {
     refreshing.value = false
   }
@@ -501,7 +494,7 @@ async function saveAPISettings(): Promise<void> {
     settings.value = await updateSettings(next)
     syncForm(settings.value)
     await refreshStatus()
-    showToast('API 服务设置已保存')
+    toast.success('API 服务设置已保存')
   } catch (err) {
     const body = extractAPIError(err)
     if (body?.fields) {
@@ -528,7 +521,7 @@ async function switchMode(mode: MCPMode): Promise<void> {
   }
   try {
     settings.value = await updateSettings(next)
-    showToast('服务模式已切换')
+    toast.success('服务模式已切换')
     await refreshStatus()
   } catch (err) {
     formError.value = errorMessage(err)
@@ -538,7 +531,6 @@ async function switchMode(mode: MCPMode): Promise<void> {
 }
 
 async function copyEndpoint(key: string, value: string): Promise<void> {
-  copyError.value = ''
   try {
     await navigator.clipboard.writeText(value)
     copiedKey.value = key
@@ -546,7 +538,7 @@ async function copyEndpoint(key: string, value: string): Promise<void> {
       if (copiedKey.value === key) copiedKey.value = ''
     }, 1800)
   } catch {
-    copyError.value = '复制失败，请手动选择地址'
+    toast.error('复制失败，请手动选择地址')
   }
 }
 
@@ -609,19 +601,6 @@ const errClass = 'mt-1 text-xs text-error-500'
           <RefreshIcon class="h-5 w-5" :class="refreshing ? 'animate-spin' : ''" />
         </button>
       </div>
-
-      <p
-        v-if="toast !== ''"
-        class="mt-4 rounded-lg bg-success-50 px-4 py-2.5 text-sm text-success-700 dark:bg-success-500/10 dark:text-success-400"
-      >
-        {{ toast }}
-      </p>
-      <p
-        v-if="copyError !== ''"
-        class="mt-4 rounded-lg bg-error-50 px-4 py-2.5 text-sm text-error-600 dark:bg-error-500/10 dark:text-error-400"
-      >
-        {{ copyError }}
-      </p>
 
       <div class="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2 2xl:grid-cols-4">
         <div class="flex min-h-20 items-center gap-3 rounded-xl border border-gray-100 bg-gray-50 px-4 py-3 dark:border-gray-800 dark:bg-white/[0.02]">

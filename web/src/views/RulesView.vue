@@ -14,9 +14,11 @@ import PageBreadcrumb from '@/components/common/PageBreadcrumb.vue'
 import AliasRuleSection from '@/components/rules/AliasRuleSection.vue'
 import FilterRuleSection from '@/components/rules/FilterRuleSection.vue'
 import { useBreakpoint } from '@/composables/useBreakpoint'
+import { useToast } from '@/composables/useToast'
 import { listUpstreams, type Upstream } from '@/api/upstreams'
 
 const { isLargeScreen } = useBreakpoint()
+const toast = useToast()
 
 /** 全量上游列表（供选择器使用，按 sortOrder 升序）。 */
 const upstreams = ref<Upstream[]>([])
@@ -25,15 +27,10 @@ const filterSection = ref<InstanceType<typeof FilterRuleSection> | null>(null)
 /** 上游列表加载/错误状态。 */
 const loading = ref(false)
 const errorMessage = ref('')
-/** 操作结果提示。 */
-const toast = ref('')
-
 /** 展示短暂提示。 */
 function showToast(msg: string): void {
-  toast.value = msg
-  setTimeout(() => {
-    if (toast.value === msg) toast.value = ''
-  }, 2500)
+  if (msg.includes('失败')) toast.error(msg)
+  else toast.success(msg)
 }
 
 /** 加载上游列表，供规则作用范围多选使用。 */
@@ -103,14 +100,6 @@ onMounted(loadUpstreams)
         {{ errorMessage }}
       </p>
     </div>
-
-    <!-- 操作提示 -->
-    <p
-      v-if="toast !== ''"
-      class="bg-success-50 text-success-700 dark:bg-success-500/10 dark:text-success-400 mb-4 rounded-lg px-4 py-2.5 text-sm"
-    >
-      {{ toast }}
-    </p>
 
     <!-- 规则看板：两个规则区块按可用空间自动排列，内部卡片继续自适应。 -->
     <div class="grid grid-cols-1 gap-5 lg:grid-cols-2" :data-large-screen="isLargeScreen">

@@ -17,6 +17,7 @@ import {
   type FilterRuleRequest,
 } from '@/api/rules'
 import type { Upstream } from '@/api/upstreams'
+import { useConfirm } from '@/composables/useConfirm'
 
 const props = defineProps<{
   upstreams: Upstream[]
@@ -25,6 +26,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'toast', message: string): void
 }>()
+const { confirm } = useConfirm()
 
 /** 屏蔽规则列表（按 sortOrder 升序）。 */
 const rules = ref<FilterRule[]>([])
@@ -37,8 +39,6 @@ const busy = ref<Set<string>>(new Set())
 /** 模态框开关与编辑目标。 */
 const modalOpen = ref(false)
 const editing = ref<FilterRule | null>(null)
-/** 删除确认目标。 */
-const deleting = ref<FilterRule | null>(null)
 /** 保存中标记与表单错误。 */
 const saving = ref(false)
 const formError = ref('')
@@ -178,18 +178,17 @@ async function toggleEnabled(rule: FilterRule): Promise<void> {
 }
 
 /** 请求删除确认。 */
-function askDelete(rule: FilterRule): void {
-  deleting.value = rule
-}
-
-/** 确认删除。 */
-async function confirmDelete(): Promise<void> {
-  if (deleting.value === null) return
-  const rule = deleting.value
+async function askDelete(rule: FilterRule): Promise<void> {
+  const ok = await confirm({
+    title: '确认删除',
+    message: `确定删除屏蔽规则「${rule.pattern}」吗？该操作不可恢复。`,
+    confirmText: '删除',
+    tone: 'danger',
+  })
+  if (!ok) return
   try {
     await deleteFilter(rule.id)
     emit('toast', '屏蔽规则已删除')
-    deleting.value = null
     await load()
   } catch (err) {
     emit('toast', err instanceof Error ? err.message : '删除失败')
@@ -494,37 +493,6 @@ defineExpose({ reload: load })
       </div>
     </transition>
 
-    <!-- 删除确认 -->
-    <transition name="fade">
-      <div
-        v-if="deleting !== null"
-        class="fixed inset-0 z-[100001] flex items-center justify-center bg-gray-900/40 p-4 backdrop-blur-[1px]"
-        @click.self="deleting = null"
-      >
-        <div class="w-full max-w-sm rounded-2xl border border-gray-200 bg-white p-6 shadow-xl dark:border-gray-800 dark:bg-gray-900">
-          <h3 class="mb-2 text-base font-semibold text-gray-800 dark:text-white/90">确认删除</h3>
-          <p class="mb-5 text-sm text-gray-500 dark:text-gray-400">
-            确定删除屏蔽规则「{{ deleting.pattern }}」吗？该操作不可恢复。
-          </p>
-          <div class="flex justify-end gap-3">
-            <button
-              type="button"
-              class="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
-              @click="deleting = null"
-            >
-              取消
-            </button>
-            <button
-              type="button"
-              class="rounded-lg bg-error-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-error-600"
-              @click="confirmDelete"
-            >
-              删除
-            </button>
-          </div>
-        </div>
-      </div>
-    </transition>
   </section>
 </template>
 

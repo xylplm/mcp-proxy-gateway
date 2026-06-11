@@ -17,6 +17,7 @@ import PageBreadcrumb from '@/components/common/PageBreadcrumb.vue'
 import FieldLabel from '@/components/common/FieldLabel.vue'
 import FloatingActionBar from '@/components/common/FloatingActionBar.vue'
 import { useBreakpoint } from '@/composables/useBreakpoint'
+import { useToast } from '@/composables/useToast'
 import {
   getSettings,
   updateSettings,
@@ -25,6 +26,7 @@ import {
 } from '@/api/settings'
 
 const { isLargeScreen } = useBreakpoint()
+const toast = useToast()
 
 /** 分区内表单栅格类：大屏两列、小屏单列。 */
 const gridClass = computed(() =>
@@ -42,17 +44,6 @@ const loadError = ref('')
 /** 保存表单（设置）的整体错误与字段级错误（键为后端字段路径，如 sync.cron）。 */
 const formError = ref('')
 const fieldErrors = reactive<Record<string, string>>({})
-
-/** 成功提示。 */
-const toast = ref('')
-
-/** 展示短暂成功提示。 */
-function showToast(msg: string): void {
-  toast.value = msg
-  setTimeout(() => {
-    if (toast.value === msg) toast.value = ''
-  }, 2500)
-}
 
 /** 清空所有字段级错误与整体错误。 */
 function clearErrors(): void {
@@ -96,7 +87,7 @@ async function saveSettings(): Promise<void> {
   saving.value = true
   try {
     config.value = await updateSettings(config.value)
-    showToast('系统设置已保存')
+    toast.success('系统设置已保存')
   } catch (err) {
     applyServerError(err)
   } finally {
@@ -131,13 +122,6 @@ const errClass = 'mt-1 text-xs text-error-500'
     </p>
 
     <template v-else-if="config !== null">
-      <!-- 全局提示 -->
-      <p
-        v-if="toast !== ''"
-        class="mb-4 rounded-lg bg-success-50 px-4 py-2.5 text-sm text-success-700 dark:bg-success-500/10 dark:text-success-400"
-      >
-        {{ toast }}
-      </p>
       <p
         v-if="formError !== ''"
         class="mb-4 rounded-lg bg-error-50 px-4 py-2.5 text-sm text-error-600 dark:bg-error-500/10 dark:text-error-400"

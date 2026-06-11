@@ -12,15 +12,16 @@ import PageBreadcrumb from '@/components/common/PageBreadcrumb.vue'
 import FieldLabel from '@/components/common/FieldLabel.vue'
 import { UserCircleIcon } from '@/icons'
 import { useSessionStore } from '@/stores/session'
+import { useToast } from '@/composables/useToast'
 import { getCurrentAdmin } from '@/api/auth'
 import { changePassword, extractAPIError } from '@/api/settings'
 
 const session = useSessionStore()
+const toast = useToast()
 
 const username = ref(session.username ?? '')
 const loading = ref(false)
 const loadError = ref('')
-const toast = ref('')
 
 const pwd = reactive({ currentPassword: '', newPassword: '', confirmPassword: '' })
 const pwdSaving = ref(false)
@@ -53,13 +54,6 @@ async function loadProfile(): Promise<void> {
 
 onMounted(loadProfile)
 
-function showToast(msg: string): void {
-  toast.value = msg
-  setTimeout(() => {
-    if (toast.value === msg) toast.value = ''
-  }, 2500)
-}
-
 function clearPwdErrors(): void {
   pwdError.value = ''
   for (const k of Object.keys(pwdFieldErrors)) {
@@ -89,7 +83,7 @@ async function submitChangePassword(): Promise<void> {
     pwd.currentPassword = ''
     pwd.newPassword = ''
     pwd.confirmPassword = ''
-    showToast('密码已更新')
+    toast.success('密码已更新')
   } catch (err) {
     const body = extractAPIError(err)
     if (body?.fields) {
@@ -115,13 +109,6 @@ const errClass = 'mt-1 text-xs text-error-500'
 <template>
   <AdminLayout>
     <PageBreadcrumb pageTitle="个人中心" />
-
-    <p
-      v-if="toast !== ''"
-      class="mb-4 rounded-lg bg-success-50 px-4 py-2.5 text-sm text-success-700 dark:bg-success-500/10 dark:text-success-400"
-    >
-      {{ toast }}
-    </p>
 
     <div
       v-if="loadError !== ''"

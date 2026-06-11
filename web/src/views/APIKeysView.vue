@@ -19,6 +19,8 @@ import PlaintextKeyModal from '@/components/apikeys/PlaintextKeyModal.vue'
 import APIKeyConfigModal from '@/components/apikeys/APIKeyConfigModal.vue'
 import { useBreakpoint } from '@/composables/useBreakpoint'
 import { useClipboard } from '@/composables/useClipboard'
+import { useConfirm } from '@/composables/useConfirm'
+import { useToast } from '@/composables/useToast'
 import {
   listAPIKeys,
   setAPIKeyEnabled,
@@ -29,6 +31,8 @@ import {
 
 const { pageSize } = useBreakpoint()
 const { copy } = useClipboard()
+const toast = useToast()
+const { confirm } = useConfirm()
 
 /** 全量 API Key 列表（按创建时间倒序）。 */
 const apiKeys = ref<APIKey[]>([])
@@ -36,7 +40,6 @@ const loading = ref(false)
 const errorMessage = ref('')
 /** 行级操作进行中标记（key = id:action）。 */
 const busy = ref<Set<string>>(new Set())
-const toast = ref('')
 
 /** 已展开明文的 Key 标识集合（小眼睛切换；默认全部隐藏）。 */
 const revealed = ref<Set<string>>(new Set())
@@ -50,8 +53,6 @@ const createOpen = ref(false)
 const created = ref<CreatedAPIKey | null>(null)
 /** 当前配置目标。 */
 const configuring = ref<APIKey | null>(null)
-/** 删除确认目标。 */
-const deleting = ref<APIKey | null>(null)
 
 /** 总页数。 */
 const totalPages = computed(() => Math.max(1, Math.ceil(apiKeys.value.length / pageSize.value)))
@@ -74,11 +75,8 @@ function isBusy(id: string, action: string): boolean {
   return busy.value.has(`${id}:${action}`)
 }
 
-function showToast(msg: string): void {
-  toast.value = msg
-  setTimeout(() => {
-    if (toast.value === msg) toast.value = ''
-  }, 2500)
+function showError(err: unknown, fallback: string): void {
+  toast.error(err instanceof Error ? err.message : fallback)
 }
 
 /** 格式化时间（RFC3339 → 本地可读）。 */
@@ -120,28 +118,27 @@ async function toggleEnabled(key: APIKey): Promise<void> {
     await setAPIKeyEnabled(key.id, !key.enabled)
     await loadAPIKeys()
   } catch (err) {
-    showToast(err instanceof Error ? err.message : '操作失败')
+    showError(err, '操作失败')
   } finally {
     setBusy(busyKey, false)
   }
 }
 
 /** 请求删除确认。 */
-function askDelete(key: APIKey): void {
-  deleting.value = key
-}
-
-/** 确认删除（Req 12.2）。 */
-async function confirmDelete(): Promise<void> {
-  if (deleting.value === null) return
-  const key = deleting.value
+async function askDelete(key: APIKey): Promise<void> {
+  const ok = await confirm({
+    title: '确认删除',
+    message: `确定删除 API Key「${key.name}」吗？该操作将级联清理其屏蔽规则与来源白名单，且不可恢复。`,
+    confirmText: '删除',
+    tone: 'danger',
+  })
+  if (!ok) return
   try {
     await deleteAPIKey(key.id)
-    showToast(`已删除「${key.name}」`)
-    deleting.value = null
+    toast.success(`已删除「${key.name}」`)
     await loadAPIKeys()
   } catch (err) {
-    showToast(err instanceof Error ? err.message : '删除失败')
+    showError(err, '删除失败')
   }
 }
 
@@ -181,11 +178,12 @@ function maskKey(key: APIKey): string {
 async function copyKey(key: APIKey): Promise<void> {
   const plain = key.plaintextKey ?? ''
   if (plain === '') {
-    showToast('该 Key 无可复制的明文')
+    toast.warning('该 Key 无可复制的明文')
     return
   }
   const ok = await copy(plain)
-  showToast(ok ? '已复制到剪贴板' : '复制失败，请手动选择复制')
+  if (ok) toast.success('已复制到剪贴板')
+  else toast.error('复制失败，请手动选择复制')
 }
 </script>
 
@@ -220,14 +218,6 @@ async function copyKey(key: APIKey): Promise<void> {
         </button>
       </div>
     </div>
-
-    <!-- 操作提示 -->
-    <p
-      v-if="toast !== ''"
-      class="mb-4 rounded-lg bg-success-50 px-4 py-2.5 text-sm text-success-700 dark:bg-success-500/10 dark:text-success-400"
-    >
-      {{ toast }}
-    </p>
 
     <!-- 列表：卡片网格（响应式，移动端友好，替代表格） -->
     <div>
@@ -415,37 +405,6 @@ async function copyKey(key: APIKey): Promise<void> {
     <!-- 配置弹窗（屏蔽规则 / ACL / 限流） -->
     <APIKeyConfigModal :apiKey="configuring" @close="configuring = null" />
 
-    <!-- 删除确认 -->
-    <transition name="fade">
-      <div
-        v-if="deleting !== null"
-        class="fixed inset-0 z-[100001] flex items-center justify-center bg-gray-900/40 p-4 backdrop-blur-[1px]"
-        @click.self="deleting = null"
-      >
-        <div class="w-full max-w-sm rounded-2xl border border-gray-200 bg-white p-6 shadow-xl dark:border-gray-800 dark:bg-gray-900">
-          <h3 class="mb-2 text-base font-semibold text-gray-800 dark:text-white/90">确认删除</h3>
-          <p class="mb-5 text-sm text-gray-500 dark:text-gray-400">
-            确定删除 API Key「{{ deleting.name }}」吗？该操作将级联清理其屏蔽规则与来源白名单，且不可恢复。
-          </p>
-          <div class="flex justify-end gap-3">
-            <button
-              type="button"
-              class="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
-              @click="deleting = null"
-            >
-              取消
-            </button>
-            <button
-              type="button"
-              class="rounded-lg bg-error-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-error-600"
-              @click="confirmDelete"
-            >
-              删除
-            </button>
-          </div>
-        </div>
-      </div>
-    </transition>
   </AdminLayout>
 </template>
 
