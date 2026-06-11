@@ -82,6 +82,9 @@ func TestLoadReadsExistingConfigAndAppliesDefaults(t *testing.T) {
 		t.Errorf("auth.session_timeout_s 期望 7200，实际 %d", got.Auth.SessionTimeoutS)
 	}
 	// 未在文件中出现的字段应沿用默认值。
+	if got.Server.AdminAddr != ":8080" || !got.Server.ExposeMCPOnAdminAddr {
+		t.Errorf("server 默认值未正确应用：%+v", got.Server)
+	}
 	if got.MCPAPI.Mode != ModeSmart {
 		t.Errorf("mcp_api.mode 期望默认值 %q，实际 %q", ModeSmart, got.MCPAPI.Mode)
 	}

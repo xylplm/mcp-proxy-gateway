@@ -33,8 +33,8 @@ import (
 	"github.com/myGithub/mcp-proxy-gateway/internal/xiaozhi"
 )
 
-// defaultHTTPAddr 为 HTTP 服务默认监听地址。
-const defaultHTTPAddr = ":8080"
+// defaultAdminAddr 为管理端默认监听地址。
+const defaultAdminAddr = ":8080"
 
 // shutdownTimeout 为优雅停机时等待在途请求结束的最长时长。
 const shutdownTimeout = 15 * time.Second
@@ -52,14 +52,19 @@ func WithSystemLogs(store *syslog.Store) Option {
 // App 持有装配完成的全部组件与后台服务句柄，提供启动连通性探测、对外服务与优雅停机。
 type App struct {
 	logger *slog.Logger
-	addr   string
+
+	adminAddr            string
+	publicMCPAddr        string
+	exposeMCPOnAdminAddr bool
 
 	cfg  *config.Manager
 	pool *pgxpool.Pool
 	rdb  *redis.Client
 
-	engine *gin.Engine
-	server *http.Server
+	adminEngine     *gin.Engine
+	publicMCPEngine *gin.Engine
+	adminServer     *http.Server
+	publicMCPServer *http.Server
 
 	systemLogs *syslog.Store
 
@@ -124,11 +129,12 @@ func New(ctx context.Context, logger *slog.Logger, opts ...Option) (*App, error)
 	}
 
 	a := &App{
-		logger: logger,
-		addr:   defaultHTTPAddr,
-		cfg:    cfgMgr,
-		pool:   pool,
-		rdb:    rdb,
+		logger:               logger,
+		adminAddr:            defaultAdminAddr,
+		exposeMCPOnAdminAddr: true,
+		cfg:                  cfgMgr,
+		pool:                 pool,
+		rdb:                  rdb,
 	}
 	for _, opt := range opts {
 		if opt != nil {

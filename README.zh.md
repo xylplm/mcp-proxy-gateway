@@ -84,6 +84,8 @@ services:
     image: xylplm/mcp-proxy-gateway:latest
     ports:
       - "8080:8080"
+      # 如在系统设置中启用独立对外 MCP 端口（例如 :8081），再开放该端口。
+      # - "8081:8081"
     environment:
       MPG_PG_DSN: "postgres://mpg:mpg_password@postgres:5432/mpg?sslmode=disable"
       MPG_REDIS_ADDR: "redis:6379"
@@ -138,6 +140,8 @@ docker run -d --name mcp-proxy-gateway \
   xylplm/mcp-proxy-gateway:latest
 ```
 
+如在系统设置中启用独立对外 MCP 端口，例如 `:8081`，运行容器时需额外映射 `-p 8081:8081`。
+
 ### 镜像标签
 
 镜像发布在 Docker Hub：[`xylplm/mcp-proxy-gateway`](https://hub.docker.com/r/xylplm/mcp-proxy-gateway)，提供多架构镜像（`linux/amd64`、`linux/arm64`）。
@@ -178,7 +182,9 @@ openssl rand -base64 32   # 44 个 base64 字符 → 解码为 32 字节
 
 ### 服务端口
 
-网关固定监听 `:8080`，对外暴露以下路由面：
+网关默认在 `:8080` 同时提供管理台、管理 API 与对外 MCP API。你也可以在「系统设置 → 服务监听」中启用独立对外 MCP 端口，例如 `:8081`，并关闭“管理端口同时暴露 MCP”，这样公网只需要暴露 MCP 端口，管理端口可留在内网或反向代理内侧。服务监听配置保存后需重启进程生效。
+
+默认单端口模式暴露以下路由面：
 
 | 路由 | 鉴权 | 用途 |
 |------|------|------|

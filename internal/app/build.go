@@ -32,6 +32,9 @@ import (
 // 各横切应用服务（同步、统计、审计、API Key、认证、模板、小智、健康）→ 入站路由分面。
 func (a *App) build(enc *crypto.Service, envCfg config.EnvConfig) error {
 	yamlCfg := a.cfg.Config()
+	a.adminAddr = yamlCfg.Server.AdminAddr
+	a.publicMCPAddr = yamlCfg.Server.PublicMCPAddr
+	a.exposeMCPOnAdminAddr = yamlCfg.Server.ExposeMCPOnAdminAddr
 
 	// --- 仓储层 ---
 	repos := store.NewRepositories(a.pool)
@@ -180,7 +183,7 @@ func (a *App) build(enc *crypto.Service, envCfg config.EnvConfig) error {
 	})
 
 	// --- 入站路由分面装配 ---
-	a.engine = a.buildRouter(routerWiring{
+	wiring := routerWiring{
 		adminRouter:    adminRouter,
 		adminAuth:      adminAuth,
 		mcpEndpoints:   mcpEndpoints,
@@ -188,7 +191,11 @@ func (a *App) build(enc *crypto.Service, envCfg config.EnvConfig) error {
 		aclGuard:       aclGuard,
 		rateLimiter:    rateLimiter,
 		detailReporter: detailReporter,
-	})
+	}
+	a.adminEngine = a.buildAdminRouter(wiring, a.exposeMCPOnAdminAddr)
+	if a.publicMCPAddr != "" {
+		a.publicMCPEngine = a.buildMCPRouter(wiring, true)
+	}
 	return nil
 }
 

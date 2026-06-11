@@ -22,6 +22,7 @@ func TestValidateYAMLConfigReportsFieldErrors(t *testing.T) {
 	cfg.Auth.SessionTimeoutS = 100          // < 300
 	cfg.Sync.TimeoutS = 1                   // < 5
 	cfg.Connection.RetryInitialBackoffS = 0 // < 1
+	cfg.Server.AdminAddr = "http://:8080"   // 含协议非法
 	cfg.MCPAPI.Mode = "invalid"             // 非 smart/full
 	cfg.Statistics.RetentionDays = 99999    // > 3650
 	cfg.Audit.PageSizeDefault = 0           // < 1
@@ -43,6 +44,7 @@ func TestValidateYAMLConfigReportsFieldErrors(t *testing.T) {
 		"auth.session_timeout_s",
 		"sync.timeout_s",
 		"connection.retry_initial_backoff_s",
+		"server.admin_addr",
 		"mcp_api.mode",
 		"statistics.retention_days",
 		"audit.page_size_default",
@@ -88,6 +90,48 @@ func TestValidateYAMLConfigBoundaryValues(t *testing.T) {
 
 	if err := ValidateYAMLConfig(cfg); err != nil {
 		t.Fatalf("范围端点值应通过校验，却返回错误：%v", err)
+	}
+}
+
+// TestValidateServerListenConfig 验证管理端口与独立 MCP 端口监听配置校验。
+func TestValidateServerListenConfig(t *testing.T) {
+	cases := []struct {
+		name    string
+		mutate  func(*YAMLConfig)
+		field   string
+		wantErr bool
+	}{
+		{name: "默认配置合法", mutate: func(*YAMLConfig) {}, wantErr: false},
+		{name: "独立 MCP 端口为空表示不启用", mutate: func(c *YAMLConfig) { c.Server.PublicMCPAddr = "" }, wantErr: false},
+		{name: "独立 MCP 端口合法", mutate: func(c *YAMLConfig) { c.Server.PublicMCPAddr = ":8081" }, wantErr: false},
+		{name: "管理端口不能为空", mutate: func(c *YAMLConfig) { c.Server.AdminAddr = "" }, field: "server.admin_addr", wantErr: true},
+		{name: "独立 MCP 地址不能带协议", mutate: func(c *YAMLConfig) { c.Server.PublicMCPAddr = "http://127.0.0.1:8081" }, field: "server.public_mcp_addr", wantErr: true},
+		{name: "独立 MCP 地址不能与管理地址相同", mutate: func(c *YAMLConfig) { c.Server.PublicMCPAddr = c.Server.AdminAddr }, field: "server.public_mcp_addr", wantErr: true},
+		{name: "关闭管理端口 MCP 前必须配置独立端口", mutate: func(c *YAMLConfig) { c.Server.ExposeMCPOnAdminAddr = false }, field: "server.public_mcp_addr", wantErr: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := DefaultYAMLConfig()
+			tc.mutate(&cfg)
+			err := ValidateYAMLConfig(cfg)
+			if !tc.wantErr {
+				if err != nil {
+					t.Fatalf("配置应通过校验，却返回错误：%v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("期望返回校验错误，却返回 nil")
+			}
+			var apiErr *domain.APIError
+			if !errors.As(err, &apiErr) {
+				t.Fatalf("期望错误类型为 *domain.APIError，实际为 %T", err)
+			}
+			if _, ok := apiErr.Fields[tc.field]; !ok {
+				t.Fatalf("期望字段级错误包含 %q，实际 Fields=%v", tc.field, apiErr.Fields)
+			}
+		})
 	}
 }
 

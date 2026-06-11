@@ -84,6 +84,8 @@ services:
     image: xylplm/mcp-proxy-gateway:latest
     ports:
       - "8080:8080"
+      # If you enable a dedicated external MCP port in System Settings, e.g. :8081, expose it too.
+      # - "8081:8081"
     environment:
       MPG_PG_DSN: "postgres://mpg:mpg_password@postgres:5432/mpg?sslmode=disable"
       MPG_REDIS_ADDR: "redis:6379"
@@ -138,6 +140,8 @@ docker run -d --name mcp-proxy-gateway \
   xylplm/mcp-proxy-gateway:latest
 ```
 
+If you enable a dedicated external MCP port in System Settings, for example `:8081`, add `-p 8081:8081` when running the container.
+
 ### Image Tags
 
 Published on Docker Hub: [`xylplm/mcp-proxy-gateway`](https://hub.docker.com/r/xylplm/mcp-proxy-gateway). Multi-arch images (`linux/amd64`, `linux/arm64`).
@@ -178,7 +182,9 @@ openssl rand -base64 32   # 44 base64 chars → decodes to 32 bytes
 
 ### Service Routes
 
-The gateway listens on a fixed port `:8080` and exposes the following route facets:
+By default, the gateway listens on `:8080` for the admin UI, admin APIs and external MCP APIs. You can enable a dedicated external MCP listener in **System Settings → Service Listener**, for example `:8081`, and then disable “Expose MCP on admin port”. In that setup, only the MCP port needs to be exposed publicly while the admin port can stay private or behind an internal reverse proxy. Listener changes require a process restart.
+
+The default single-port mode exposes these route facets:
 
 | Route | Auth | Purpose |
 |-------|------|---------|

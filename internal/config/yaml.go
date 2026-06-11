@@ -4,6 +4,8 @@ package config
 //
 // 数据库与 Redis 连接、加密主密钥来自环境变量，不包含在此结构内。
 type YAMLConfig struct {
+	// Server 为本进程监听地址与端口隔离配置。
+	Server ServerConfig `yaml:"server" json:"server"`
 	// Admin 为管理员凭证配置（Req 1）。
 	Admin AdminConfig `yaml:"admin" json:"admin"`
 	// Auth 为认证会话配置（Req 1.4、1.7）。
@@ -22,6 +24,16 @@ type YAMLConfig struct {
 	Audit AuditConfig `yaml:"audit" json:"audit"`
 	// XiaoZhi 为小智接入配置（Req 15）。
 	XiaoZhi XiaoZhiConfig `yaml:"xiaozhi" json:"xiaozhi"`
+}
+
+// ServerConfig 为 HTTP 服务监听配置。
+type ServerConfig struct {
+	// AdminAddr 为管理台与管理 API 监听地址，默认 :8080。
+	AdminAddr string `yaml:"admin_addr" json:"admin_addr"`
+	// PublicMCPAddr 为独立对外 MCP 服务监听地址；为空表示不单独监听。
+	PublicMCPAddr string `yaml:"public_mcp_addr" json:"public_mcp_addr"`
+	// ExposeMCPOnAdminAddr 表示是否仍在管理端口暴露 /mcp/*，默认 true 兼容旧部署。
+	ExposeMCPOnAdminAddr bool `yaml:"expose_mcp_on_admin_addr" json:"expose_mcp_on_admin_addr"`
 }
 
 // AdminConfig 为管理员凭证配置（Req 1）。
@@ -114,6 +126,11 @@ const (
 // initialized 为 false，以触发首次初始化注册流程（Req 1.1）。
 func DefaultYAMLConfig() YAMLConfig {
 	return YAMLConfig{
+		Server: ServerConfig{
+			AdminAddr:            ":8080",
+			PublicMCPAddr:        "",
+			ExposeMCPOnAdminAddr: true,
+		},
 		Admin: AdminConfig{
 			Username:     "",
 			PasswordHash: "",

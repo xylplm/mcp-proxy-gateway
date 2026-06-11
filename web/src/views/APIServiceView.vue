@@ -94,15 +94,33 @@ const modeOptions: ReadonlyArray<{
   },
 ]
 
-const origin = computed(() => {
+const mcpOrigin = computed(() => {
   if (typeof window === 'undefined') return ''
-  return window.location.origin
+  const configured = settings.value?.server.public_mcp_addr.trim() ?? ''
+  if (configured === '') return window.location.origin
+  const protocol = window.location.protocol
+  const host = hostWithConfiguredPort(configured)
+  return `${protocol}//${host}`
 })
 
 const wsOrigin = computed(() => {
   if (typeof window === 'undefined') return ''
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-  return `${protocol}//${window.location.host}`
+  const configured = settings.value?.server.public_mcp_addr.trim() ?? ''
+  const host = configured === '' ? window.location.host : hostWithConfiguredPort(configured)
+  return `${protocol}//${host}`
+})
+
+const mcpPortModeLabel = computed(() => {
+  if ((settings.value?.server.public_mcp_addr.trim() ?? '') !== '') return '独立 MCP 端口'
+  return '管理端口复用'
+})
+
+const mcpPortSecurityText = computed(() => {
+  if (settings.value === null) return '加载监听配置中'
+  if (settings.value.server.public_mcp_addr.trim() === '') return '当前对外 MCP 与管理台共用监听端口。'
+  if (settings.value.server.expose_mcp_on_admin_addr) return '已启用独立 MCP 端口，但管理端口仍保留 /mcp/* 兼容入口。'
+  return '已启用独立 MCP 端口，管理端口不再暴露 /mcp/*。'
 })
 
 const endpoints = computed<EndpointItem[]>(() => [
@@ -110,7 +128,7 @@ const endpoints = computed<EndpointItem[]>(() => [
     key: 'sse',
     name: 'SSE',
     badge: '事件流',
-    address: `${origin.value}/mcp/sse`,
+    address: `${mcpOrigin.value}/mcp/sse`,
     desc: '适合仍使用 SSE 传输的 MCP 客户端。',
     clientType: 'sse',
     guideDesc: '兼容旧版或仍以事件流建立会话的客户端，适合需要保持服务端推送通道的场景。',
@@ -119,7 +137,7 @@ const endpoints = computed<EndpointItem[]>(() => [
     key: 'http',
     name: 'Streamable HTTP',
     badge: '推荐',
-    address: `${origin.value}/mcp/http`,
+    address: `${mcpOrigin.value}/mcp/http`,
     desc: '适合支持新版 HTTP 传输的客户端。',
     clientType: 'streamable-http',
     guideDesc: '当前最推荐的远程 MCP 接入方式，配置简单，适合绝大多数支持新版 MCP 传输的客户端。',
@@ -134,6 +152,29 @@ const endpoints = computed<EndpointItem[]>(() => [
     guideDesc: '适合需要长连接和双向通信的客户端，浏览器直连时建议使用查询参数认证。',
   },
 ])
+
+function hostWithConfiguredPort(addr: string): string {
+  const trimmed = addr.trim()
+  if (trimmed === '') return window.location.host
+  if (trimmed.startsWith(':')) return `${window.location.hostname}${trimmed}`
+  const bracketIndex = trimmed.lastIndexOf(']:')
+  if (bracketIndex >= 0) {
+    const host = trimmed.slice(1, bracketIndex)
+    const port = trimmed.slice(bracketIndex + 2)
+    return wildcardHost(host) ? `${window.location.hostname}:${port}` : trimmed
+  }
+  const lastColon = trimmed.lastIndexOf(':')
+  if (lastColon > 0) {
+    const host = trimmed.slice(0, lastColon)
+    const port = trimmed.slice(lastColon + 1)
+    return wildcardHost(host) ? `${window.location.hostname}:${port}` : trimmed
+  }
+  return `${window.location.hostname}:${trimmed}`
+}
+
+function wildcardHost(host: string): boolean {
+  return host === '' || host === '0.0.0.0' || host === '::' || host === '[::]'
+}
 
 const authOptions: ReadonlyArray<AuthOption> = [
   {
@@ -645,7 +686,7 @@ const errClass = 'mt-1 text-xs text-error-500'
           <div class="min-w-0 flex-1">
             <p class="text-xs text-gray-400 dark:text-gray-500">对外服务模式</p>
             <p class="mt-0.5 truncate text-sm font-semibold text-gray-800 dark:text-white/90">{{ currentModeLabel }}</p>
-            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">真实工具 {{ aggregatedToolCount }} 个</p>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ mcpPortModeLabel }} · 真实工具 {{ aggregatedToolCount }} 个</p>
           </div>
         </div>
       </div>
@@ -747,6 +788,18 @@ const errClass = 'mt-1 text-xs text-error-500'
               </button>
             </div>
           </article>
+        </div>
+
+        <div class="mt-5 rounded-xl border border-brand-100 bg-brand-50/60 p-4 dark:border-brand-500/20 dark:bg-brand-500/[0.08]">
+          <div class="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h4 class="text-sm font-semibold text-gray-800 dark:text-white/90">监听模式</h4>
+              <p class="mt-1 text-xs leading-5 text-gray-600 dark:text-gray-300">{{ mcpPortSecurityText }}</p>
+            </div>
+            <span class="shrink-0 rounded-full bg-white px-2.5 py-1 text-xs font-medium text-brand-600 dark:bg-white/10 dark:text-brand-300">
+              {{ mcpPortModeLabel }}
+            </span>
+          </div>
         </div>
 
         <div class="mt-5 rounded-xl border border-gray-100 bg-gray-50 p-4 dark:border-gray-800 dark:bg-white/[0.02]">

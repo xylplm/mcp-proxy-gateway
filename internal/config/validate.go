@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"strings"
 
@@ -24,6 +25,21 @@ func rangeCheck(fields map[string]string, name string, value, min, max int) {
 // 由认证服务在注册时按 Req 1.2 校验用户名与密码长度。
 func ValidateYAMLConfig(cfg YAMLConfig) error {
 	fields := make(map[string]string)
+
+	// server.admin_addr 是管理台监听地址，必须可被 net/http 作为监听地址解析。
+	if err := validateListenAddr(cfg.Server.AdminAddr, true); err != nil {
+		fields["server.admin_addr"] = err.Error()
+	}
+	// server.public_mcp_addr 为空表示不启用独立端口；非空时需合法且不能与管理端口相同。
+	if err := validateListenAddr(cfg.Server.PublicMCPAddr, false); err != nil {
+		fields["server.public_mcp_addr"] = err.Error()
+	}
+	if strings.TrimSpace(cfg.Server.PublicMCPAddr) != "" && cfg.Server.PublicMCPAddr == cfg.Server.AdminAddr {
+		fields["server.public_mcp_addr"] = "独立 MCP 监听地址不能与管理监听地址相同"
+	}
+	if strings.TrimSpace(cfg.Server.PublicMCPAddr) == "" && !cfg.Server.ExposeMCPOnAdminAddr {
+		fields["server.public_mcp_addr"] = "关闭管理端口 MCP 入口前，必须先配置独立 MCP 监听地址"
+	}
 
 	// auth.session_timeout_s 范围 300-86400（Req 1.4、1.7）。
 	rangeCheck(fields, "auth.session_timeout_s", cfg.Auth.SessionTimeoutS, 300, 86400)
@@ -79,6 +95,34 @@ func ValidateYAMLConfig(cfg YAMLConfig) error {
 
 	if len(fields) > 0 {
 		return domain.NewValidationError("YAML 配置校验失败", fields)
+	}
+	return nil
+}
+
+// validateListenAddr 校验监听地址是否适合作为 net/http Server.Addr。
+func validateListenAddr(addr string, required bool) error {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		if required {
+			return fmt.Errorf("监听地址不能为空")
+		}
+		return nil
+	}
+	if strings.Contains(addr, "://") {
+		return fmt.Errorf("监听地址只填写 host:port 或 :port，不要包含协议")
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("监听地址格式应为 host:port 或 :port")
+	}
+	if port == "" {
+		return fmt.Errorf("监听地址必须包含端口")
+	}
+	if _, err := net.LookupPort("tcp", port); err != nil {
+		return fmt.Errorf("监听端口非法")
+	}
+	if host != "" && net.ParseIP(host) == nil && strings.Contains(host, " ") {
+		return fmt.Errorf("监听主机名非法")
 	}
 	return nil
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -30,17 +31,18 @@ func (a *App) Run(ctx context.Context) error {
 	a.startBackground(ctx)
 
 	// 3) 启动 HTTP 服务并等待 ctx 取消后优雅停机。
-	a.server = &http.Server{Addr: a.addr, Handler: a.engine}
-
-	errCh := make(chan error, 1)
-	go func() {
-		a.logger.Info("HTTP 服务开始监听", "addr", a.addr)
-		if err := a.server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			errCh <- err
-			return
-		}
-		errCh <- nil
-	}()
+	servers := a.httpServers()
+	errCh := make(chan error, len(servers))
+	for _, spec := range servers {
+		go func(spec httpServerSpec) {
+			a.logger.Info("HTTP 服务开始监听", "name", spec.name, "addr", spec.server.Addr)
+			if err := spec.server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				errCh <- fmt.Errorf("%s HTTP 服务异常退出：%w", spec.name, err)
+				return
+			}
+			errCh <- nil
+		}(spec)
+	}
 
 	select {
 	case <-ctx.Done():
@@ -52,6 +54,33 @@ func (a *App) Run(ctx context.Context) error {
 		a.shutdown()
 		return err
 	}
+}
+
+type httpServerSpec struct {
+	name   string
+	server *http.Server
+}
+
+func (a *App) httpServers() []httpServerSpec {
+	a.adminServer = &http.Server{
+		Addr:              a.adminAddr,
+		Handler:           a.adminEngine,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+	servers := []httpServerSpec{{name: "管理", server: a.adminServer}}
+
+	if a.publicMCPAddr != "" && a.publicMCPEngine != nil {
+		a.publicMCPServer = &http.Server{
+			Addr:              a.publicMCPAddr,
+			Handler:           a.publicMCPEngine,
+			ReadHeaderTimeout: 5 * time.Second,
+			IdleTimeout:       60 * time.Second,
+			MaxHeaderBytes:    16 << 10,
+		}
+		servers = append(servers, httpServerSpec{name: "对外 MCP", server: a.publicMCPServer})
+	}
+	return servers
 }
 
 // startBackground 启动各后台服务（Req 7、16）。
@@ -148,13 +177,16 @@ func (a *App) startAuditRetention(ctx context.Context) {
 // shutdown 优雅停止 HTTP 服务与全部后台服务，并释放基础设施连接。
 func (a *App) shutdown() {
 	// 1) 停止接收新请求：关闭 HTTP 服务，给在途请求收尾时间。
-	if a.server != nil {
-		shutCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-		defer cancel()
-		if err := a.server.Shutdown(shutCtx); err != nil {
-			a.logger.Warn("HTTP 服务优雅停机超时，强制关闭", "error", err)
-			_ = a.server.Close()
+	for _, spec := range []httpServerSpec{{name: "管理", server: a.adminServer}, {name: "对外 MCP", server: a.publicMCPServer}} {
+		if spec.server == nil {
+			continue
 		}
+		shutCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		if err := spec.server.Shutdown(shutCtx); err != nil {
+			a.logger.Warn("HTTP 服务优雅停机超时，强制关闭", "name", spec.name, "error", err)
+			_ = spec.server.Close()
+		}
+		cancel()
 	}
 
 	// 2) 停止后台服务。

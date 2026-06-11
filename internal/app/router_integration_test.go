@@ -80,6 +80,21 @@ func (stubAggregation) InvokeTool(context.Context, string, string, json.RawMessa
 // 从而让本测试覆盖真实的「前缀 + 中间件链」接线，而非测试专用的简化路由。
 func newIntegrationRouter(t *testing.T) *gin.Engine {
 	t.Helper()
+	w := newIntegrationWiring(t)
+	engine := w.app.buildRouter(w.wiring)
+	if engine == nil {
+		t.Fatal("buildRouter 返回了 nil engine")
+	}
+	return engine
+}
+
+type integrationWiring struct {
+	app    *App
+	wiring routerWiring
+}
+
+func newIntegrationWiring(t *testing.T) integrationWiring {
+	t.Helper()
 
 	a := &App{logger: slog.New(slog.NewTextHandler(io_Discard{}, nil))}
 
@@ -94,7 +109,7 @@ func newIntegrationRouter(t *testing.T) *gin.Engine {
 	rateLimiter := apikey.NewRateLimiter(stubRateCounter{}, a.logger)
 	detailReporter := health.NewDetailReporter(health.DetailReporterOptions{})
 
-	engine := a.buildRouter(routerWiring{
+	wiring := routerWiring{
 		adminRouter:    adminRouter,
 		adminAuth:      adminAuth,
 		mcpEndpoints:   mcpEndpoints,
@@ -102,9 +117,26 @@ func newIntegrationRouter(t *testing.T) *gin.Engine {
 		aclGuard:       aclGuard,
 		rateLimiter:    rateLimiter,
 		detailReporter: detailReporter,
-	})
+	}
+	return integrationWiring{app: a, wiring: wiring}
+}
+
+func newAdminRouter(t *testing.T, exposeMCP bool) *gin.Engine {
+	t.Helper()
+	w := newIntegrationWiring(t)
+	engine := w.app.buildAdminRouter(w.wiring, exposeMCP)
 	if engine == nil {
-		t.Fatal("buildRouter 返回了 nil engine")
+		t.Fatal("buildAdminRouter 返回了 nil engine")
+	}
+	return engine
+}
+
+func newMCPRouter(t *testing.T) *gin.Engine {
+	t.Helper()
+	w := newIntegrationWiring(t)
+	engine := w.app.buildMCPRouter(w.wiring, true)
+	if engine == nil {
+		t.Fatal("buildMCPRouter 返回了 nil engine")
 	}
 	return engine
 }
@@ -221,6 +253,37 @@ func TestMiddlewareChainsAreIsolated(t *testing.T) {
 	engine.ServeHTTP(rec2, req2)
 	if rec2.Code != http.StatusUnauthorized {
 		t.Fatalf("携带 API Key 访问 /api/admin/upstreams 仍应被 JWT 链以 401 拒绝，实际 %d", rec2.Code)
+	}
+}
+
+// TestAdminRouterCanDisableMCPRoutes 验证启用独立 MCP 端口后，管理端口可完全不注册 /mcp/*。
+func TestAdminRouterCanDisableMCPRoutes(t *testing.T) {
+	engine := newAdminRouter(t, false)
+
+	rec := doGET(engine, "/mcp/http")
+	if rec.Code == http.StatusUnauthorized {
+		t.Fatalf("管理端口关闭 MCP 后不应触达 API Key 鉴权链，实际返回 401")
+	}
+	if strings.Contains(rec.Body.String(), `<div id="app">`) {
+		t.Fatalf("管理端口关闭 MCP 后 /mcp/* 不应兜底为 SPA 入口页")
+	}
+}
+
+// TestPublicMCPRouterDoesNotExposeAdminOrSPA 验证独立 MCP 端口只暴露 MCP 与存活探针，不暴露管理端。
+func TestPublicMCPRouterDoesNotExposeAdminOrSPA(t *testing.T) {
+	engine := newMCPRouter(t)
+
+	if rec := doGET(engine, "/mcp/http"); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("独立 MCP 端口的 /mcp/http 应进入 API Key 鉴权链并返回 401，实际 %d", rec.Code)
+	}
+	if rec := doGET(engine, "/api/admin/upstreams"); rec.Code != http.StatusNotFound {
+		t.Fatalf("独立 MCP 端口不应暴露管理 API，实际 %d", rec.Code)
+	}
+	if rec := doGET(engine, "/dashboard"); rec.Code != http.StatusNotFound || strings.Contains(rec.Body.String(), `<div id="app">`) {
+		t.Fatalf("独立 MCP 端口不应提供 SPA 兜底，实际 status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	if rec := doGET(engine, "/healthz"); rec.Code != http.StatusOK {
+		t.Fatalf("独立 MCP 端口应提供 /healthz，实际 %d", rec.Code)
 	}
 }
 

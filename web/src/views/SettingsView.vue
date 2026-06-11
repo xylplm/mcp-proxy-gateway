@@ -35,6 +35,7 @@ const gridClass = computed(() =>
 
 /** 当前配置表单模型（加载后填充）。 */
 const config = ref<YAMLConfig | null>(null)
+const serverSnapshot = ref('')
 
 /** 页面级加载/保存状态。 */
 const loading = ref(false)
@@ -59,6 +60,7 @@ async function loadSettings(): Promise<void> {
   loadError.value = ''
   try {
     config.value = await getSettings()
+    serverSnapshot.value = snapshotServerConfig(config.value)
   } catch (err) {
     loadError.value = err instanceof Error ? err.message : '加载系统设置失败'
   } finally {
@@ -85,14 +87,21 @@ async function saveSettings(): Promise<void> {
   if (config.value === null || saving.value) return
   clearErrors()
   saving.value = true
+  const serverChanged = snapshotServerConfig(config.value) !== serverSnapshot.value
   try {
     config.value = await updateSettings(config.value)
-    toast.success('系统设置已保存')
+    serverSnapshot.value = snapshotServerConfig(config.value)
+    if (serverChanged) toast.warning('系统设置已保存，服务监听配置需重启后生效')
+    else toast.success('系统设置已保存')
   } catch (err) {
     applyServerError(err)
   } finally {
     saving.value = false
   }
+}
+
+function snapshotServerConfig(value: YAMLConfig): string {
+  return JSON.stringify(value.server)
 }
 
 /** 通用样式类（TailAdmin 风格）。 */
@@ -261,6 +270,67 @@ const errClass = 'mt-1 text-xs text-error-500'
           </div>
         </section>
 
+        <!-- 服务监听 -->
+        <section
+          class="rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03]"
+        >
+          <h3 class="mb-1 text-base font-semibold text-gray-800 dark:text-white/90">服务监听</h3>
+          <p class="mb-5 text-sm text-gray-500 dark:text-gray-400">
+            管理端口用于后台操作；对外 MCP 可启用独立端口，便于公网暴露时叠加更严格的反向代理和安全策略。
+          </p>
+          <div :class="gridClass">
+            <div>
+              <FieldLabel label="管理监听地址" required tooltip="管理台、管理 API 与默认服务入口监听地址。只填写 :端口 或 host:端口，不要包含 http://。" />
+              <input
+                v-model.trim="config.server.admin_addr"
+                type="text"
+                placeholder=":8080"
+                :class="inputClass"
+              />
+              <p :class="hintClass">默认 :8080。公网部署建议只在内网或反向代理内侧暴露。</p>
+              <p v-if="fieldErrors['server.admin_addr']" :class="errClass">
+                {{ fieldErrors['server.admin_addr'] }}
+              </p>
+            </div>
+            <div>
+              <FieldLabel label="独立 MCP 监听地址" tooltip="对外 MCP 服务单独监听的地址。留空表示不启用独立端口。" />
+              <input
+                v-model.trim="config.server.public_mcp_addr"
+                type="text"
+                placeholder=":8081"
+                :class="inputClass"
+              />
+              <p :class="hintClass">启用后可只把该端口暴露到公网，例如 :8081。</p>
+              <p v-if="fieldErrors['server.public_mcp_addr']" :class="errClass">
+                {{ fieldErrors['server.public_mcp_addr'] }}
+              </p>
+            </div>
+          </div>
+          <div class="mt-5 rounded-xl border border-gray-100 bg-gray-50 p-4 dark:border-gray-800 dark:bg-white/[0.02]">
+            <div class="flex flex-wrap items-start justify-between gap-4">
+              <div class="min-w-0">
+                <FieldLabel label="管理端口同时暴露 MCP" tooltip="关闭后，管理监听地址不再注册 /mcp/*；对外客户端只能访问独立 MCP 监听地址。" />
+                <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                  启用独立 MCP 监听地址后，建议关闭此项，让管理端口只服务后台；未配置独立端口时不可关闭。
+                </p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                :aria-checked="config.server.expose_mcp_on_admin_addr"
+                class="relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition"
+                :class="config.server.expose_mcp_on_admin_addr ? 'bg-brand-500' : 'bg-gray-300 dark:bg-gray-700'"
+                @click="config.server.expose_mcp_on_admin_addr = !config.server.expose_mcp_on_admin_addr"
+              >
+                <span
+                  class="inline-block h-4 w-4 transform rounded-full bg-white transition"
+                  :class="config.server.expose_mcp_on_admin_addr ? 'translate-x-6' : 'translate-x-1'"
+                ></span>
+              </button>
+            </div>
+          </div>
+        </section>
+
         <!-- 对外 API 默认值 -->
         <section
           class="rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03]"
@@ -384,7 +454,7 @@ const errClass = 'mt-1 text-xs text-error-500'
         <FloatingActionBar>
           <template #info>
             <p class="text-sm font-medium text-gray-800 dark:text-white/90">系统设置</p>
-            <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">修改后保存才会写入并应用。</p>
+            <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">修改后保存才会写入；服务监听配置需重启后生效。</p>
           </template>
           <button
             type="button"

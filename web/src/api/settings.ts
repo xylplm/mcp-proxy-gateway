@@ -22,6 +22,16 @@ import request, { ApiError } from '@/api/request'
 /** 对外服务模式取值，与后端 config.ModeSmart / ModeFull 对齐。 */
 export type MCPMode = 'smart' | 'full'
 
+/** 服务监听配置（对应后端 ServerConfig）。 */
+export interface ServerConfig {
+  /** 管理台与管理 API 监听地址，默认 :8080。 */
+  admin_addr: string
+  /** 独立对外 MCP 服务监听地址；为空表示不单独监听。 */
+  public_mcp_addr: string
+  /** 是否仍在管理端口暴露 /mcp/*，默认 true 兼容旧部署。 */
+  expose_mcp_on_admin_addr: boolean
+}
+
 /**
  * 管理员凭证配置（对应后端 AdminConfig）。
  *
@@ -109,6 +119,7 @@ export interface XiaoZhiConfig {
  * 键名与后端 `yaml` 标签一致（snake_case），便于 PUT 时原样回传。
  */
 export interface YAMLConfig {
+  server: ServerConfig
   admin: AdminConfig
   auth: AuthConfig
   sync: SyncConfig
