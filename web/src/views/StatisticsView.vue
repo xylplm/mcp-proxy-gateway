@@ -489,7 +489,7 @@ onMounted(async () => {
       </section>
     </div>
 
-    <div class="mt-6 grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.35fr)_minmax(360px,1fr)]">
+    <div class="mt-6 grid grid-cols-1 gap-5 xl:grid-cols-2">
       <section :class="cardClass">
         <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">工具调用排行</h3>
         <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">优先排查高频工具的流量集中度。</p>

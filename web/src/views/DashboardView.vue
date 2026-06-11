@@ -119,8 +119,8 @@ const modeOptions: ReadonlyArray<{
   {
     value: 'smart',
     title: '智能模式',
-    desc: '客户端先看到少量网关工具，再按需查找和调用具体工具。',
-    note: '适合工具较多、希望节省上下文的客户端',
+    desc: '智能发现并按需调度真实工具，让客户端少加载、更精准、更省上下文。',
+    note: '适合工具多、上下文宝贵且需要更高命中效率的场景',
   },
   {
     value: 'full',
