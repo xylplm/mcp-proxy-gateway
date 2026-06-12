@@ -114,9 +114,9 @@ func epNewSmartAgg() *epFakeAggregation {
 // TestSmartModeSSEDiscoverAndCall 验证 SSE 传输下智能模式的工具列表与调用端到端（Req 11.8）。
 func TestSmartModeSSEDiscoverAndCall(t *testing.T) {
 	agg := epNewSmartAgg()
-	srv := epNewTestServer(t, agg, ModeSmart)
+	srv := epNewTestServer(t, agg)
 
-	cs := epConnectClient(t, &mcp.SSEClientTransport{Endpoint: srv.URL + PathSSE + "?api_key=key-sse"})
+	cs := epConnectClient(t, &mcp.SSEClientTransport{Endpoint: srv.URL + PathSmartSSE + "?api_key=key-sse"})
 	epAssertSmartModeDiscoverAndCall(t, cs, agg)
 
 	if agg.gotInvokeID != "key-sse" {
@@ -127,9 +127,9 @@ func TestSmartModeSSEDiscoverAndCall(t *testing.T) {
 // TestSmartModeStreamableHTTPDiscoverAndCall 验证 Streamable-HTTP 传输下智能模式的工具列表与调用端到端（Req 11.8）。
 func TestSmartModeStreamableHTTPDiscoverAndCall(t *testing.T) {
 	agg := epNewSmartAgg()
-	srv := epNewTestServer(t, agg, ModeSmart)
+	srv := epNewTestServer(t, agg)
 
-	cs := epConnectClient(t, &mcp.StreamableClientTransport{Endpoint: srv.URL + PathHTTP + "?api_key=key-http"})
+	cs := epConnectClient(t, &mcp.StreamableClientTransport{Endpoint: srv.URL + PathSmartHTTP + "?api_key=key-http"})
 	epAssertSmartModeDiscoverAndCall(t, cs, agg)
 
 	if agg.gotInvokeID != "key-http" {
@@ -140,9 +140,9 @@ func TestSmartModeStreamableHTTPDiscoverAndCall(t *testing.T) {
 // TestSmartModeWebSocketDiscoverAndCall 验证 WebSocket 传输下智能模式的工具列表与调用端到端（Req 11.8）。
 func TestSmartModeWebSocketDiscoverAndCall(t *testing.T) {
 	agg := epNewSmartAgg()
-	srv := epNewTestServer(t, agg, ModeSmart)
+	srv := epNewTestServer(t, agg)
 
-	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + PathWS + "?api_key=key-ws"
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + PathSmartWS + "?api_key=key-ws"
 	cs := epConnectClient(t, &epWSClientTransport{endpoint: wsURL})
 	epAssertSmartModeDiscoverAndCall(t, cs, agg)
 

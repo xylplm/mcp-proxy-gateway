@@ -129,7 +129,7 @@ func (a *App) build(enc *crypto.Service, envCfg config.EnvConfig) error {
 	templateMarket := template.New()
 
 	// --- 对外 MCP API 服务（MCP_API_Service）：按模式构建 server，多传输暴露 ---
-	mcpService := mcpapi.NewService(agg, yamlCfg.MCPAPI.Mode, yamlCfg.MCPAPI.SmartDiscoveryLimit, a.logger)
+	mcpService := mcpapi.NewService(agg, yamlCfg.MCPAPI.SmartDiscoveryLimit, a.logger)
 	a.mcpService = mcpService
 	mcpEndpoints := mcpapi.NewEndpoints(mcpService, resolveAPIKeyID, a.logger)
 
@@ -139,8 +139,8 @@ func (a *App) build(enc *crypto.Service, envCfg config.EnvConfig) error {
 		yamlCfg.XiaoZhi.Endpoint,
 		yamlCfg.XiaoZhi.Enabled,
 		nil,
-		xiaozhi.WithServerBuildFn(func(ctx context.Context) (*mcp.Server, error) {
-			return mcpService.BuildServer(ctx, "")
+		xiaozhi.WithServerBuildFn(func(ctx context.Context, mode string) (*mcp.Server, error) {
+			return mcpService.BuildServer(ctx, "", mode)
 		}),
 		xiaozhi.WithBackoffPolicy(xzBackoff),
 		xiaozhi.WithLogger(a.logger),

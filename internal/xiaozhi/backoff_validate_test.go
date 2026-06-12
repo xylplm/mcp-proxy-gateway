@@ -69,7 +69,7 @@ func TestReconfigureRejectsInvalidEndpointAndPreservesConfig(t *testing.T) {
 	agg := &fakeAggregation{}
 	c := NewConnector("ws://old.example/mcp", true, agg, WithConnector(newFakeConnector()))
 
-	err := c.Reconfigure("http://bad.example", true)
+	err := c.Reconfigure("http://bad.example", true, "full")
 	if err == nil {
 		t.Fatal("启用时提交非法协议地址应返回错误")
 	}
@@ -91,7 +91,7 @@ func TestReconfigureAcceptsValidEndpoint(t *testing.T) {
 	agg := &fakeAggregation{}
 	c := NewConnector("ws://old.example/mcp", true, agg, WithConnector(newFakeConnector()))
 
-	if err := c.Reconfigure("wss://new.example/mcp", true); err != nil {
+	if err := c.Reconfigure("wss://new.example/mcp", true, "full"); err != nil {
 		t.Fatalf("合法地址更新应成功，实际：%v", err)
 	}
 	if got := c.Endpoint(); got != "wss://new.example/mcp" {
@@ -107,7 +107,7 @@ func TestReconfigureDisabledSkipsAddressValidation(t *testing.T) {
 	c := NewConnector("ws://old.example/mcp", true, agg, WithConnector(newFakeConnector()))
 
 	// 停用时不校验地址（停用不依赖地址，Req 15.5）。
-	if err := c.Reconfigure("", false); err != nil {
+	if err := c.Reconfigure("", false, "full"); err != nil {
 		t.Fatalf("停用且地址为空应被接受，实际：%v", err)
 	}
 	if c.Enabled() {

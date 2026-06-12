@@ -69,9 +69,9 @@ func ValidateYAMLConfig(cfg YAMLConfig) error {
 	// aggregation.upstream_call_timeout_s 范围 1-600（Req 10.8）。
 	rangeCheck(fields, "aggregation.upstream_call_timeout_s", cfg.Aggregation.UpstreamCallTimeoutS, 1, 600)
 
-	// mcp_api.mode 取值 smart 或 full（Req 11）。
-	if cfg.MCPAPI.Mode != ModeSmart && cfg.MCPAPI.Mode != ModeFull {
-		fields["mcp_api.mode"] = fmt.Sprintf("对外模式取值非法（应为 %q 或 %q）", ModeSmart, ModeFull)
+	// xiaozhi.mode 取值 smart 或 full，默认 full。
+	if cfg.XiaoZhi.Mode != "" && cfg.XiaoZhi.Mode != ModeSmart && cfg.XiaoZhi.Mode != ModeFull {
+		fields["xiaozhi.mode"] = fmt.Sprintf("小智接入模式取值非法（应为 %q 或 %q）", ModeSmart, ModeFull)
 	}
 	// mcp_api.smart_discovery_limit 范围 1-200（Req 11.4）。
 	rangeCheck(fields, "mcp_api.smart_discovery_limit", cfg.MCPAPI.SmartDiscoveryLimit, 1, 200)

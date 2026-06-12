@@ -171,6 +171,12 @@ const cardClass =
               <span class="rounded-full px-2.5 py-1 text-xs font-medium" :class="statusClass(record)">
                 {{ statusLabel(record) }}
               </span>
+              <span
+                class="rounded-full px-2 py-1 text-xs font-medium"
+                :class="record.Mode === 'smart' ? 'bg-brand-50 text-brand-600 dark:bg-brand-500/10 dark:text-brand-400' : 'bg-gray-100 text-gray-600 dark:bg-white/5 dark:text-gray-400'"
+              >
+                {{ record.Mode === 'smart' ? '智能模式' : '全量模式' }}
+              </span>
             </div>
             <p class="mt-2 text-sm text-gray-500 dark:text-gray-400">记录 ID：{{ record.ID }}</p>
           </div>
@@ -199,6 +205,12 @@ const cardClass =
             <p class="text-xs text-gray-400 dark:text-gray-500">耗时</p>
             <p class="mt-1 text-sm font-medium text-gray-800 dark:text-white/90">
               {{ formatLatency(record.LatencyMS) }}
+            </p>
+          </div>
+          <div class="rounded-xl bg-gray-50 p-4 dark:bg-gray-800/60">
+            <p class="text-xs text-gray-400 dark:text-gray-500">调用模式</p>
+            <p class="mt-1 text-sm font-medium text-gray-800 dark:text-white/90">
+              {{ record.Mode === 'smart' ? '智能模式' : '全量模式' }}
             </p>
           </div>
         </div>

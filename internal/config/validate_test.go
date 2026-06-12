@@ -23,7 +23,7 @@ func TestValidateYAMLConfigReportsFieldErrors(t *testing.T) {
 	cfg.Sync.TimeoutS = 1                   // < 5
 	cfg.Connection.RetryInitialBackoffS = 0 // < 1
 	cfg.Server.AdminAddr = "http://:8080"   // 含协议非法
-	cfg.MCPAPI.Mode = "invalid"             // 非 smart/full
+	cfg.MCPAPI.SmartDiscoveryLimit = 0      // < 1
 	cfg.Statistics.RetentionDays = 99999    // > 3650
 	cfg.Audit.PageSizeDefault = 0           // < 1
 
@@ -45,7 +45,7 @@ func TestValidateYAMLConfigReportsFieldErrors(t *testing.T) {
 		"sync.timeout_s",
 		"connection.retry_initial_backoff_s",
 		"server.admin_addr",
-		"mcp_api.mode",
+		"mcp_api.smart_discovery_limit",
 		"statistics.retention_days",
 		"audit.page_size_default",
 	}

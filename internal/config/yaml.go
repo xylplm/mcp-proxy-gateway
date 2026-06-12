@@ -82,8 +82,6 @@ type AggregationConfig struct {
 
 // MCPAPIConfig 为对外 MCP API 配置（Req 11）。
 type MCPAPIConfig struct {
-	// Mode 为对外模式，取值 smart 或 full，默认 smart（Req 11）。
-	Mode string `yaml:"mode" json:"mode"`
 	// SmartDiscoveryLimit 为智能模式工具发现返回数，范围 1 至 200，默认 50（Req 11.4）。
 	SmartDiscoveryLimit int `yaml:"smart_discovery_limit" json:"smart_discovery_limit"`
 }
@@ -110,6 +108,8 @@ type XiaoZhiConfig struct {
 	Enabled bool `yaml:"enabled" json:"enabled"`
 	// Endpoint 为小智 MCP 接入点地址，需为 ws:// 或 wss:// 合法 URL（Req 15.6）。
 	Endpoint string `yaml:"endpoint" json:"endpoint"`
+	// Mode 为小智使用的对外 MCP 模式：smart 或 full，默认 full。
+	Mode     string `yaml:"mode" json:"mode"`
 }
 
 // 对外模式取值常量（Req 11）。
@@ -154,7 +154,6 @@ func DefaultYAMLConfig() YAMLConfig {
 			UpstreamCallTimeoutS: 30,
 		},
 		MCPAPI: MCPAPIConfig{
-			Mode:                ModeSmart,
 			SmartDiscoveryLimit: 50,
 		},
 		Statistics: StatisticsConfig{
@@ -168,6 +167,7 @@ func DefaultYAMLConfig() YAMLConfig {
 		XiaoZhi: XiaoZhiConfig{
 			Enabled:  false,
 			Endpoint: "",
+			Mode:     ModeFull,
 		},
 	}
 }

@@ -83,8 +83,6 @@ export interface AggregationConfig {
 
 /** 对外 MCP API 配置（对应后端 MCPAPIConfig）。 */
 export interface MCPAPIConfig {
-  /** 对外服务模式，smart 或 full，默认 smart。 */
-  mode: MCPMode
   /** 智能模式工具发现返回数，范围 1-200，默认 50。 */
   smart_discovery_limit: number
 }
@@ -111,6 +109,8 @@ export interface XiaoZhiConfig {
   enabled: boolean
   /** 小智 MCP 接入点地址，启用时须为 ws:// 或 wss:// 合法 URL（Req 15.6）。 */
   endpoint: string
+  /** 小智使用的 MCP 模式，smart 或 full，默认 full。 */
+  mode: MCPMode
 }
 
 /**

@@ -57,6 +57,8 @@ type CallStatRecord struct {
 	ErrorMessage string
 	// FailureDetail stores diagnostic JSON for failed calls.
 	FailureDetail json.RawMessage
+	// Mode 为调用使用的 MCP 模式（full/smart），默认 full。
+	Mode string
 }
 
 // CallRecordView 是管理台调用记录列表与详情使用的单条调用视图。
@@ -76,6 +78,7 @@ type CallRecordView struct {
 	ResponseResult json.RawMessage
 	ErrorMessage   string
 	FailureDetail  json.RawMessage
+	Mode           string
 }
 
 // DimensionCount 为按某一维度（上游 MCP 或 API Key）聚合的调用条数（Req 16.2、16.4）。
@@ -148,6 +151,7 @@ func (r *CallStatRepo) Insert(ctx context.Context, records []CallStatRecord) err
 		"upstream_id", "original_name", "exposed_name",
 		"api_key_id", "called_at", "latency_ms", "success",
 		"status", "request_args", "response_result", "error_message", "failure_detail",
+		"mode",
 	}
 	rows := make([][]any, 0, len(records))
 	for _, rec := range records {
@@ -173,6 +177,7 @@ func (r *CallStatRepo) Insert(ctx context.Context, records []CallStatRecord) err
 			nullableJSON(rec.ResponseResult),
 			nullableText(rec.ErrorMessage),
 			nullableJSON(rec.FailureDetail),
+			normalizeMode(rec.Mode),
 		})
 	}
 
@@ -207,7 +212,8 @@ func (r *CallStatRepo) ListRecords(ctx context.Context, limit int, afterID int64
 			coalesce(cs.request_args, 'null'::jsonb),
 			coalesce(cs.response_result, 'null'::jsonb),
 			coalesce(cs.error_message, ''),
-			coalesce(cs.failure_detail, 'null'::jsonb)
+			coalesce(cs.failure_detail, 'null'::jsonb),
+			coalesce(cs.mode, 'full')
 		FROM call_stat cs
 		LEFT JOIN upstream_mcp up ON up.id = cs.upstream_id
 		LEFT JOIN api_key ak ON ak.id = cs.api_key_id
@@ -248,7 +254,8 @@ func (r *CallStatRepo) GetRecord(ctx context.Context, id int64) (CallRecordView,
 			coalesce(cs.request_args, 'null'::jsonb),
 			coalesce(cs.response_result, 'null'::jsonb),
 			coalesce(cs.error_message, ''),
-			coalesce(cs.failure_detail, 'null'::jsonb)
+			coalesce(cs.failure_detail, 'null'::jsonb),
+			coalesce(cs.mode, 'full')
 		FROM call_stat cs
 		LEFT JOIN upstream_mcp up ON up.id = cs.upstream_id
 		LEFT JOIN api_key ak ON ak.id = cs.api_key_id
@@ -687,6 +694,7 @@ func scanCallRecordViews(rows pgx.Rows) ([]CallRecordView, error) {
 			&response,
 			&item.ErrorMessage,
 			&failure,
+			&item.Mode,
 		); err != nil {
 			return nil, err
 		}
@@ -713,6 +721,13 @@ func normalizeCallStatus(status string, success bool) string {
 		return CallStatusSuccess
 	}
 	return CallStatusFailed
+}
+
+func normalizeMode(mode string) string {
+	if mode == "smart" || mode == "full" {
+		return mode
+	}
+	return "full"
 }
 
 // validateRange checks that the statistics range start is not after end.

@@ -48,10 +48,10 @@ const (
 
 // 智能模式网关工具描述。描述会直接暴露给 AI 客户端，需强调使用顺序与入参约束。
 const (
-	GatewayToolListToolsDescription   = "分页浏览当前可见工具目录，仅返回工具名和简述；用于先了解可用工具。"
-	GatewayToolSearchToolsDescription = "按关键词查找可见工具，仅返回匹配工具的名称和简述；不确定工具名时先用它缩小范围。"
-	GatewayToolGetToolDescription     = "根据工具名称获取完整定义和 inputSchema；调用前用它确认参数结构和必填字段。"
-	GatewayToolCallToolDescription    = "调用指定名称的真实聚合工具；name 必须来自工具目录或检索结果，arguments 必须符合该工具 inputSchema。"
+	GatewayToolListToolsDescription   = "【第一步·发现】分页浏览所有可用工具的名称和简述。当用户提出需求时，先调用此工具了解有哪些工具可用，再根据需要调用 get_tool 获取完整定义，最后通过 call_tool 执行。"
+	GatewayToolSearchToolsDescription = "【发现】按关键词在工具名称和描述中检索，返回匹配的工具名称和简述。适合在已知需求但不清楚具体工具名时缩小范围。找到目标工具后，用 get_tool 获取完整参数定义，再用 call_tool 调用。"
+	GatewayToolGetToolDescription     = "【第二步·获取定义】根据工具名称获取完整定义，包括 inputSchema（参数结构、必填字段和类型约束）。在调用 call_tool 之前必须先通过此工具确认参数格式。"
+	GatewayToolCallToolDescription    = "【第三步·执行】调用指定的真实聚合工具。name 必须来自 list_tools 或 search_tools 返回的结果，arguments 必须符合 get_tool 返回的 inputSchema。请确保先发现并获取定义再调用。"
 )
 
 // 各网关工具的入参 JSON Schema。这些 Schema 在智能模式 tools/list 中作为网关工具定义对外

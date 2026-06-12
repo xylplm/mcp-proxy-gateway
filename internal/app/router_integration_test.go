@@ -101,7 +101,7 @@ func newIntegrationWiring(t *testing.T) integrationWiring {
 	adminRouter := httpapi.NewRouter(httpapi.Deps{})
 	adminAuth := auth.RequireAdmin(stubTokenParser{})
 
-	mcpService := mcpapi.NewService(stubAggregation{}, mcpapi.ModeFull, 50, a.logger)
+	mcpService := mcpapi.NewService(stubAggregation{}, 50, a.logger)
 	mcpEndpoints := mcpapi.NewEndpoints(mcpService, resolveAPIKeyID, a.logger)
 
 	authenticator := apikey.NewAuthenticator(stubKeyLookup{}, a.logger)

@@ -63,7 +63,7 @@ var _ domain.Aggregation_Service = (*epFakeAggregation)(nil)
 //
 // resolveKey 模拟前置鉴权中间件：本测试直接从查询参数 api_key 取标识写入 gin.Context，
 // 再由 APIKeyResolver 取出，等价于真实链路中鉴权中间件写入元数据后的读取。
-func epNewTestServer(t *testing.T, agg domain.Aggregation_Service, mode string) *httptest.Server {
+func epNewTestServer(t *testing.T, agg domain.Aggregation_Service) *httptest.Server {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
@@ -74,7 +74,7 @@ func epNewTestServer(t *testing.T, agg domain.Aggregation_Service, mode string) 
 		c.Next()
 	})
 
-	svc := NewService(agg, mode, 50, nil)
+	svc := NewService(agg, 50, nil)
 	resolve := func(c *gin.Context) (string, bool) {
 		v, ok := c.Get("test.apikey")
 		if !ok {
@@ -84,6 +84,7 @@ func epNewTestServer(t *testing.T, agg domain.Aggregation_Service, mode string) 
 	}
 	eps := NewEndpoints(svc, resolve, nil)
 	eps.Register(r)
+	eps.RegisterSmart(r)
 
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
@@ -150,7 +151,7 @@ func TestEndpointsSSEFullMode(t *testing.T) {
 		buildResult:  epToolDefs(),
 		invokeResult: domain.ToolResult{Content: json.RawMessage(`[{"type":"text","text":"ok"}]`)},
 	}
-	srv := epNewTestServer(t, agg, ModeFull)
+	srv := epNewTestServer(t, agg)
 
 	cs := epConnectClient(t, &mcp.SSEClientTransport{Endpoint: srv.URL + PathSSE + "?api_key=key-sse"})
 	epAssertFullModeToolsAndCall(t, cs, agg)
@@ -166,7 +167,7 @@ func TestEndpointsStreamableHTTPFullMode(t *testing.T) {
 		buildResult:  epToolDefs(),
 		invokeResult: domain.ToolResult{Content: json.RawMessage(`[{"type":"text","text":"ok"}]`)},
 	}
-	srv := epNewTestServer(t, agg, ModeFull)
+	srv := epNewTestServer(t, agg)
 
 	cs := epConnectClient(t, &mcp.StreamableClientTransport{Endpoint: srv.URL + PathHTTP + "?api_key=key-http"})
 	epAssertFullModeToolsAndCall(t, cs, agg)
@@ -181,9 +182,9 @@ func TestEndpointsStreamableHTTPFullMode(t *testing.T) {
 // 以 Streamable-HTTP 为代表验证模式生效；SSE/WS 复用同一 BuildServer，无需逐一重复。
 func TestEndpointsSmartModeExposesGatewayTools(t *testing.T) {
 	agg := &epFakeAggregation{buildResult: epToolDefs()}
-	srv := epNewTestServer(t, agg, ModeSmart)
+	srv := epNewTestServer(t, agg)
 
-	cs := epConnectClient(t, &mcp.StreamableClientTransport{Endpoint: srv.URL + PathHTTP + "?api_key=key-smart"})
+	cs := epConnectClient(t, &mcp.StreamableClientTransport{Endpoint: srv.URL + PathSmartHTTP + "?api_key=key-smart"})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -265,7 +266,7 @@ func TestEndpointsWebSocketFullMode(t *testing.T) {
 		buildResult:  epToolDefs(),
 		invokeResult: domain.ToolResult{Content: json.RawMessage(`[{"type":"text","text":"ok"}]`)},
 	}
-	srv := epNewTestServer(t, agg, ModeFull)
+	srv := epNewTestServer(t, agg)
 
 	// httptest 服务器地址形如 http://127.0.0.1:port，转换为 ws:// 方案。
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + PathWS + "?api_key=key-ws"

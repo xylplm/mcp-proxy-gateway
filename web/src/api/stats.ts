@@ -100,6 +100,7 @@ export interface CallRecord {
   ResponseResult: unknown
   ErrorMessage: string
   FailureDetail?: CallFailureDetail | null
+  Mode?: string
 }
 
 /** 时间区间查询参数；start/end 均为可选 RFC3339 字符串。 */

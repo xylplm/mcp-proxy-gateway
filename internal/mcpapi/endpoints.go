@@ -36,8 +36,15 @@ const (
 	PathSSE = "/mcp/sse"
 	// PathHTTP 为 Streamable-HTTP 传输端点路径。
 	PathHTTP = "/mcp/http"
-	// PathWS 为 WebSocket 传输端点路径。
+	// PathWS 为 WebSocket 传输端点路径（全量模式）。
 	PathWS = "/mcp/ws"
+
+	// PathSmartSSE 为智能模式 SSE 传输端点路径。
+	PathSmartSSE = "/mcp/smart/sse"
+	// PathSmartHTTP 为智能模式 Streamable-HTTP 传输端点路径。
+	PathSmartHTTP = "/mcp/smart/http"
+	// PathSmartWS 为智能模式 WebSocket 传输端点路径。
+	PathSmartWS = "/mcp/smart/ws"
 )
 
 // wsServerReadLimit 为对外 WebSocket 单条消息的最大字节数。
@@ -45,6 +52,9 @@ const (
 // 与上游 WS 客户端会话保持一致（32MiB）：聚合工具列表/调用结果可能较大，放宽默认上限
 // 以兼顾安全与可用。
 const wsServerReadLimit = 32 << 20
+
+// modeContextKey 用于把 MCP 模式注入 *http.Request 上下文。
+type modeContextKey struct{}
 
 // apiKeyContextKey 是把已鉴权 API Key 标识注入 *http.Request 上下文时使用的私有键类型。
 //
@@ -121,7 +131,11 @@ func (e *Endpoints) Register(rg gin.IRoutes) {
 // SDK handler 据此返回 400，不暴露任何聚合能力。
 func (e *Endpoints) getServer(req *http.Request) *mcp.Server {
 	apiKeyID, _ := req.Context().Value(apiKeyContextKey{}).(string)
-	srv, err := e.svc.BuildServer(req.Context(), apiKeyID)
+	mode, _ := req.Context().Value(modeContextKey{}).(string)
+	if mode == "" {
+		mode = ModeFull
+	}
+	srv, err := e.svc.BuildServer(req.Context(), apiKeyID, mode)
 	if err != nil {
 		e.logger.Warn("构建对外 MCP 服务端失败", "apiKeyID", apiKeyID, "error", err)
 		return nil
@@ -133,7 +147,7 @@ func (e *Endpoints) getServer(req *http.Request) *mcp.Server {
 //
 // 标识来源于注入的 resolveKey（从 gin 上下文读取鉴权中间件存入的元数据）；resolveKey 为 nil
 // 或解析不到时以空标识（全局视角）注入。返回携带新上下文的请求。
-func (e *Endpoints) withAPIKey(c *gin.Context) *http.Request {
+func (e *Endpoints) withAPIKey(c *gin.Context, mode string) *http.Request {
 	apiKeyID := ""
 	if e.resolveKey != nil {
 		if id, ok := e.resolveKey(c); ok {
@@ -141,19 +155,20 @@ func (e *Endpoints) withAPIKey(c *gin.Context) *http.Request {
 		}
 	}
 	ctx := context.WithValue(c.Request.Context(), apiKeyContextKey{}, apiKeyID)
+	ctx = context.WithValue(ctx, modeContextKey{}, mode)
 	return c.Request.WithContext(ctx)
 }
 
 // handleSSE 以 SSE 传输对外暴露聚合能力（Req 11.8）。委派给 SDK 的 SSEHandler，
 // 构建 server 前已注入 API Key 视角（Req 11.9）。
 func (e *Endpoints) handleSSE(c *gin.Context) {
-	e.sseHandler.ServeHTTP(c.Writer, e.withAPIKey(c))
+	e.sseHandler.ServeHTTP(c.Writer, e.withAPIKey(c, ModeFull))
 }
 
 // handleHTTP 以 Streamable-HTTP 传输对外暴露聚合能力（Req 11.8）。委派给 SDK 的
 // StreamableHTTPHandler，构建 server 前已注入 API Key 视角（Req 11.9）。
 func (e *Endpoints) handleHTTP(c *gin.Context) {
-	e.httpHandler.ServeHTTP(c.Writer, e.withAPIKey(c))
+	e.httpHandler.ServeHTTP(c.Writer, e.withAPIKey(c, ModeFull))
 }
 
 // handleWS 以 WebSocket 传输对外暴露聚合能力（Req 11.8）。
@@ -171,7 +186,7 @@ func (e *Endpoints) handleWS(c *gin.Context) {
 		}
 	}
 
-	srv, err := e.svc.BuildServer(c.Request.Context(), apiKeyID)
+	srv, err := e.svc.BuildServer(c.Request.Context(), apiKeyID, ModeFull)
 	if err != nil {
 		e.logger.Warn("构建对外 MCP 服务端失败", "apiKeyID", apiKeyID, "error", err)
 		// 升级前失败：以普通 HTTP 错误响应，尚未切换协议。
@@ -260,3 +275,61 @@ func (c *wsServerConn) Close() error {
 
 // SessionID 实现 mcp.Connection。对外 WS 传输无独立会话 ID，返回空串。
 func (c *wsServerConn) SessionID() string { return "" }
+
+// RegisterSmart 在给定 gin 路由组上注册智能模式的三种对外传输端点。
+func (e *Endpoints) RegisterSmart(rg gin.IRoutes) {
+	rg.GET(PathSmartSSE, e.handleSmartSSE)
+	rg.POST(PathSmartSSE, e.handleSmartSSE)
+
+	rg.GET(PathSmartHTTP, e.handleSmartHTTP)
+	rg.POST(PathSmartHTTP, e.handleSmartHTTP)
+	rg.DELETE(PathSmartHTTP, e.handleSmartHTTP)
+
+	rg.GET(PathSmartWS, e.handleSmartWS)
+}
+
+func (e *Endpoints) handleSmartSSE(c *gin.Context) {
+	e.sseHandler.ServeHTTP(c.Writer, e.withAPIKey(c, ModeSmart))
+}
+
+func (e *Endpoints) handleSmartHTTP(c *gin.Context) {
+	e.httpHandler.ServeHTTP(c.Writer, e.withAPIKey(c, ModeSmart))
+}
+
+func (e *Endpoints) handleSmartWS(c *gin.Context) {
+	apiKeyID := ""
+	if e.resolveKey != nil {
+		if id, ok := e.resolveKey(c); ok {
+			apiKeyID = id
+		}
+	}
+
+	srv, err := e.svc.BuildServer(c.Request.Context(), apiKeyID, ModeSmart)
+	if err != nil {
+		e.logger.Warn("构建智能模式 MCP 服务端失败", "apiKeyID", apiKeyID, "error", err)
+		c.AbortWithStatus(http.StatusInternalServerError)
+		return
+	}
+
+	conn, err := websocket.Accept(c.Writer, c.Request, nil)
+	if err != nil {
+		e.logger.Warn("智能模式 WebSocket 升级失败", "apiKeyID", apiKeyID, "error", err)
+		return
+	}
+	conn.SetReadLimit(wsServerReadLimit)
+
+	connCtx, cancel := context.WithCancel(context.Background())
+	transport := &wsServerTransport{conn: &wsServerConn{conn: conn, ctx: connCtx, cancel: cancel}}
+
+	session, err := srv.Connect(c.Request.Context(), transport, nil)
+	if err != nil {
+		e.logger.Warn("智能模式 WebSocket 会话建立失败", "apiKeyID", apiKeyID, "error", err)
+		_ = conn.Close(websocket.StatusInternalError, "session setup failed")
+		cancel()
+		return
+	}
+
+	if werr := session.Wait(); werr != nil {
+		e.logger.Debug("智能模式 WebSocket 会话结束", "apiKeyID", apiKeyID, "error", werr)
+	}
+}

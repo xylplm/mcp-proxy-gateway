@@ -9,6 +9,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/myGithub/mcp-proxy-gateway/internal/aggregation"
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
 )
 
@@ -42,80 +43,39 @@ const (
 type Service struct {
 	mu sync.RWMutex
 
-	// agg 为聚合服务接口，重载对外模式时复用它重新构造模式处理器。
-	agg domain.Aggregation_Service
-	// mode 为对外模式（ModeSmart/ModeFull）；非 ModeFull 一律按智能模式处理（默认智能）。
-	mode string
-	// full 为全量模式编排核心，仅在全量模式下用于构建工具集合与路由调用。
-	full *FullModeHandler
-	// smart 为智能模式编排核心，仅在智能模式下用于网关工具发现与路由调用。
-	smart *SmartModeHandler
-	// logger 用于记录构建期异常；为空时回退到 slog.Default()。
+	agg    domain.Aggregation_Service
+	full   *FullModeHandler
+	smart  *SmartModeHandler
 	logger *slog.Logger
 }
 
-// NewService 构造对外 MCP API 服务。
-//
-//   - agg 为聚合服务接口（依赖倒置），全量/智能两种模式的可见性与调用路由均经它求得；
-//   - mode 取自配置 mcp_api.mode：等于 ModeFull 时为全量模式，否则按智能模式处理（默认智能）；
-//   - discoveryLimit 取自配置 mcp_api.smart_discovery_limit，越界时由智能模式构造器收敛到默认值；
-//   - logger 为空时回退到默认 logger。
-func NewService(agg domain.Aggregation_Service, mode string, discoveryLimit int, logger *slog.Logger) *Service {
+func NewService(agg domain.Aggregation_Service, discoveryLimit int, logger *slog.Logger) *Service {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	s := &Service{
+	return &Service{
 		agg:    agg,
+		full:   NewFullModeHandler(agg),
+		smart:  NewSmartModeHandler(agg, discoveryLimit),
 		logger: logger,
 	}
-	s.Reconfigure(mode, discoveryLimit)
-	return s
 }
-
-// Mode 返回当前对外模式（ModeSmart/ModeFull）。
-func (s *Service) Mode() string {
+func (s *Service) snapshot() (*FullModeHandler, *SmartModeHandler) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.mode
+	return s.full, s.smart
 }
 
-// Reconfigure 在运行时切换对外 MCP 模式与智能发现上限。
-//
-// 新建连接会立即使用新的模式；已建立连接是否感知变化取决于对应传输的生命周期。
-// 处理器本身不持有传输状态，因此可在管理端保存配置后安全调用。
-func (s *Service) Reconfigure(mode string, discoveryLimit int) {
-	if mode != ModeFull {
-		mode = ModeSmart
-	}
-
+// SetDiscoveryLimit updates the smart mode discovery limit at runtime.
+func (s *Service) SetDiscoveryLimit(limit int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.mode = mode
-	s.full = NewFullModeHandler(s.agg)
-	s.smart = NewSmartModeHandler(s.agg, discoveryLimit)
+	s.smart = NewSmartModeHandler(s.agg, limit)
 }
-
-func (s *Service) snapshot() (string, *FullModeHandler, *SmartModeHandler) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.mode, s.full, s.smart
-}
-
-// BuildServer 据当前模式与 API Key 视角构建一个对外 MCP 服务端实例（Req 11.2、11.3）。
-//
-//   - 智能模式：注册四个网关工具（list_tools/search_tools/get_tool/call_tool），其工具集合
-//     固定不依赖聚合结果，故构建本身不会失败；可见聚合工具的发现/调用在网关工具被调用时
-//     才经聚合服务求得（反映调用时刻的可见集合）。
-//   - 全量模式：取该 API Key 视角的全部可见聚合工具（BuildToolSet），逐个注册为低层工具
-//     处理器，其调用经聚合服务路由到上游（反映本次连接建立时刻的可见集合快照）。
-//
-// apiKeyID 为已鉴权 API Key 的标识（由传输层在 API Key 校验通过后传入）；为空表示全局视角。
-// 每条对外连接应各调用一次本方法，得到独立的 *mcp.Server。
-func (s *Service) BuildServer(ctx context.Context, apiKeyID string) (*mcp.Server, error) {
-	mode, full, smart := s.snapshot()
+func (s *Service) BuildServer(ctx context.Context, apiKeyID string, mode string) (*mcp.Server, error) {
+	full, smart := s.snapshot()
 	srv := mcp.NewServer(
 		&mcp.Implementation{Name: apiServerName, Version: apiServerVersion},
-		// 始终通告 tools 能力，即使当前可见集合为空（空集合是合法状态，Req 10.7）。
 		&mcp.ServerOptions{Capabilities: &mcp.ServerCapabilities{Tools: &mcp.ToolCapabilities{ListChanged: true}}},
 	)
 
@@ -131,9 +91,6 @@ func (s *Service) BuildServer(ctx context.Context, apiKeyID string) (*mcp.Server
 }
 
 // registerFullTools 在全量模式下把该 API Key 视角的全部可见聚合工具注册到 server（Req 11.2）。
-//
-// 工具定义由聚合管线产出（已完成屏蔽、别名重写与同名去重）；每个工具注册的低层处理器以原始
-// 字节透传入参、经全量模式编排核心路由到上游并原样回传结果（Req 10.3、10.4、11.7）。
 func (s *Service) registerFullTools(ctx context.Context, srv *mcp.Server, apiKeyID string, full *FullModeHandler) error {
 	tools, err := full.ListTools(ctx, apiKeyID)
 	if err != nil {
@@ -148,7 +105,7 @@ func (s *Service) registerFullTools(ctx context.Context, srv *mcp.Server, apiKey
 // fullCallHandler 返回把指定对外工具名的调用经全量模式编排核心路由到上游的低层处理器。
 func (s *Service) fullCallHandler(apiKeyID, exposedName string, full *FullModeHandler) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		return full.CallTool(ctx, apiKeyID, exposedName, callArguments(req))
+		return full.CallTool(aggregation.ContextWithMode(ctx, ModeFull), apiKeyID, exposedName, callArguments(req))
 	}
 }
 
@@ -177,6 +134,7 @@ func (s *Service) registerGatewayTools(srv *mcp.Server, apiKeyID string, smart *
 // gatewayHandler 返回处理指定网关工具调用的低层处理器，按网关工具名分派到智能模式编排核心。
 func (s *Service) gatewayHandler(apiKeyID, gatewayName string, smart *SmartModeHandler) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		ctx = aggregation.ContextWithMode(ctx, ModeSmart)
 		args := callArguments(req)
 		switch gatewayName {
 		case GatewayToolListTools:

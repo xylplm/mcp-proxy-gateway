@@ -117,7 +117,6 @@ func genValidYAMLConfig(t *rapid.T) config.YAMLConfig {
 	cfg.Connection.RetryMaxBackoffS = rapid.IntRange(1, 86400).Draw(t, "retryMax")
 	cfg.Connection.FailureThreshold = rapid.IntRange(1, 100).Draw(t, "failureThreshold")
 	cfg.Aggregation.UpstreamCallTimeoutS = rapid.IntRange(1, 600).Draw(t, "aggTimeout")
-	cfg.MCPAPI.Mode = rapid.SampledFrom([]string{config.ModeSmart, config.ModeFull}).Draw(t, "mcpMode")
 	cfg.MCPAPI.SmartDiscoveryLimit = rapid.IntRange(1, 200).Draw(t, "smartLimit")
 	cfg.Statistics.TopLimitDefault = rapid.IntRange(1, 100).Draw(t, "topLimit")
 	cfg.Statistics.RetentionDays = rapid.IntRange(1, 3650).Draw(t, "statRetention")
@@ -263,8 +262,8 @@ func corruptValidBackup(t *rapid.T, b Backup) Backup {
 		// 错误版本号。
 		b.Version = FormatVersion + "-invalid-" + genNonEmptyToken(t, "badVersion")
 	case 1:
-		// YAML 取值越界（mode 非法）。
-		b.YAML.MCPAPI.Mode = "invalid-mode-" + genNonEmptyToken(t, "badMode")
+		// YAML 取值越界（xiaozhi mode 非法）。
+		b.YAML.XiaoZhi.Mode = "invalid-mode-" + genNonEmptyToken(t, "badMode")
 	case 2:
 		// 上游标识为空。
 		if len(b.Business.Upstreams) == 0 {

@@ -86,6 +86,16 @@ function toolLabel(record: CallRecord): string {
   return record.ExposedName || record.OriginalName || '未知工具'
 }
 
+function modeLabel(record: CallRecord): string {
+  return record.Mode === 'smart' ? '智能' : '全量'
+}
+
+function modeClass(record: CallRecord): string {
+  return record.Mode === 'smart'
+    ? 'bg-brand-50 text-brand-600 dark:bg-brand-500/10 dark:text-brand-400'
+    : 'bg-gray-100 text-gray-600 dark:bg-white/5 dark:text-gray-400'
+}
+
 function apiKeyLabel(record: CallRecord): string {
   return record.APIKeyName || record.APIKeyID || '未知 API Key'
 }
@@ -321,6 +331,9 @@ const cardClass =
           </div>
           <span class="shrink-0 rounded-full px-2.5 py-1 text-xs font-medium" :class="statusClass(record)">
             {{ statusLabel(record) }}
+          </span>
+          <span class="shrink-0 rounded-full px-2 py-1 text-xs font-medium" :class="modeClass(record)">
+            {{ modeLabel(record) }}
           </span>
         </div>
 

@@ -85,9 +85,6 @@ func TestLoadReadsExistingConfigAndAppliesDefaults(t *testing.T) {
 	if got.Server.AdminAddr != ":8080" || !got.Server.ExposeMCPOnAdminAddr {
 		t.Errorf("server 默认值未正确应用：%+v", got.Server)
 	}
-	if got.MCPAPI.Mode != ModeSmart {
-		t.Errorf("mcp_api.mode 期望默认值 %q，实际 %q", ModeSmart, got.MCPAPI.Mode)
-	}
 	if got.Connection.FailureThreshold != 10 {
 		t.Errorf("connection.failure_threshold 期望默认值 10，实际 %d", got.Connection.FailureThreshold)
 	}
@@ -158,7 +155,7 @@ func TestSavePersistsConfig(t *testing.T) {
 	// 修改若干合法字段后回写。
 	updated := mgr.Config()
 	updated.Auth.SessionTimeoutS = 7200
-	updated.MCPAPI.Mode = ModeFull
+	updated.XiaoZhi.Mode = ModeFull
 	updated.Statistics.RetentionDays = 30
 	if err := mgr.Save(updated); err != nil {
 		t.Fatalf("Save 不应返回错误：%v", err)

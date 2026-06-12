@@ -58,8 +58,8 @@ const saving = ref(false)
 const loadError = ref('')
 const formError = ref('')
 const copiedKey = ref('')
-const modeSaving = ref(false)
 const guideOpen = ref(false)
+const guideMode = ref<'full' | 'smart'>('full')
 const selectedGuideEndpoint = ref<EndpointKey>('http')
 const selectedGuideAuth = ref<AuthKey>('bearer')
 const guideCopiedKey = ref('')
@@ -77,24 +77,9 @@ const gatewayTools = ref<GatewayTool[]>([])
 
 const xiaozhiEnabled = ref(false)
 const xiaozhiEndpoint = ref('')
+const xiaozhiMode = ref<MCPMode>('full')
+const endpointTab = ref<'full' | 'smart'>('full')
 const fieldErrors = reactive<Record<string, string>>({})
-
-const modeOptions: ReadonlyArray<{
-  value: MCPMode
-  title: string
-  desc: string
-}> = [
-  {
-    value: 'smart',
-    title: '智能模式',
-    desc: '智能发现并按需调度真实工具，减少客户端工具噪音和上下文占用。',
-  },
-  {
-    value: 'full',
-    title: '全量模式',
-    desc: '直接暴露全部真实工具，配置简单、兼容性高，适合需要完整清单的客户端。',
-  },
-]
 
 const effectiveServer = computed<ServerConfig | null>(() => runtimeServer.value ?? settings.value?.server ?? null)
 const listenerReused = computed(() => (effectiveServer.value?.public_mcp_addr.trim() ?? '') === '')
@@ -177,6 +162,36 @@ const endpoints = computed<EndpointItem[]>(() => [
   },
 ])
 
+const smartEndpoints = computed<EndpointItem[]>(() => [
+  {
+    key: 'sse',
+    name: 'SSE',
+    badge: '事件流',
+    address: `${mcpOrigin.value}/mcp/smart/sse`,
+    desc: '智能模式 SSE 端点。',
+    clientType: 'sse',
+    guideDesc: '智能模式 SSE 传输端点。',
+  },
+  {
+    key: 'http',
+    name: 'Streamable HTTP',
+    badge: '推荐',
+    address: `${mcpOrigin.value}/mcp/smart/http`,
+    desc: '智能模式 HTTP 端点。',
+    clientType: 'streamable-http',
+    guideDesc: '智能模式 Streamable HTTP 端点，适合大多数客户端。',
+  },
+  {
+    key: 'ws',
+    name: 'WebSocket',
+    badge: '长连接',
+    address: `${wsOrigin.value}/mcp/smart/ws`,
+    desc: '智能模式 WebSocket 端点。',
+    clientType: 'websocket',
+    guideDesc: '智能模式 WebSocket 端点。',
+  },
+])
+
 function hostWithConfiguredPort(addr: string): string {
   const trimmed = addr.trim()
   if (trimmed === '') return window.location.host
@@ -239,13 +254,11 @@ const availableUpstreams = computed(
 const dependencyOK = computed(
   () => health.value?.dependencies.filter((item) => item.status === 'ok').length ?? 0,
 )
-const currentModeLabel = computed(() =>
-  settings.value?.mcp_api.mode === 'full' ? '全量模式' : '智能模式',
-)
-const currentMode = computed<MCPMode | null>(() => settings.value?.mcp_api.mode ?? null)
 const aggregatedToolCount = computed(() => aggregatedTools.value.length)
+const activeEndpoints = computed(() => endpointTab.value === 'smart' ? smartEndpoints.value : endpoints.value)
+const guideEndpoints = computed(() => guideMode.value === 'smart' ? smartEndpoints.value : endpoints.value)
 const selectedEndpoint = computed<EndpointItem>(
-  () => endpoints.value.find((item) => item.key === selectedGuideEndpoint.value) ?? endpoints.value[0]!,
+  () => guideEndpoints.value.find((item) => item.key === selectedGuideEndpoint.value) ?? guideEndpoints.value[0]!,
 )
 const selectedAuth = computed<AuthOption>(
   () => authOptions.find((item) => item.key === selectedGuideAuth.value) ?? authOptions[0]!,
@@ -316,6 +329,7 @@ const systemStatusClass = computed(() =>
 function syncForm(cfg: YAMLConfig): void {
   xiaozhiEnabled.value = cfg.xiaozhi.enabled
   xiaozhiEndpoint.value = cfg.xiaozhi.endpoint
+  xiaozhiMode.value = cfg.xiaozhi.mode || 'full'
 }
 
 function errorMessage(err: unknown): string {
@@ -332,6 +346,7 @@ function clearFieldErrors(): void {
 function openGuide(): void {
   guideCopyError.value = ''
   guideCopiedKey.value = ''
+  guideMode.value = endpointTab.value
   guideOpen.value = true
 }
 
@@ -552,6 +567,7 @@ async function saveAPISettings(): Promise<void> {
     xiaozhi: {
       enabled: xiaozhiEnabled.value,
       endpoint: xiaozhiEndpoint.value.trim(),
+      mode: xiaozhiMode.value,
     },
   }
   try {
@@ -569,28 +585,6 @@ async function saveAPISettings(): Promise<void> {
     formError.value = body?.message ?? errorMessage(err)
   } finally {
     saving.value = false
-  }
-}
-
-async function switchMode(mode: MCPMode): Promise<void> {
-  if (settings.value === null || modeSaving.value || settings.value.mcp_api.mode === mode) return
-  clearFieldErrors()
-  modeSaving.value = true
-  const next: YAMLConfig = {
-    ...settings.value,
-    mcp_api: {
-      ...settings.value.mcp_api,
-      mode,
-    },
-  }
-  try {
-    settings.value = await updateSettings(next)
-    toast.success('对外服务模式已切换')
-    await refreshStatus()
-  } catch (err) {
-    formError.value = errorMessage(err)
-  } finally {
-    modeSaving.value = false
   }
 }
 
@@ -651,7 +645,7 @@ const errClass = 'mt-1 text-xs text-error-500'
         <div>
           <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">服务概览</h3>
           <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-            外部客户端接入、对外服务模式、真实工具与第三方连接状态集中在这里查看和调整。
+            外部客户端接入、真实工具与第三方连接状态集中在这里查看和调整。全量模式与智能模式可同时使用。
           </p>
         </div>
         <button
@@ -710,56 +704,11 @@ const errClass = 'mt-1 text-xs text-error-500'
             <InfoCircleIcon class="h-5 w-5" />
           </span>
           <div class="min-w-0 flex-1">
-            <p class="text-xs text-gray-400 dark:text-gray-500">对外服务模式</p>
-            <p class="mt-0.5 truncate text-sm font-semibold text-gray-800 dark:text-white/90">{{ currentModeLabel }}</p>
+            <p class="text-xs text-gray-400 dark:text-gray-500">服务模式</p>
+            <p class="mt-0.5 truncate text-sm font-semibold text-gray-800 dark:text-white/90">双模式并行</p>
             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ mcpPortModeLabel }} · 真实工具 {{ aggregatedToolCount }} 个</p>
           </div>
         </div>
-      </div>
-    </section>
-
-    <section :class="cardClass" class="mb-6">
-      <div class="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">对外服务模式</h3>
-          <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-            控制外部客户端连接后看到的是网关工具，还是直接看到聚合后的真实工具。
-          </p>
-        </div>
-        <span class="rounded-full bg-brand-50 px-2.5 py-1 text-xs font-medium text-brand-600 dark:bg-brand-500/10 dark:text-brand-400">
-          {{ currentModeLabel }}
-        </span>
-      </div>
-
-      <div class="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <button
-          v-for="mode in modeOptions"
-          :key="mode.value"
-          type="button"
-          class="group flex items-start gap-3 rounded-xl border px-4 py-3 text-left transition disabled:cursor-not-allowed disabled:opacity-70"
-          :class="
-            currentMode === mode.value
-              ? 'border-brand-300 bg-brand-50/60 shadow-theme-sm dark:border-brand-500/50 dark:bg-brand-500/[0.08]'
-              : 'border-gray-200 bg-white hover:border-brand-300 hover:bg-brand-50/40 dark:border-gray-800 dark:bg-white/[0.02] dark:hover:border-brand-500/40 dark:hover:bg-brand-500/[0.06]'
-          "
-          :disabled="loading || settings === null || modeSaving"
-          @click="switchMode(mode.value)"
-        >
-          <span
-            class="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border transition"
-            :class="
-              currentMode === mode.value
-                ? 'border-brand-500 bg-brand-500 text-white'
-                : 'border-gray-300 text-transparent dark:border-gray-700'
-            "
-          >
-            <span class="h-2 w-2 rounded-full bg-current"></span>
-          </span>
-          <span class="min-w-0 flex-1">
-            <span class="block text-sm font-semibold text-gray-800 dark:text-white/90">{{ mode.title }}</span>
-            <span class="mt-1 block text-sm leading-5 text-gray-600 dark:text-gray-300">{{ mode.desc }}</span>
-          </span>
-        </button>
       </div>
     </section>
 
@@ -769,7 +718,7 @@ const errClass = 'mt-1 text-xs text-error-500'
           <div>
             <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">对外接口地址</h3>
             <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-              外部 MCP 客户端使用这些地址连接本系统。
+              全量模式与智能模式各自拥有独立端点，可同时使用。外部 MCP 客户端使用这些地址连接本系统。
             </p>
           </div>
           <button
@@ -782,9 +731,35 @@ const errClass = 'mt-1 text-xs text-error-500'
           </button>
         </div>
 
-        <div class="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <div class="mt-4 flex gap-1 rounded-lg border border-gray-200 bg-gray-50 p-1 dark:border-gray-800 dark:bg-white/[0.03]">
+          <button
+            type="button"
+            class="flex-1 rounded-md px-3 py-2 text-sm font-medium transition"
+            :class="endpointTab === 'full' ? 'bg-white text-gray-800 shadow-sm dark:bg-gray-800 dark:text-white/90' : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300'"
+            @click="endpointTab = 'full'"
+          >
+            全量模式
+          </button>
+          <button
+            type="button"
+            class="flex-1 rounded-md px-3 py-2 text-sm font-medium transition"
+            :class="endpointTab === 'smart' ? 'bg-white text-gray-800 shadow-sm dark:bg-gray-800 dark:text-white/90' : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300'"
+            @click="endpointTab = 'smart'"
+          >
+            智能模式
+            <span class="ml-1 text-xs text-gray-400">（分步发现）</span>
+          </button>
+        </div>
+
+        <div v-if="endpointTab === 'smart'" class="mt-3 rounded-lg border border-warning-200 bg-warning-50/80 p-3 dark:border-warning-500/30 dark:bg-warning-500/10">
+          <p class="text-xs leading-5 text-warning-700 dark:text-warning-300">
+            智能模式通过 4 个网关工具（list_tools / search_tools / get_tool / call_tool）按需发现和调用真实工具，减少客户端工具噪音和上下文占用。但部分模型可能不支持分步骤获取工具信息的交互模式，导致无法正确使用网关工具。
+          </p>
+        </div>
+
+        <div class="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
           <article
-            v-for="item in endpoints"
+            v-for="item in activeEndpoints"
             :key="item.key"
             class="rounded-xl border border-gray-200 p-4 dark:border-gray-800 dark:bg-white/[0.02]"
           >
@@ -858,16 +833,16 @@ const errClass = 'mt-1 text-xs text-error-500'
               <div>
                 <h4 class="text-sm font-semibold text-gray-800 dark:text-white/90">客户端可见工具</h4>
                 <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
-                  智能模式先暴露网关工具，全量模式直接暴露真实聚合工具。
+                  当前为 {{ endpointTab === 'smart' ? '智能模式网关工具' : '全量模式真实聚合工具' }}。
                 </p>
               </div>
               <span class="shrink-0 rounded-full bg-brand-50 px-2.5 py-1 text-xs font-medium text-brand-600 dark:bg-brand-500/10 dark:text-brand-400">
-                {{ currentModeLabel }}
+                {{ endpointTab === 'smart' ? '智能模式' : '全量模式' }}
               </span>
             </div>
-            <div class="mt-4 space-y-2">
+            <div class="custom-scrollbar mt-4 grid max-h-80 grid-cols-1 gap-2 overflow-y-auto pr-1">
               <div
-                v-for="tool in currentMode === 'smart' ? gatewayTools : aggregatedTools.slice(0, 6)"
+                v-for="tool in endpointTab === 'smart' ? gatewayTools : aggregatedTools"
                 :key="tool.name"
                 class="rounded-lg bg-white p-3 dark:bg-gray-900/60"
               >
@@ -879,7 +854,7 @@ const errClass = 'mt-1 text-xs text-error-500'
                 </p>
               </div>
               <p
-                v-if="(currentMode === 'smart' ? gatewayTools : aggregatedTools).length === 0"
+                v-if="(endpointTab === 'smart' ? gatewayTools : aggregatedTools).length === 0"
                 class="py-4 text-center text-sm text-gray-400"
               >
                 暂无工具
@@ -990,6 +965,36 @@ const errClass = 'mt-1 text-xs text-error-500'
                 </p>
               </div>
 
+              <div>
+                <label :class="labelClass">对接模式</label>
+                <div class="mt-1 flex gap-1 rounded-lg border border-gray-200 bg-gray-50 p-1 dark:border-gray-700 dark:bg-gray-800/50">
+                  <button
+                    type="button"
+                    class="flex-1 rounded-md px-3 py-2 text-sm font-medium transition"
+                    :class="xiaozhiMode === 'full' ? 'bg-white text-gray-800 shadow-sm dark:bg-gray-700 dark:text-white/90' : 'text-gray-500 hover:text-gray-700 dark:text-gray-400'"
+                    :disabled="!xiaozhiEnabled"
+                    @click="xiaozhiMode = 'full'"
+                  >
+                    全量模式
+                  </button>
+                  <button
+                    type="button"
+                    class="flex-1 rounded-md px-3 py-2 text-sm font-medium transition"
+                    :class="xiaozhiMode === 'smart' ? 'bg-white text-gray-800 shadow-sm dark:bg-gray-700 dark:text-white/90' : 'text-gray-500 hover:text-gray-700 dark:text-gray-400'"
+                    :disabled="!xiaozhiEnabled"
+                    @click="xiaozhiMode = 'smart'"
+                  >
+                    智能模式
+                  </button>
+                </div>
+                <p :class="hintClass">
+                  {{ xiaozhiMode === 'smart' ? '通过网关工具按需发现和调用，减少工具噪音。' : '直接暴露全部聚合工具，兼容性好。' }}
+                </p>
+                <p v-if="fieldErrors['xiaozhi.mode']" :class="errClass">
+                  {{ fieldErrors['xiaozhi.mode'] }}
+                </p>
+              </div>
+
               <div class="rounded-lg bg-white p-3 dark:bg-gray-900/60">
                 <p class="text-xs text-gray-400 dark:text-gray-500">当前连接</p>
                 <p class="mt-1 break-all text-sm font-medium text-gray-800 dark:text-white/90">
@@ -1040,11 +1045,44 @@ const errClass = 'mt-1 text-xs text-error-500'
                 <div>
                   <div class="mb-3 flex items-center gap-2">
                     <span class="flex h-6 w-6 items-center justify-center rounded-full bg-brand-50 text-xs font-semibold text-brand-600 dark:bg-brand-500/10 dark:text-brand-400">1</span>
+                    <h4 class="text-sm font-semibold text-gray-800 dark:text-white/90">服务模式</h4>
+                  </div>
+                  <div class="grid grid-cols-1 gap-3">
+                    <button
+                      type="button"
+                      class="rounded-xl border p-4 text-left transition"
+                      :class="guideMode === 'full' ? 'border-brand-300 bg-brand-50/60 dark:border-brand-500/50 dark:bg-brand-500/[0.08]' : 'border-gray-200 hover:border-brand-300 hover:bg-brand-50/40 dark:border-gray-800 dark:hover:border-brand-500/40 dark:hover:bg-brand-500/[0.06]'"
+                      @click="guideMode = 'full'"
+                    >
+                      <span class="flex items-center justify-between gap-3">
+                        <span class="text-sm font-semibold text-gray-800 dark:text-white/90">全量模式</span>
+                        <span class="rounded-full bg-success-50 px-2 py-0.5 text-xs text-success-700 dark:bg-success-500/10 dark:text-success-400">推荐</span>
+                      </span>
+                      <span class="mt-2 block text-xs leading-5 text-gray-500 dark:text-gray-400">直接暴露全部聚合工具，兼容性好，所有模型均可使用。</span>
+                    </button>
+                    <button
+                      type="button"
+                      class="rounded-xl border p-4 text-left transition"
+                      :class="guideMode === 'smart' ? 'border-brand-300 bg-brand-50/60 dark:border-brand-500/50 dark:bg-brand-500/[0.08]' : 'border-gray-200 hover:border-brand-300 hover:bg-brand-50/40 dark:border-gray-800 dark:hover:border-brand-500/40 dark:hover:bg-brand-500/[0.06]'"
+                      @click="guideMode = 'smart'"
+                    >
+                      <span class="flex items-center justify-between gap-3">
+                        <span class="text-sm font-semibold text-gray-800 dark:text-white/90">智能模式</span>
+                        <span class="rounded-full bg-warning-50 px-2 py-0.5 text-xs text-warning-700 dark:bg-warning-500/10 dark:text-warning-400">分步发现</span>
+                      </span>
+                      <span class="mt-2 block text-xs leading-5 text-gray-500 dark:text-gray-400">通过 4 个网关工具按需发现和调用。减少工具噪音，但部分模型可能不支持分步骤交互。</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <div class="mb-3 flex items-center gap-2">
+                    <span class="flex h-6 w-6 items-center justify-center rounded-full bg-brand-50 text-xs font-semibold text-brand-600 dark:bg-brand-500/10 dark:text-brand-400">2</span>
                     <h4 class="text-sm font-semibold text-gray-800 dark:text-white/90">接口方式</h4>
                   </div>
                   <div class="grid grid-cols-1 gap-3">
                     <button
-                      v-for="item in endpoints"
+                      v-for="item in guideEndpoints"
                       :key="item.key"
                       type="button"
                       class="rounded-xl border p-4 text-left transition"
@@ -1066,7 +1104,7 @@ const errClass = 'mt-1 text-xs text-error-500'
 
                 <div>
                   <div class="mb-3 flex items-center gap-2">
-                    <span class="flex h-6 w-6 items-center justify-center rounded-full bg-brand-50 text-xs font-semibold text-brand-600 dark:bg-brand-500/10 dark:text-brand-400">2</span>
+                    <span class="flex h-6 w-6 items-center justify-center rounded-full bg-brand-50 text-xs font-semibold text-brand-600 dark:bg-brand-500/10 dark:text-brand-400">3</span>
                     <h4 class="text-sm font-semibold text-gray-800 dark:text-white/90">认证方式</h4>
                   </div>
                   <div class="grid grid-cols-1 gap-3">

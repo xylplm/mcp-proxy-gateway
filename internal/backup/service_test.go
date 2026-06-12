@@ -137,7 +137,7 @@ func TestImportRejectsWrongVersion(t *testing.T) {
 // TestImportRejectsInvalidYAMLConfig 验证 YAML 配置越界的备份被拒绝（Req 23.6）。
 func TestImportRejectsInvalidYAMLConfig(t *testing.T) {
 	cfg := config.DefaultYAMLConfig()
-	cfg.MCPAPI.Mode = "invalid-mode" // 非 smart/full
+	cfg.XiaoZhi.Mode = "invalid-mode" // 非 smart/full
 	b := Backup{Version: FormatVersion, YAML: cfg, Business: sampleBusiness()}
 	data, _ := Marshal(b)
 

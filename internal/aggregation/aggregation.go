@@ -22,6 +22,22 @@ type StatRecorder interface {
 	RecordAsync(ctx context.Context, rec store.CallStatRecord)
 }
 
+// modeContextKey 用于把 MCP 模式（full/smart）注入 context，供调用记录采集。
+type modeContextKey struct{}
+
+// ModeFromContext 从 context 中提取 MCP 模式；未设置时返回 "full"。
+func ModeFromContext(ctx context.Context) string {
+	if m, ok := ctx.Value(modeContextKey{}).(string); ok && m != "" {
+		return m
+	}
+	return "full"
+}
+
+// ContextWithMode 返回携带 MCP 模式的 context。
+func ContextWithMode(ctx context.Context, mode string) context.Context {
+	return context.WithValue(ctx, modeContextKey{}, mode)
+}
+
 // UpstreamLister 是聚合服务读取「启用上游列表」所需的窄接口。
 //
 // 仅声明聚合所需的最小能力（按 sort_order 升序列出上游），不直接耦合具体的
@@ -208,6 +224,7 @@ func (s *Service) recordCall(ctx context.Context, apiKeyID, exposedName string, 
 		ResponseResult: result.Content,
 		ErrorMessage:   errMsg,
 		FailureDetail:  failureDetail,
+		Mode:           ModeFromContext(ctx),
 	})
 }
 

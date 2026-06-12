@@ -134,25 +134,25 @@ func (a *App) startBackground(ctx context.Context) {
 // 配置落盘由 config.Manager 负责；此处只处理需要即时影响运行态的部分：
 // 对外 MCP 模式影响后续新建连接，小智接入需要按新配置启停或重连。
 func (a *App) ApplySettings(cfg config.YAMLConfig) error {
-	if a.mcpService != nil {
-		a.mcpService.Reconfigure(cfg.MCPAPI.Mode, cfg.MCPAPI.SmartDiscoveryLimit)
-	}
+	// 双模式并行运行，无需全局模式切换。
 
 	if a.xiaozhiConn == nil {
 		return nil
 	}
 	wasEnabled := a.xiaozhiConn.Enabled()
 	wasEndpoint := a.xiaozhiConn.Endpoint()
+	wasMode := a.xiaozhiConn.Mode()
 	running := a.xiaozhiConn.Running()
-	restart := running && cfg.XiaoZhi.Enabled && cfg.XiaoZhi.Endpoint != wasEndpoint
-	stop := running && (!cfg.XiaoZhi.Enabled || cfg.XiaoZhi.Endpoint != wasEndpoint)
+	modeChanged := cfg.XiaoZhi.Mode != wasMode
+	restart := running && cfg.XiaoZhi.Enabled && (cfg.XiaoZhi.Endpoint != wasEndpoint || modeChanged)
+	stop := running && (!cfg.XiaoZhi.Enabled || cfg.XiaoZhi.Endpoint != wasEndpoint || modeChanged)
 
 	if stop {
 		a.xiaozhiConn.Stop()
 		running = false
 	}
 
-	if err := a.xiaozhiConn.Reconfigure(cfg.XiaoZhi.Endpoint, cfg.XiaoZhi.Enabled); err != nil {
+	if err := a.xiaozhiConn.Reconfigure(cfg.XiaoZhi.Endpoint, cfg.XiaoZhi.Enabled, cfg.XiaoZhi.Mode); err != nil {
 		return err
 	}
 

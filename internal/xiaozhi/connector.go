@@ -104,6 +104,8 @@ type Connector struct {
 	endpoint string
 	// enabled 表示是否启用小智接入：为 false 时 Start 不建立任何连接（Req 15.5）。
 	enabled bool
+	// mode 为小智使用的 MCP 模式（smart/full）。
+	mode string
 
 	// handler 为工具暴露/调用路由桥接器（默认基于聚合服务）。
 	handler EndpointHandler
@@ -127,7 +129,7 @@ type Connector struct {
 
 // ServerBuildFn 构造一个 MCP 服务端实例，供小智连接的 WebSocket 连接使用。
 // 返回的 *mcp.Server 会被挂载到 WebSocket 连接并提供服务。
-type ServerBuildFn func(ctx context.Context) (*mcp.Server, error)
+type ServerBuildFn func(ctx context.Context, mode string) (*mcp.Server, error)
 
 // Option 为 Connector 的可选配置项（函数式选项）。
 type Option func(*Connector)
@@ -293,6 +295,13 @@ func (c *Connector) Enabled() bool {
 	return c.enabled
 }
 
+// Mode 返回当前小智接入的 MCP 模式。
+func (c *Connector) Mode() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.mode
+}
+
 // Reconfigure 校验并应用新的接入点地址与启用状态（Req 15.4、15.6）。
 //
 // 地址校验语义（Req 15.6）：当 enabled 为 true 时，endpoint 必须为 ws:// 或 wss:// 合法
@@ -302,7 +311,7 @@ func (c *Connector) Enabled() bool {
 // 本方法只更新连接器持有的配置快照，不负责持久化（持久化由 config.Manager 与管理 API 负责，
 // 二者各自以相同规则校验，形成纵深防御）。调用方应在 Reconfigure 成功后据新状态调用
 // Start/Stop 以使配置生效；本方法不主动改变运行状态，避免与生命周期管理耦合。
-func (c *Connector) Reconfigure(endpoint string, enabled bool) error {
+func (c *Connector) Reconfigure(endpoint string, enabled bool, mode string) error {
 	if enabled {
 		if err := ValidateEndpoint(endpoint); err != nil {
 			// 校验失败：保持原配置不变并返回地址格式无效错误（Req 15.6）。
@@ -314,6 +323,10 @@ func (c *Connector) Reconfigure(endpoint string, enabled bool) error {
 	defer c.mu.Unlock()
 	c.endpoint = endpoint
 	c.enabled = enabled
+	if mode == "" {
+		mode = "full"
+	}
+	c.mode = mode
 	return nil
 }
 
@@ -368,7 +381,7 @@ func (c *Connector) run(ctx context.Context) {
 }
 
 func (c *Connector) serveWithBuilder(ctx context.Context) error {
-	srv, err := c.serverBuildFn(ctx)
+	srv, err := c.serverBuildFn(ctx, c.mode)
 	if err != nil {
 		return fmt.Errorf("构建 MCP 服务端失败：%w", err)
 	}

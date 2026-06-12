@@ -97,6 +97,9 @@ func registerMCPRoutes(engine *gin.Engine, w routerWiring) {
 	mcpGroup.Use(w.aclGuard.Middleware(apikey.MetadataFromContext))
 	mcpGroup.Use(w.rateLimiter.Middleware(apikey.MetadataFromContext))
 	w.mcpEndpoints.Register(mcpGroup)
+
+	// 智能模式端点：与全量模式共享同一套鉴权链。
+	w.mcpEndpoints.RegisterSmart(mcpGroup)
 }
 
 // repoUpstreamGet 经连接管理器无法直接取回加密凭证行，故由本方法直接走仓储读取单条上游行。
