@@ -39,6 +39,24 @@ const gridClass = computed(() =>
 const config = ref<YAMLConfig | null>(null)
 const serverSnapshot = ref('')
 
+/** Port helpers: strip ':prefix on load, restore on save. */
+const adminPort = ref<number|string>('')
+const publicMCPPort = ref<number|string>('')
+
+function addrToPort(addr: string): number|string {
+  const s = addr.trim()
+  if (s === '') return ''
+  const m = s.match(/^(?:[\d.]+|\[?[\da-f:]+\]?)?:(\d+)$/i)
+  if (m) return Number(m[1])
+  return s
+}
+
+function portToAddr(port: number|string): string {
+  const n = typeof port === 'number' ? port : Number(port)
+  if (!Number.isFinite(n) || n < 1) return ''
+  return ':' + String(n)
+}
+
 /** 页面级加载/保存状态。 */
 const loading = ref(false)
 const saving = ref(false)
@@ -63,6 +81,8 @@ async function loadSettings(): Promise<void> {
   try {
     config.value = await getSettings()
     serverSnapshot.value = snapshotServerConfig(config.value)
+    adminPort.value = addrToPort(config.value.server.admin_addr)
+    publicMCPPort.value = addrToPort(config.value.server.public_mcp_addr)
   } catch (err) {
     loadError.value = err instanceof Error ? err.message : '加载系统设置失败'
   } finally {
@@ -97,10 +117,15 @@ async function saveSettings(): Promise<void> {
   if (!ok) return
 
   clearErrors()
+  // Restore port strings from numeric port inputs before saving
+  config.value.server.admin_addr = portToAddr(adminPort.value)
+  config.value.server.public_mcp_addr = portToAddr(publicMCPPort.value)
   saving.value = true
   try {
     config.value = await updateSettings(config.value, { restart: true })
     serverSnapshot.value = snapshotServerConfig(config.value)
+    adminPort.value = addrToPort(config.value.server.admin_addr)
+    publicMCPPort.value = addrToPort(config.value.server.public_mcp_addr)
     toast.success('系统设置已保存，网关正在重启')
   } catch (err) {
     applyServerError(err)
@@ -289,27 +314,31 @@ const errClass = 'mt-1 text-xs text-error-500'
           </p>
           <div :class="gridClass">
             <div>
-              <FieldLabel label="管理监听地址" required tooltip="管理台、管理 API 与默认服务入口监听地址。只填写 :端口 或 host:端口，不要包含 http://。" />
+              <FieldLabel label="管理监听端口" required tooltip="管理台与管理 API 的监听端口号。" />
               <input
-                v-model.trim="config.server.admin_addr"
-                type="text"
-                placeholder=":8080"
+                v-model.number="adminPort"
+                type="number"
+                min="1"
+                max="65535"
+                placeholder="8080"
                 :class="inputClass"
               />
-              <p :class="hintClass">默认 :8080。公网部署建议只在内网或反向代理内侧暴露。</p>
+              <p :class="hintClass">范围 1–65535，默认 8080。公网部署建议只在内网或反向代理内侧暴露。</p>
               <p v-if="fieldErrors['server.admin_addr']" :class="errClass">
                 {{ fieldErrors['server.admin_addr'] }}
               </p>
             </div>
             <div>
-              <FieldLabel label="独立 MCP 监听地址" tooltip="对外 MCP 服务单独监听的地址。留空表示不启用独立端口。" />
+              <FieldLabel label="独立 MCP 监听端口" tooltip="对外 MCP 服务的独立监听端口号。留空表示不启用独立端口。" />
               <input
-                v-model.trim="config.server.public_mcp_addr"
-                type="text"
-                placeholder=":8081"
+                v-model.number="publicMCPPort"
+                type="number"
+                min="1"
+                max="65535"
+                placeholder="8081"
                 :class="inputClass"
               />
-              <p :class="hintClass">启用后可只把该端口暴露到公网，例如 :8081。</p>
+              <p :class="hintClass">范围 1–65535。留空表示不启用独立端口，启用后可只把该端口暴露到公网。</p>
               <p v-if="fieldErrors['server.public_mcp_addr']" :class="errClass">
                 {{ fieldErrors['server.public_mcp_addr'] }}
               </p>
