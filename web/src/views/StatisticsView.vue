@@ -39,21 +39,21 @@ const heatmapContainerRef = ref<HTMLElement | null>(null)
 const heatmapContainerWidth = ref(0)
 const HEATMAP_GAP = 3
 const HEATMAP_MIN_CELL = 14
-const HEATMAP_MAX_CELL = 22
+const HEATMAP_MAX_CELL = 24
 
+// 方块大小随容器线性缩放：600px→14px，2400px→24px，保证各分辨率都有合适大小。
 function computeHeatmapCellPx(width: number): number {
   if (width <= 0) return HEATMAP_MIN_CELL
-  const cols = Math.max(20, Math.floor((width + HEATMAP_GAP) / (HEATMAP_MIN_CELL + HEATMAP_GAP)))
-  const cell = Math.floor((width - (cols - 1) * HEATMAP_GAP) / cols)
-  return Math.min(HEATMAP_MAX_CELL, Math.max(HEATMAP_MIN_CELL, cell))
+  const t = Math.min(1, Math.max(0, (width - 400) / (2400 - 400)))
+  return Math.round(HEATMAP_MIN_CELL + t * (HEATMAP_MAX_CELL - HEATMAP_MIN_CELL))
 }
 
+// 先定方块大小，再算能放下多少列，列数×7=天数。
 function computeHeatmapDayCount(width: number): number {
   if (width <= 0) return 364
   const cell = computeHeatmapCellPx(width)
-  const cols = Math.max(1, Math.floor((width + HEATMAP_GAP) / (cell + HEATMAP_GAP)))
-  const weeks = Math.max(4, cols)
-  return weeks * 7
+  const cols = Math.max(4, Math.floor((width + HEATMAP_GAP) / (cell + HEATMAP_GAP)))
+  return cols * 7
 }
 
 const heatmapDayCount = computed(() => computeHeatmapDayCount(heatmapContainerWidth.value))
