@@ -323,7 +323,9 @@ const cardClass =
         <div class="flex items-start justify-between gap-3">
           <div class="min-w-0">
             <p class="truncate text-sm font-semibold text-gray-800 dark:text-white/90">
-              {{ toolLabel(record) }}
+             <span>{{ toolLabel(record) }}</span>    <span class="shrink-0 rounded-full px-2 py-1 mr-1 text-xs font-medium" :class="modeClass(record)">
+            {{ modeLabel(record) }}        </span>
+  
             </p>
             <p class="mt-1 truncate text-xs text-gray-500 dark:text-gray-400">
               {{ mcpLabel(record) }}
@@ -331,9 +333,6 @@ const cardClass =
           </div>
           <span class="shrink-0 rounded-full px-2.5 py-1 text-xs font-medium" :class="statusClass(record)">
             {{ statusLabel(record) }}
-          </span>
-          <span class="shrink-0 rounded-full px-2 py-1 text-xs font-medium" :class="modeClass(record)">
-            {{ modeLabel(record) }}
           </span>
         </div>
 
