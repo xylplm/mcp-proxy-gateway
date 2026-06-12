@@ -1,5 +1,6 @@
 ﻿<script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import { nextTick, onUnmounted } from 'vue'
 import type { ApexOptions } from 'apexcharts'
 import AdminLayout from '@/components/layout/AdminLayout.vue'
 import PageBreadcrumb from '@/components/common/PageBreadcrumb.vue'
@@ -294,20 +295,19 @@ function scheduleLoadStats(): void {
 watch([startLocal, endLocal], scheduleLoadStats)
 
 onMounted(async () => {
-  // 热力图容器宽度监听：计算方块尺寸和天数，保证满列
-  let ro: ResizeObserver | undefined
-  watch(heatmapContainerRef, (el) => {
-    if (ro) ro.disconnect()
-    if (el) {
-      heatmapContainerWidth.value = el.clientWidth
-      ro = new ResizeObserver((entries) => {
-        for (const entry of entries) {
-          heatmapContainerWidth.value = entry.contentRect.width
-        }
-      })
-      ro.observe(el)
-    }
-  })
+  // 热力图：nextTick 后 ref 已绑定，再挂 ResizeObserver
+  await nextTick()
+  const el = heatmapContainerRef.value
+  if (el) {
+    heatmapContainerWidth.value = el.clientWidth
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        heatmapContainerWidth.value = entry.contentRect.width
+      }
+    })
+    ro.observe(el)
+    onUnmounted(() => ro.disconnect())
+  }
   await loadNameMaps()
   await loadStats()
 })
@@ -466,7 +466,8 @@ onMounted(async () => {
         </div>
       </div>
       <div class="overflow-x-auto pb-1">
-        <div ref="heatmapContainerRef" class="grid grid-flow-col grid-rows-7" :style="{ gridTemplateRows: `repeat(7, ${heatmapCellPx}px)`, gridAutoColumns: `${heatmapCellPx}px`, gap: `${heatmapGap}px` }">
+        <div ref="heatmapContainerRef" class="w-full">
+          <div class="grid grid-flow-col grid-rows-7" :style="{ gridTemplateRows: `repeat(7, ${heatmapCellPx}px)`, gridAutoColumns: `${heatmapCellPx}px`, gap: `${heatmapGap}px` }">
           <Tooltip
             v-for="day in heatmapDays"
             :key="day.key"
@@ -479,6 +480,7 @@ onMounted(async () => {
               :class="heatmapLevelClass(day.level)"
             />
           </Tooltip>
+          </div>
         </div>
       </div>
     </section>
