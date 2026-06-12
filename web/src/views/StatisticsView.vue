@@ -34,8 +34,30 @@ const upstreamNames = ref<Record<string, string>>({})
 const apiKeyNames = ref<Record<string, string>>({})
 let queryTimer: number | undefined
 let statsRequestSeq = 0
-const heatmapDayCount = 364
 const heatmapLegendLevels = [0, 1, 2, 3, 4] as const
+const heatmapContainerRef = ref<HTMLElement | null>(null)
+const heatmapContainerWidth = ref(0)
+const HEATMAP_GAP = 3
+const HEATMAP_MIN_CELL = 14
+const HEATMAP_MAX_CELL = 22
+
+function computeHeatmapCellPx(width: number): number {
+  if (width <= 0) return HEATMAP_MIN_CELL
+  const cols = Math.max(20, Math.floor((width + HEATMAP_GAP) / (HEATMAP_MIN_CELL + HEATMAP_GAP)))
+  const cell = Math.floor((width - (cols - 1) * HEATMAP_GAP) / cols)
+  return Math.min(HEATMAP_MAX_CELL, Math.max(HEATMAP_MIN_CELL, cell))
+}
+
+function computeHeatmapDayCount(width: number): number {
+  if (width <= 0) return 364
+  const cell = computeHeatmapCellPx(width)
+  const cols = Math.max(1, Math.floor((width + HEATMAP_GAP) / (cell + HEATMAP_GAP)))
+  const weeks = Math.max(4, cols)
+  return weeks * 7
+}
+
+const heatmapDayCount = computed(() => computeHeatmapDayCount(heatmapContainerWidth.value))
+const heatmapCellPx = computed(() => computeHeatmapCellPx(heatmapContainerWidth.value))
 
 const cardClass =
   'rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03]'
@@ -155,10 +177,11 @@ const heatmapDays = computed(() => {
   if (Number.isNaN(end.getTime())) end.setTime(Date.now())
   end.setHours(0, 0, 0, 0)
   const start = new Date(end)
-  start.setDate(start.getDate() - (heatmapDayCount - 1))
+  const dayCount = heatmapDayCount.value
+  start.setDate(start.getDate() - (dayCount - 1))
   const days: Array<{ key: string; date: Date; item: DailyCount | null; level: number }> = []
   const max = Math.max(1, ...daily.value.map((item) => item.TotalCalls))
-  for (let i = 0; i < heatmapDayCount; i += 1) {
+  for (let i = 0; i < dayCount; i += 1) {
     const date = new Date(start)
     date.setDate(start.getDate() + i)
     const key = date.toISOString().slice(0, 10)
@@ -265,6 +288,20 @@ function scheduleLoadStats(): void {
 watch([startLocal, endLocal], scheduleLoadStats)
 
 onMounted(async () => {
+  // 热力图容器宽度监听：计算方块尺寸和天数，保证满列
+  let ro: ResizeObserver | undefined
+  watch(heatmapContainerRef, (el) => {
+    if (ro) ro.disconnect()
+    if (el) {
+      heatmapContainerWidth.value = el.clientWidth
+      ro = new ResizeObserver((entries) => {
+        for (const entry of entries) {
+          heatmapContainerWidth.value = entry.contentRect.width
+        }
+      })
+      ro.observe(el)
+    }
+  })
   await loadNameMaps()
   await loadStats()
 })
@@ -404,6 +441,7 @@ onMounted(async () => {
         <div>
           <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">调用热力图</h3>
           <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">按天查看最近 52 周调用密度。</p>
+          <p class="mt-0.5 text-xs text-gray-400 dark:text-gray-500">自动适配屏幕宽度，方块数量随窗口变化。</p>
         </div>
         <div class="flex flex-wrap items-center gap-4 text-xs text-gray-500 dark:text-gray-400">
           <span>合计 {{ formatInt(heatmapTotal) }} 次</span>
@@ -413,7 +451,8 @@ onMounted(async () => {
             <span
               v-for="level in heatmapLegendLevels"
               :key="level"
-              class="h-3 w-3 rounded-[3px] border border-gray-200 dark:border-gray-800"
+              class="rounded-[3px] border border-gray-200 dark:border-gray-800"
+              :style="{ height: `${Math.max(12, heatmapCellPx - 2)}px`, width: `${Math.max(12, heatmapCellPx - 2)}px` }"
               :class="heatmapLevelClass(level)"
             />
             <span>多</span>
@@ -421,7 +460,7 @@ onMounted(async () => {
         </div>
       </div>
       <div class="overflow-x-auto pb-1">
-        <div class="grid w-max grid-flow-col grid-rows-7 gap-1">
+        <div ref="heatmapContainerRef" class="grid grid-flow-col grid-rows-7" :style="{ gridTemplateRows: `repeat(7, ${heatmapCellPx}px)`, gridAutoColumns: `${heatmapCellPx}px`, gap: `${HEATMAP_GAP}px` }">
           <Tooltip
             v-for="day in heatmapDays"
             :key="day.key"
@@ -429,7 +468,8 @@ onMounted(async () => {
             placement="top"
           >
             <span
-              class="block h-3.5 w-3.5 shrink-0 rounded-[4px] border border-gray-200 dark:border-gray-800"
+              class="block shrink-0 rounded-[4px] border border-gray-200 dark:border-gray-800"
+              :style="{ height: `${heatmapCellPx}px`, width: `${heatmapCellPx}px` }"
               :class="heatmapLevelClass(day.level)"
             />
           </Tooltip>
