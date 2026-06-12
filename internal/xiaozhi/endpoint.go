@@ -51,6 +51,16 @@ var _ EndpointConnector = (*wsConnector)(nil)
 //  3. 据 handler.ListTools 构建当前可见工具集合并注册到临时 mcp.Server（Req 15.2）；
 //  4. 以该连接驱动 server 会话，阻塞至小智断开或 ctx 取消后返回。
 func (c *wsConnector) Serve(ctx context.Context, endpoint string, handler EndpointHandler) error {
+	srv, err := BuildServer(ctx, handler)
+	if err != nil {
+		return err
+	}
+	return serveServer(ctx, endpoint, srv)
+}
+
+// serveServer 连接到小智接入点，在 WebSocket 连接上驱动 mcp.Server 提供服务，
+// 阻塞至连接断开或 ctx 取消。
+func serveServer(ctx context.Context, endpoint string, srv *mcp.Server) error {
 	conn, resp, err := websocket.Dial(ctx, endpoint, nil)
 	if err != nil {
 		return fmt.Errorf("连接小智接入点失败：%w", err)
@@ -59,12 +69,6 @@ func (c *wsConnector) Serve(ctx context.Context, endpoint string, handler Endpoi
 		_ = resp.Body.Close()
 	}
 	conn.SetReadLimit(xzReadLimit)
-
-	srv, err := BuildServer(ctx, handler)
-	if err != nil {
-		_ = conn.Close(websocket.StatusInternalError, "build server failed")
-		return err
-	}
 
 	// 连接生命周期上下文：在 Serve 返回（ctx 取消或会话结束）时取消，解除阻塞的 Read。
 	connCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))

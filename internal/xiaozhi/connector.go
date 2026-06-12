@@ -3,10 +3,12 @@ package xiaozhi
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
 )
 
@@ -105,6 +107,9 @@ type Connector struct {
 
 	// handler 为工具暴露/调用路由桥接器（默认基于聚合服务）。
 	handler EndpointHandler
+	// serverBuildFn 用于按当前对外模式构建 MCP 服务端（生产用）。
+	// 当设置时优先使用，覆盖自动遵循（smart 显示 4 个网关工具，full 显示全部）。
+	serverBuildFn ServerBuildFn
 	// connector 为连接建立与会话驱动器（默认 wsConnector）。
 	connector EndpointConnector
 	// reconnector 为重连调度器（默认指数退避 backoffReconnector，Req 15.4）。
@@ -119,6 +124,10 @@ type Connector struct {
 	// wg 等待运行循环退出，使 Stop 返回时连接确已收束。
 	wg sync.WaitGroup
 }
+
+// ServerBuildFn 构造一个 MCP 服务端实例，供小智连接的 WebSocket 连接使用。
+// 返回的 *mcp.Server 会被挂载到 WebSocket 连接并提供服务。
+type ServerBuildFn func(ctx context.Context) (*mcp.Server, error)
 
 // Option 为 Connector 的可选配置项（函数式选项）。
 type Option func(*Connector)
@@ -169,6 +178,16 @@ func WithHandler(h EndpointHandler) Option {
 	}
 }
 
+// WithServerBuildFn 注入按模式构建 MCP 服务端的函数（生产用）。
+// 优先于基于 EndpointHandler 的路径；当设置时小智接入将遵循网关服务的当前对外模式。
+func WithServerBuildFn(fn ServerBuildFn) Option {
+	return func(cn *Connector) {
+		if fn != nil {
+			cn.serverBuildFn = fn
+		}
+	}
+}
+
 // NewConnector 构造小智接入服务。
 //
 //   - endpoint/enabled 来自配置（config.XiaoZhiConfig）；
@@ -212,8 +231,10 @@ func (c *Connector) Start(ctx context.Context) error {
 		return nil
 	}
 	if c.handler == nil {
-		// 没有可路由的处理器（既未注入聚合服务也未注入 handler）时不启动，避免空指针。
-		return domain.NewError(domain.CodeValidation, "小智接入未配置聚合服务或处理器")
+		if c.serverBuildFn == nil {
+			// 没有可路由的处理器且未注入 serverBuildFn 时不启动，避免空指针。
+			return domain.NewError(domain.CodeValidation, "小智接入未配置聚合服务或处理器")
+		}
 	}
 
 	runCtx, cancel := context.WithCancel(ctx)
@@ -313,7 +334,12 @@ func (c *Connector) run(ctx context.Context) {
 			return
 		}
 
-		err := c.connector.Serve(ctx, c.endpoint, c.handler)
+		var err error
+		if c.serverBuildFn != nil {
+			err = c.serveWithBuilder(ctx)
+		} else {
+			err = c.connector.Serve(ctx, c.endpoint, c.handler)
+		}
 
 		// 停用/父上下文取消：关闭连接后不再重连（Req 15.5）。
 		if ctx.Err() != nil {
@@ -339,6 +365,14 @@ func (c *Connector) run(ctx context.Context) {
 		case <-timer.C:
 		}
 	}
+}
+
+func (c *Connector) serveWithBuilder(ctx context.Context) error {
+	srv, err := c.serverBuildFn(ctx)
+	if err != nil {
+		return fmt.Errorf("构建 MCP 服务端失败：%w", err)
+	}
+	return serveServer(ctx, c.endpoint, srv)
 }
 
 // markStopped 在运行循环退出时复位启停状态，并取消可能残留的运行上下文。

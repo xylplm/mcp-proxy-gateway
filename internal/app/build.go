@@ -6,6 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/myGithub/mcp-proxy-gateway/internal/aggregation"
 	"github.com/myGithub/mcp-proxy-gateway/internal/apikey"
 	"github.com/myGithub/mcp-proxy-gateway/internal/audit"
@@ -137,7 +138,10 @@ func (a *App) build(enc *crypto.Service, envCfg config.EnvConfig) error {
 	a.xiaozhiConn = xiaozhi.NewConnector(
 		yamlCfg.XiaoZhi.Endpoint,
 		yamlCfg.XiaoZhi.Enabled,
-		agg,
+		nil,
+		xiaozhi.WithServerBuildFn(func(ctx context.Context) (*mcp.Server, error) {
+			return mcpService.BuildServer(ctx, "")
+		}),
 		xiaozhi.WithBackoffPolicy(xzBackoff),
 		xiaozhi.WithLogger(a.logger),
 	)
