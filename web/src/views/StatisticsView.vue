@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import type { ApexOptions } from 'apexcharts'
 import AdminLayout from '@/components/layout/AdminLayout.vue'
@@ -37,28 +37,34 @@ let statsRequestSeq = 0
 const heatmapLegendLevels = [0, 1, 2, 3, 4] as const
 const heatmapContainerRef = ref<HTMLElement | null>(null)
 const heatmapContainerWidth = ref(0)
-const HEATMAP_GAP = 3
 const HEATMAP_MIN_CELL = 14
-const HEATMAP_MAX_CELL = 24
+const HEATMAP_MAX_CELL = 36
+const HEATMAP_MAX_WIDTH = 2400
 
-// 方块大小随容器线性缩放：600px→14px，2400px→24px，保证各分辨率都有合适大小。
+// 方块大小随容器线性缩放：手机 ~14px，4K ~36px。gap 也同步缩放。
 function computeHeatmapCellPx(width: number): number {
   if (width <= 0) return HEATMAP_MIN_CELL
-  const t = Math.min(1, Math.max(0, (width - 400) / (2400 - 400)))
+  const t = Math.min(1, Math.max(0, (width - 400) / (HEATMAP_MAX_WIDTH - 400)))
   return Math.round(HEATMAP_MIN_CELL + t * (HEATMAP_MAX_CELL - HEATMAP_MIN_CELL))
 }
 
-// 先定方块大小，再算能放下多少列，列数×7=天数。
+function computeHeatmapGap(width: number): number {
+  if (width <= 0) return 2
+  return Math.round(2 + Math.min(1, Math.max(0, (width - 400) / (HEATMAP_MAX_WIDTH - 400))) * 3)
+}
+
+// 先定方块大小，再算能放多少列，列数×7=天数。
 function computeHeatmapDayCount(width: number): number {
   if (width <= 0) return 364
   const cell = computeHeatmapCellPx(width)
-  const cols = Math.max(4, Math.floor((width + HEATMAP_GAP) / (cell + HEATMAP_GAP)))
+  const gap = computeHeatmapGap(width)
+  const cols = Math.max(4, Math.floor((width + gap) / (cell + gap)))
   return cols * 7
 }
 
 const heatmapDayCount = computed(() => computeHeatmapDayCount(heatmapContainerWidth.value))
 const heatmapCellPx = computed(() => computeHeatmapCellPx(heatmapContainerWidth.value))
-
+const heatmapGap = computed(() => computeHeatmapGap(heatmapContainerWidth.value))
 const cardClass =
   'rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03]'
 const inputClass =
@@ -460,7 +466,7 @@ onMounted(async () => {
         </div>
       </div>
       <div class="overflow-x-auto pb-1">
-        <div ref="heatmapContainerRef" class="grid grid-flow-col grid-rows-7" :style="{ gridTemplateRows: `repeat(7, ${heatmapCellPx}px)`, gridAutoColumns: `${heatmapCellPx}px`, gap: `${HEATMAP_GAP}px` }">
+        <div ref="heatmapContainerRef" class="grid grid-flow-col grid-rows-7" :style="{ gridTemplateRows: `repeat(7, ${heatmapCellPx}px)`, gridAutoColumns: `${heatmapCellPx}px`, gap: `${heatmapGap}px` }">
           <Tooltip
             v-for="day in heatmapDays"
             :key="day.key"
