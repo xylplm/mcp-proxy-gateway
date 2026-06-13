@@ -34,3 +34,4 @@ LICENSE
 .env
 .env.*
 *.log
+__debug_bin.exe*

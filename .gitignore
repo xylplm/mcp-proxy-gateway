@@ -32,3 +32,4 @@ coverage.*
 .DS_Store
 Thumbs.db
 .vscode/launch.json
+__debug_bin.exe*
