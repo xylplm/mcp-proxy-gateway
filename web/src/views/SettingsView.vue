@@ -367,6 +367,22 @@ const errClass = 'mt-1 text-xs text-error-500'
               </button>
             </div>
           </div>
+          <div class="mt-5">
+            <FieldLabel label="日志级别" required tooltip="控制进程日志输出的详细程度。保存后立即生效，无需重启服务。debug 会记录调用链每次工具调用的入口与结果，便于排查问题但日志量较大。" />
+            <select
+              v-model="config.server.log_level"
+              :class="inputClass"
+            >
+              <option value="debug">debug（详细，含调用链追踪）</option>
+              <option value="info">info（默认，关键事件）</option>
+              <option value="warn">warn（仅警告与错误）</option>
+              <option value="error">error（仅错误）</option>
+            </select>
+            <p :class="hintClass">调整后立即生效。排查工具调用问题时建议临时切换到 debug。</p>
+            <p v-if="fieldErrors['server.log_level']" :class="errClass">
+              {{ fieldErrors['server.log_level'] }}
+            </p>
+          </div>
         </section>
 
         <!-- 对外 API 默认值 -->

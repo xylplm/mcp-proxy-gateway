@@ -66,15 +66,15 @@ function levelLabel(value: string): string {
 function levelClass(value: string): string {
   switch (value) {
     case 'debug':
-      return 'bg-gray-700 text-gray-200'
+      return 'text-emerald-400'
     case 'info':
-      return 'bg-brand-500/20 text-brand-200'
+      return 'text-sky-400'
     case 'warn':
-      return 'bg-warning-500/20 text-warning-200'
+      return 'text-amber-400'
     case 'error':
-      return 'bg-error-500/20 text-error-200'
+      return 'text-red-400'
     default:
-      return 'bg-gray-700 text-gray-200'
+      return 'text-gray-400'
   }
 }
 
@@ -85,6 +85,19 @@ function attrsText(entry: SystemLogEntry): string {
   } catch {
     return String(entry.attrs)
   }
+}
+
+// 可展开详情的日志条目 id 集合。
+const expandedIds = ref<Set<number>>(new Set())
+
+function toggleExpand(id: number): void {
+  const next = new Set(expandedIds.value)
+  if (next.has(id)) {
+    next.delete(id)
+  } else {
+    next.add(id)
+  }
+  expandedIds.value = next
 }
 
 async function scrollToBottom(): Promise<void> {
@@ -289,35 +302,45 @@ const controlClass =
     </div>
 
     <section class="overflow-hidden rounded-xl border border-gray-800 bg-gray-950 shadow-theme-sm">
-      <div class="flex items-center justify-between border-b border-gray-800 px-4 py-3">
-        <div class="flex items-center gap-2">
-          <span class="h-3 w-3 rounded-full bg-error-500"></span>
-          <span class="h-3 w-3 rounded-full bg-warning-400"></span>
-          <span class="h-3 w-3 rounded-full bg-success-500"></span>
-        </div>
-        <span class="text-xs text-gray-400">runtime.log</span>
-      </div>
       <div
         ref="consoleRef"
-        class="custom-scrollbar max-h-[68vh] min-h-[420px] overflow-auto px-4 py-3 font-mono text-xs leading-5 text-gray-200"
+        class="custom-scrollbar max-h-[68vh] min-h-[420px] overflow-auto font-mono text-xs leading-5"
       >
         <div v-if="loading" class="py-10 text-center text-gray-500">加载中...</div>
         <div v-else-if="logs.length === 0" class="py-10 text-center text-gray-500">暂无系统日志</div>
-        <div v-else class="space-y-2">
-          <article
+        <div v-else>
+          <div
             v-for="entry in logs"
             :key="entry.id"
-            class="rounded-lg border border-gray-800 bg-white/[0.02] px-3 py-2"
+            class="group cursor-pointer whitespace-nowrap px-4 transition hover:bg-white/[0.04]"
+            role="button"
+            tabindex="0"
+            @click="attrsText(entry) !== '' ? toggleExpand(entry.id) : undefined"
+            @keydown.enter="attrsText(entry) !== '' ? toggleExpand(entry.id) : undefined"
           >
-            <div class="flex flex-wrap items-center gap-2">
-              <span class="text-gray-500">{{ formatTime(entry.time) }}</span>
-              <span class="rounded px-1.5 py-0.5 text-[10px] font-semibold" :class="levelClass(entry.level)">
+            <div class="flex items-baseline">
+              <span class="shrink-0 text-gray-400">{{ formatTime(entry.time) }}</span>
+              <span class="ml-3 w-12 shrink-0 font-semibold" :class="levelClass(entry.level)">
                 {{ levelLabel(entry.level) }}
               </span>
-              <span class="break-all text-gray-100">{{ entry.message }}</span>
+              <span class="ml-3 truncate text-gray-200">{{ entry.message }}</span>
+              <span
+                v-if="entry.source"
+                class="ml-auto shrink-0 pl-3 text-gray-400"
+                :title="entry.source"
+              >{{ entry.source }}</span>
+              <span
+                v-if="attrsText(entry) !== ''"
+                class="ml-2 shrink-0 text-gray-400 transition group-hover:text-gray-200"
+                :class="expandedIds.has(entry.id) ? 'rotate-90' : ''"
+                aria-hidden="true"
+              >▶</span>
             </div>
-            <pre v-if="attrsText(entry) !== ''" class="mt-2 whitespace-pre-wrap break-words text-gray-400">{{ attrsText(entry) }}</pre>
-          </article>
+            <pre
+              v-if="attrsText(entry) !== '' && expandedIds.has(entry.id)"
+              class="mt-0.5 whitespace-pre-wrap break-words border-l border-gray-800 pl-3 text-gray-300"
+            >{{ attrsText(entry) }}</pre>
+          </div>
         </div>
       </div>
     </section>

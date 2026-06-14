@@ -22,6 +22,9 @@ import request, { ApiError } from '@/api/request'
 /** 对外服务模式取值，与后端 config.ModeSmart / ModeFull 对齐。 */
 export type MCPMode = 'smart' | 'full'
 
+/** 日志级别取值，与后端 config.LogLevel* 对齐。 */
+export type LogLevel = 'debug' | 'info' | 'warn' | 'error'
+
 /** 服务监听配置（对应后端 ServerConfig）。 */
 export interface ServerConfig {
   /** 管理台与管理 API 监听地址，默认 :8080。 */
@@ -30,6 +33,8 @@ export interface ServerConfig {
   public_mcp_addr: string
   /** 是否仍在管理端口暴露 /mcp/*，默认 true 兼容旧部署。 */
   expose_mcp_on_admin_addr: boolean
+  /** 进程日志级别：debug/info/warn/error，默认 info。保存设置后即时生效。 */
+  log_level: LogLevel
 }
 
 /**

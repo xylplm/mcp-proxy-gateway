@@ -7,6 +7,7 @@ export interface SystemLogEntry {
   time: string
   level: string
   message: string
+  source?: string
   attrs?: Record<string, unknown>
 }
 
