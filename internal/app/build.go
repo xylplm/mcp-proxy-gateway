@@ -92,6 +92,7 @@ func (a *App) build(enc *crypto.Service, envCfg config.EnvConfig) error {
 		return err
 	}
 	a.auditSvc = auditSvc
+	a.auditRecorder = audit.NewRecorder(repos.Audit, audit.WithLogger(a.logger))
 
 	// --- 同步服务：工具拉取、周期同步与 cron 调度（Req 6、7）---
 	fetcher := &toolFetcher{
@@ -124,7 +125,9 @@ func (a *App) build(enc *crypto.Service, envCfg config.EnvConfig) error {
 	if err != nil {
 		return err
 	}
-	adminAuth := auth.RequireAdmin(authSvc)
+	adminAuth := auth.RequireAdmin(authSvc, auth.WithAccessDeniedHook(func(c *gin.Context, reason string) {
+		a.auditRecorder.RecordAccessDenied(c.Request.Context(), c.Request.URL.Path, reason)
+	}))
 
 	// --- 模板市场服务（Template_Market）：内置分类化快捷模板的只读查询（Req 14）---
 	templateMarket := template.New()
@@ -183,6 +186,7 @@ func (a *App) build(enc *crypto.Service, envCfg config.EnvConfig) error {
 		ValidateCron:    syncsvc.ValidateCron,
 		Stats:           statQuery,
 		Audit:           auditSvc,
+		AuditRecorder:   a.auditRecorder,
 		SystemLogs:      a.systemLogs,
 		Templates:       templateMarket,
 	})

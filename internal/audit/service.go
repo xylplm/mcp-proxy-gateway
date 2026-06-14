@@ -32,6 +32,10 @@ const (
 	ResourceRule ResourceKind = "rule"
 	// ResourceAPIKey 表示 API Key。
 	ResourceAPIKey ResourceKind = "api_key"
+	// ResourceAdmin 表示管理员账号（注册/改密）。
+	ResourceAdmin ResourceKind = "admin"
+	// ResourceSetting 表示系统设置。
+	ResourceSetting ResourceKind = "setting"
 )
 
 // AuditRepository 是审计服务依赖的仓储窄接口（Req 22）。
@@ -164,21 +168,35 @@ func (s *Service) recordChange(ctx context.Context, eventType string, kind Resou
 //
 // detail 为 nil 时不写入明细（对应数据库 detail 列为 NULL）；否则序列化为 JSON。
 // 发生时间显式取注入时钟，保证"记录时间戳"语义明确且行为可测（Req 22.1、22.2、22.3）。
+// 组装细节委派给 buildRecord（与异步 Recorder 共用，避免明细序列化逻辑重复）。
 func (s *Service) record(ctx context.Context, eventType, target string, detail map[string]any) error {
-	rec := store.AuditRecord{
-		EventType:  eventType,
-		Target:     target,
-		OccurredAt: s.now(),
+	rec, err := buildRecord(eventType, target, detail)
+	if err != nil {
+		return err
 	}
-	if detail != nil {
-		raw, err := json.Marshal(detail)
-		if err != nil {
-			return domain.NewError(domain.CodeValidation, "序列化审计明细失败："+err.Error())
-		}
-		rec.Detail = raw
-	}
+	rec.OccurredAt = s.now()
 	if _, err := s.repo.Insert(ctx, rec); err != nil {
 		return err
 	}
 	return nil
+}
+
+// buildRecord 组装一条审计记录的事件类型、目标与明细 JSON，但不设置发生时间戳（Req 22）。
+//
+// 抽出为未导出纯函数，供 Service 同步写与 Recorder 异步写共用，确保明细序列化逻辑唯一。
+// detail 为 nil 时不写入明细（对应数据库 detail 列为 NULL）；否则序列化为 JSON。
+// OccurredAt 由调用方按各自时钟设置：同步写取 Service.now()，异步写取提交时刻（见 Recorder）。
+func buildRecord(eventType, target string, detail map[string]any) (store.AuditRecord, error) {
+	rec := store.AuditRecord{
+		EventType: eventType,
+		Target:    target,
+	}
+	if detail != nil {
+		raw, err := json.Marshal(detail)
+		if err != nil {
+			return store.AuditRecord{}, domain.NewError(domain.CodeValidation, "序列化审计明细失败："+err.Error())
+		}
+		rec.Detail = raw
+	}
+	return rec, nil
 }

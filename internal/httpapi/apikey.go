@@ -6,6 +6,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/apikey"
+	"github.com/myGithub/mcp-proxy-gateway/internal/audit"
 	"github.com/myGithub/mcp-proxy-gateway/internal/store"
 )
 
@@ -148,6 +149,7 @@ func (r *Router) createAPIKey(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
+	r.recordCreate(c, audit.ResourceAPIKey, req.Name)
 	respondCreated(c, created)
 }
 
@@ -185,6 +187,7 @@ func (r *Router) setAPIKeyEnabled(c *gin.Context, enabled bool) {
 		respondError(c, err)
 		return
 	}
+	r.recordUpdate(c, audit.ResourceAPIKey, c.Param("id"))
 	respondOK(c, gin.H{"id": c.Param("id"), "enabled": enabled})
 }
 
@@ -198,6 +201,7 @@ func (r *Router) deleteAPIKey(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
+	r.recordDelete(c, audit.ResourceAPIKey, c.Param("id"))
 	respondNoContent(c)
 }
 
@@ -237,6 +241,7 @@ func (r *Router) createAPIKeyFilter(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
+	r.recordCreate(c, audit.ResourceAPIKey, req.Pattern)
 	respondCreated(c, created)
 }
 
@@ -260,6 +265,7 @@ func (r *Router) setAPIKeyFilterEnabled(c *gin.Context, enabled bool) {
 		respondError(c, err)
 		return
 	}
+	r.recordUpdate(c, audit.ResourceAPIKey, c.Param("ruleId"))
 	respondOK(c, gin.H{"id": c.Param("ruleId"), "enabled": enabled})
 }
 
@@ -273,6 +279,7 @@ func (r *Router) deleteAPIKeyFilter(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
+	r.recordDelete(c, audit.ResourceAPIKey, c.Param("ruleId"))
 	respondNoContent(c)
 }
 
@@ -310,6 +317,7 @@ func (r *Router) createACL(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
+	r.recordCreate(c, audit.ResourceAPIKey, req.CIDR)
 	respondCreated(c, created)
 }
 
@@ -323,6 +331,7 @@ func (r *Router) deleteACL(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
+	r.recordDelete(c, audit.ResourceAPIKey, c.Param("entryId"))
 	respondNoContent(c)
 }
 
@@ -369,6 +378,7 @@ func (r *Router) updateRateLimit(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
+	r.recordUpdate(c, audit.ResourceAPIKey, c.Param("id"))
 	respondOK(c, rateLimitConfigResponse{
 		ID:          updated.ID,
 		RateLimit:   updated.RateLimit,

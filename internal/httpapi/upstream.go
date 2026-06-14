@@ -6,6 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/myGithub/mcp-proxy-gateway/internal/audit"
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
 	"github.com/myGithub/mcp-proxy-gateway/internal/manager"
 )
@@ -114,6 +115,7 @@ func (r *Router) createUpstream(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
+	r.recordCreate(c, audit.ResourceUpstream, req.Name)
 	respondCreated(c, up)
 }
 
@@ -141,6 +143,7 @@ func (r *Router) updateUpstream(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
+	r.recordUpdate(c, audit.ResourceUpstream, req.Name)
 	respondOK(c, up)
 }
 
@@ -154,6 +157,7 @@ func (r *Router) deleteUpstream(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
+	r.recordDelete(c, audit.ResourceUpstream, c.Param("id"))
 	respondNoContent(c)
 }
 
@@ -177,6 +181,7 @@ func (r *Router) setUpstreamEnabled(c *gin.Context, enabled bool) {
 		respondError(c, err)
 		return
 	}
+	r.recordUpdate(c, audit.ResourceUpstream, c.Param("id"))
 	respondOK(c, gin.H{"id": c.Param("id"), "enabled": enabled})
 }
 
@@ -194,6 +199,7 @@ func (r *Router) reorderUpstreams(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
+	r.recordUpdate(c, audit.ResourceUpstream, "reorder")
 	respondOK(c, gin.H{"orderedIds": req.OrderedIDs})
 }
 
@@ -207,6 +213,7 @@ func (r *Router) reconnectUpstream(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
+	r.recordUpdate(c, audit.ResourceUpstream, c.Param("id"))
 	respondOK(c, gin.H{"id": c.Param("id"), "status": "reconnecting"})
 }
 

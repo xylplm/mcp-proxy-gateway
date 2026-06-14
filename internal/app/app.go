@@ -82,14 +82,15 @@ type App struct {
 	levelVar *slog.LevelVar
 
 	// 后台服务（生命周期由 Run 管理）。
-	scheduler    *syncsvc.Scheduler
-	statRecorder *stats.Recorder
-	statCleaner  *stats.Cleaner
-	auditSvc     *audit.Service
-	xiaozhiConn  *xiaozhi.Connector
-	mcpService   *mcpapi.Service
-	mgr          *manager.Manager
-	dialer       *sessionDialer
+	scheduler     *syncsvc.Scheduler
+	statRecorder  *stats.Recorder
+	statCleaner   *stats.Cleaner
+	auditSvc      *audit.Service
+	auditRecorder *audit.Recorder
+	xiaozhiConn   *xiaozhi.Connector
+	mcpService    *mcpapi.Service
+	mgr           *manager.Manager
+	dialer        *sessionDialer
 
 	// 启动连通性探测器与同步逻辑。
 	prober      *health.StartupProber

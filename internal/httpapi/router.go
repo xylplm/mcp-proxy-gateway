@@ -249,6 +249,25 @@ type AuditService interface {
 	List(ctx context.Context, page, pageSize int, query audit.Query) (audit.PageResult, error)
 }
 
+// AuditRecorder 是审计事件异步写入依赖的窄接口（Req 22.1、22.2、22.3）。
+//
+// *audit.Recorder 满足该接口。各 Record* 方法在调用线程完成明细组装与时间戳标注后，
+// 以非阻塞方式入队，由后台 worker 异步落库；写入失败静默丢弃、不向调用方报错（审计旁路）。
+// handler 在主操作成功后调用对应方法记录审计，无需关心其错误返回（恒为 nil）。
+type AuditRecorder interface {
+	// RecordLogin 异步记录一次管理员登录事件及其结果与时间戳（Req 22.1）。
+	RecordLogin(ctx context.Context, username string, success bool) error
+	// RecordCreate 异步记录一次资源创建事件（Req 22.2）。
+	RecordCreate(ctx context.Context, kind audit.ResourceKind, target string) error
+	// RecordUpdate 异步记录一次资源更新事件（Req 22.2）。
+	// 语义上覆盖更新及近似的写操作（启停、重排序、设置保存等），通过 detail.resource 区分。
+	RecordUpdate(ctx context.Context, kind audit.ResourceKind, target string) error
+	// RecordDelete 异步记录一次资源删除事件（Req 22.2）。
+	RecordDelete(ctx context.Context, kind audit.ResourceKind, target string) error
+	// RecordAccessDenied 异步记录一次因鉴权失败被拒绝的访问尝试（Req 22.3）。
+	RecordAccessDenied(ctx context.Context, target, reason string) error
+}
+
 // SystemLogService 是进程运行日志查询依赖的窄接口。
 type SystemLogService interface {
 	List(afterID int64, level string, limit int) []syslog.Entry
@@ -296,6 +315,8 @@ type Router struct {
 	stats StatsService
 	// audit 为审计日志分页查询应用服务。
 	audit AuditService
+	// auditRecorder 为审计事件异步写入器（登录/增删改/访问被拒）；为 nil 时跳过审计写入。
+	auditRecorder AuditRecorder
 	// systemLogs 为进程运行日志缓冲。
 	systemLogs SystemLogService
 	// templates 为模板市场只读查询应用服务。
@@ -322,6 +343,7 @@ type Deps struct {
 	ValidateCron    CronValidator
 	Stats           StatsService
 	Audit           AuditService
+	AuditRecorder   AuditRecorder
 	SystemLogs      SystemLogService
 	Templates       TemplateService
 }
@@ -347,6 +369,7 @@ func NewRouter(d Deps) *Router {
 		validateCron:    d.ValidateCron,
 		stats:           d.Stats,
 		audit:           d.Audit,
+		auditRecorder:   d.AuditRecorder,
 		systemLogs:      d.SystemLogs,
 		templates:       d.Templates,
 	}

@@ -33,6 +33,30 @@ type TokenParser interface {
 	ParseToken(tokenString string) (Claims, error)
 }
 
+// AccessDeniedHook 是鉴权失败时的回调，供装配层接入审计记录（Req 22.3）。
+//
+// 在 RequireAdmin 每个鉴权失败点（parser 未初始化/缺令牌/令牌无效或过期）abort 之前触发，
+// 传入当前请求上下文与拒绝原因。回调应快速返回（如异步提交审计），不得阻塞鉴权链路或返回错误。
+// 为 nil 时跳过（默认），保持向后兼容。
+type AccessDeniedHook func(c *gin.Context, reason string)
+
+// Option 为 RequireAdmin 的可选配置项（函数式选项）。
+type Option func(*requireAdminConfig)
+
+// requireAdminConfig 聚合 RequireAdmin 的可选配置。
+type requireAdminConfig struct {
+	onAccessDenied AccessDeniedHook
+}
+
+// WithAccessDeniedHook 注入鉴权失败回调，供装配层在管理员后台鉴权失败时记录 access_denied 审计（Req 22.3）。
+//
+// 回调在 abort 之前触发，可通过 c.Request.URL.Path 取得被拒目标、reason 作为明细。
+func WithAccessDeniedHook(hook AccessDeniedHook) Option {
+	return func(cfg *requireAdminConfig) {
+		cfg.onAccessDenied = hook
+	}
+}
+
 // RequireAdmin 返回一个校验管理员 JWT 的 gin 中间件（Req 1.6、1.7）。
 //
 // 中间件流程：
@@ -42,26 +66,32 @@ type TokenParser interface {
 //   - 校验通过则将 Claims 存入 gin.Context 供后续处理使用，并放行至下一处理器。
 //
 // 鉴权失败时以统一错误模型（domain.APIError，code=UNAUTHORIZED）返回 HTTP 401，
-// 并调用 c.Abort() 阻断后续处理器执行。parser 为 nil 时该中间件会拒绝所有请求，
-// 避免误将未配置鉴权的端点暴露为无保护。
-func RequireAdmin(parser TokenParser) gin.HandlerFunc {
+// 并调用 c.Abort() 阻断后续处理器执行；若注入了 AccessDeniedHook，会在 abort 前触发以供记录 access_denied 审计（Req 22.3）。
+// parser 为 nil 时该中间件会拒绝所有请求，避免误将未配置鉴权的端点暴露为无保护。
+func RequireAdmin(parser TokenParser, opts ...Option) gin.HandlerFunc {
+	cfg := &requireAdminConfig{}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(cfg)
+		}
+	}
 	return func(c *gin.Context) {
 		if parser == nil {
-			abortUnauthorized(c, "鉴权中间件未正确初始化")
+			deny(c, cfg.onAccessDenied, "鉴权中间件未正确初始化")
 			return
 		}
 
 		token, ok := extractBearerToken(c.GetHeader(authorizationHeader))
 		if !ok {
 			// 令牌缺失或 Authorization 头格式不符（Req 1.6）。
-			abortUnauthorized(c, "缺少有效的 Authorization Bearer 令牌")
+			deny(c, cfg.onAccessDenied, "缺少有效的 Authorization Bearer 令牌")
 			return
 		}
 
 		claims, err := parser.ParseToken(token)
 		if err != nil {
 			// 令牌无效、签名不符或已过期（含超过会话超时，Req 1.6、1.7）。
-			abortUnauthorized(c, "令牌无效或已过期")
+			deny(c, cfg.onAccessDenied, "令牌无效或已过期")
 			return
 		}
 
@@ -69,6 +99,14 @@ func RequireAdmin(parser TokenParser) gin.HandlerFunc {
 		c.Set(ctxClaimsKey, claims)
 		c.Next()
 	}
+}
+
+// deny 统一处理鉴权失败：先触发审计回调（如果注入），再返回 401 并 abort。
+func deny(c *gin.Context, hook AccessDeniedHook, message string) {
+	if hook != nil {
+		hook(c, message)
+	}
+	abortUnauthorized(c, message)
 }
 
 // ClaimsFromContext 从 gin.Context 读取由 RequireAdmin 存入的会话信息。

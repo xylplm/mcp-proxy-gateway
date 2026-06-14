@@ -3,6 +3,7 @@ package httpapi
 import (
 	"github.com/gin-gonic/gin"
 
+	"github.com/myGithub/mcp-proxy-gateway/internal/audit"
 	"github.com/myGithub/mcp-proxy-gateway/internal/auth"
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
 )
@@ -108,6 +109,7 @@ func (r *Router) register(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
+	r.recordCreate(c, audit.ResourceAdmin, req.Username)
 	respondCreated(c, gin.H{"username": req.Username, "initialized": true})
 }
 
@@ -125,9 +127,11 @@ func (r *Router) login(c *gin.Context) {
 	}
 	token, expiresAt, err := r.auth.Login(req.Username, req.Password)
 	if err != nil {
+		r.recordLogin(c, req.Username, false)
 		respondError(c, err)
 		return
 	}
+	r.recordLogin(c, req.Username, true)
 	respondOK(c, loginResponse{
 		Token:     token,
 		ExpiresAt: expiresAt.Format(timeLayout),
@@ -150,6 +154,11 @@ func (r *Router) changePassword(c *gin.Context) {
 	if err := r.auth.ChangePassword(req.CurrentPassword, req.NewPassword); err != nil {
 		respondError(c, err)
 		return
+	}
+	if claims, ok := auth.ClaimsFromContext(c); ok {
+		r.recordUpdate(c, audit.ResourceAdmin, claims.Username)
+	} else {
+		r.recordUpdate(c, audit.ResourceAdmin, "unknown")
 	}
 	respondOK(c, gin.H{"changed": true})
 }

@@ -3,6 +3,7 @@ package httpapi
 import (
 	"github.com/gin-gonic/gin"
 
+	"github.com/myGithub/mcp-proxy-gateway/internal/audit"
 	"github.com/myGithub/mcp-proxy-gateway/internal/config"
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
 )
@@ -90,6 +91,7 @@ func (r *Router) updateSettings(c *gin.Context) {
 	}
 
 	saved := r.settings.Config()
+	r.recordUpdate(c, audit.ResourceSetting, "settings")
 	respondOK(c, r.settingsView(saved))
 	if restartRequested && r.settingsRuntime != nil {
 		r.settingsRuntime.RequestRestart()

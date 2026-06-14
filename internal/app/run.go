@@ -111,6 +111,10 @@ func (a *App) startBackground(ctx context.Context) {
 	// 统计异步落库 worker 与保留期清理（Req 16.8、16.10）。
 	a.statRecorder.Start(ctx)
 	a.statCleaner.Start(ctx)
+	// 审计异步落库 worker（登录/增删改/访问被拒旁路，Req 22）。
+	if a.auditRecorder != nil {
+		a.auditRecorder.Start(ctx)
+	}
 
 	// 同步 cron 调度：注册周期同步任务并启动调度器（Req 7）。
 	syncCron := a.cfg.Config().Sync.Cron
@@ -263,6 +267,9 @@ func (a *App) shutdown() {
 	}
 	if a.statCleaner != nil {
 		a.statCleaner.Stop()
+	}
+	if a.auditRecorder != nil {
+		a.auditRecorder.Stop()
 	}
 	if a.statRecorder != nil {
 		a.statRecorder.Stop()
