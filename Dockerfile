@@ -4,13 +4,15 @@
 # 构建参数：
 #   TARGETARCH — buildx 多架构构建时自动注入的目标架构（amd64 / arm64），
 #                 用于自动选择对应架构的二进制文件。
+#
+# 注意：Docker build context 为仓库根目录（.），二进制位于 bin/ 子目录。
 
 FROM alpine:3.24
 
 RUN apk add --no-cache ca-certificates tzdata
 
 ARG TARGETARCH
-COPY mpg-linux-${TARGETARCH} /mpg
+COPY bin/mpg-linux-${TARGETARCH} /mpg
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /mpg /entrypoint.sh
 
