@@ -3,13 +3,12 @@
 # 触发方式：仅手动触发（workflow_dispatch），不在 push/tag 时自动发版。
 #
 # 构建策略（编译在 Actions 中完成，Dockerfile 仅做打包）：
-#   1) quality   —— 质量门禁：go vet、go test、前端 ESLint、gofmt 格式检查。
-#   2) version   —— 生成日期版本号 1.0.<YYYYMMDDHHmm>（北京时间）。
-#   3) build     —— 在 Actions 中完成全部编译：
-#                   · 前端：写入版本号到 package.json → npm ci → npm run build → upload artifact
-#                   · 后端：go mod download → 复制前端产物到 embed 目录 → 交叉编译 amd64/arm64 → upload artifact
-#   4) docker    —— 下载二进制 artifact → 极简 Dockerfile（仅 COPY 到 distroless）→ 多架构推送。
-#   5) release   —— 自动打 git tag 并创建 GitHub Release。
+#   1) quality         —— 质量门禁：go vet、go test、前端 ESLint、gofmt 格式检查。
+#   2) version         —— 生成日期版本号 1.0.<YYYYMMDDHHmm>（北京时间）。
+#   3) build-frontend   —— 独立构建前端并上传 artifact。
+#   4) build-backend   —— 矩阵并行编译 amd64/arm64 后端二进制（依赖前端 artifact）。
+#   5) docker          —— 下载二进制 artifact → 极简 Dockerfile → 多架构推送。
+#   6) release         —— 自动打 git tag 并创建 GitHub Release。
 #
 # 约定写死的固定值（无需环境变量/密钥）：
 #   - 镜像仓库：Docker Hub
@@ -98,10 +97,10 @@ jobs:
           echo "生成版本号：${VERSION}（tag v${VERSION}）"
 
   # ===========================================================================
-  # 编译：在 Actions 中完成前端构建和后端交叉编译，产物上传到 artifact。
+  # 前端构建：独立完成前端编译并上传 artifact，供后端 job 下载。
   # ===========================================================================
-  build:
-    name: 编译前端与后端
+  build-frontend:
+    name: 构建前端
     needs: version
     runs-on: ubuntu-latest
     env:
@@ -110,7 +109,6 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v5
 
-      # ---------- 前端构建 ----------
       - name: 安装 Node 24
         uses: actions/setup-node@v4
         with:
@@ -139,7 +137,28 @@ jobs:
           path: web/dist/
           retention-days: 1
 
-      # ---------- 后端构建 ----------
+  # ===========================================================================
+  # 后端构建：矩阵并行编译 amd64/arm64，下载前端 artifact 后内嵌编译。
+  # ===========================================================================
+  build-backend:
+    name: 编译后端 (${{ matrix.arch }})
+    needs: [version, build-frontend]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v5
+
+      - name: 下载前端产物
+        uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist/
+
       - name: 安装 Go
         uses: actions/setup-go@v5
         with:
@@ -152,22 +171,16 @@ jobs:
       - name: 复制前端产物到 embed 目录
         run: rm -rf internal/static/dist/* && cp -r web/dist/* internal/static/dist/
 
-      - name: 交叉编译 linux/amd64
+      - name: 交叉编译 linux/${{ matrix.arch }}
         run: |
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+          CGO_ENABLED=0 GOOS=linux GOARCH=${{ matrix.arch }} \
             go build -trimpath -ldflags="-s -w -X 'main.version=${VERSION}'" \
-            -o ./bin/mpg-linux-amd64 ./cmd/gateway
-
-      - name: 交叉编译 linux/arm64
-        run: |
-          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
-            go build -trimpath -ldflags="-s -w -X 'main.version=${VERSION}'" \
-            -o ./bin/mpg-linux-arm64 ./cmd/gateway
+            -o ./bin/mpg-linux-${{ matrix.arch }} ./cmd/gateway
 
       - name: 上传后端二进制
         uses: actions/upload-artifact@v4
         with:
-          name: bin
+          name: bin-${{ matrix.arch }}
           path: bin/
           retention-days: 1
 
@@ -176,16 +189,22 @@ jobs:
   # ===========================================================================
   docker:
     name: 构建并推送多架构镜像
-    needs: [version, build]
+    needs: [version, build-backend]
     runs-on: ubuntu-latest
     steps:
       - name: 检出代码
         uses: actions/checkout@v5
 
-      - name: 下载二进制 artifact
+      - name: 下载 amd64 二进制
         uses: actions/download-artifact@v4
         with:
-          name: bin
+          name: bin-amd64
+          path: bin/
+
+      - name: 下载 arm64 二进制
+        uses: actions/download-artifact@v4
+        with:
+          name: bin-arm64
           path: bin/
 
       - name: Docker Setup Buildx
