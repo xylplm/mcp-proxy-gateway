@@ -69,10 +69,11 @@ func (a *App) build(enc *crypto.Service, envCfg config.EnvConfig) error {
 		mcpFilterListerAdapter{repo: repos.FilterMCP},
 		apiKeyFilterListerAdapter{repo: repos.FilterAPIKey},
 	)
+	agg.SetLogger(a.logger)
 
 	// --- 聚合调用路由：连接状态来自 manager，会话来自 dialer 注册表（Req 10.3/10.5/10.8）---
 	callTimeout := time.Duration(yamlCfg.Aggregation.UpstreamCallTimeoutS) * time.Second
-	invoker := aggregation.NewSessionInvoker(mgr, dialer, callTimeout)
+	invoker := aggregation.NewSessionInvoker(mgr, dialer, callTimeout, a.logger)
 	agg.SetInvoker(invoker)
 
 	// --- 统计服务：异步写入 worker（Redis 缓冲）+ 多维查询 + 保留期清理 ---

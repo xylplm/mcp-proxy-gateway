@@ -137,7 +137,7 @@ func (e *Endpoints) getServer(req *http.Request) *mcp.Server {
 	}
 	srv, err := e.svc.BuildServer(req.Context(), apiKeyID, mode)
 	if err != nil {
-		e.logger.Warn("构建对外 MCP 服务端失败", "apiKeyID", apiKeyID, "error", err)
+		e.logger.Warn("构建对外 MCP 服务端失败", "apiKeyID", apiKeyID, "mode", mode, "error", err)
 		return nil
 	}
 	return srv

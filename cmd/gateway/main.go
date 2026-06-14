@@ -20,7 +20,13 @@ import (
 
 func main() {
 	systemLogs := syslog.NewStore(2000)
-	console := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})
+	// 使用可变日志级别变量，使 ApplySettings 能在运行时按配置即时切换级别。
+	// 初始为 Info；app.New 加载 YAML 后会通过 ApplySettings/首启校正为配置值。
+	// AddSource 让 stdout JSON 输出携带调用方源码位置（file/line/function），
+	// 便于在容器日志中定位触发点；syslog.Handler 独立解析 PC 供管理台展示。
+	levelVar := &slog.LevelVar{}
+	levelVar.Set(slog.LevelInfo)
+	console := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: levelVar, AddSource: true})
 	logger := slog.New(syslog.NewHandler(console, systemLogs))
 	slog.SetDefault(logger)
 
@@ -31,7 +37,7 @@ func main() {
 	// 装配整个系统：配置 → DB/Redis/迁移 → 加密 → 各服务 → 领域核心 → 入站路由。
 	// 启动致命错误（缺失/非法环境变量、YAML 非法、加密密钥无效、迁移/连接失败）在此终止。
 	for ctx.Err() == nil {
-		application, err := app.New(ctx, logger, app.WithSystemLogs(systemLogs))
+		application, err := app.New(ctx, logger, app.WithSystemLogs(systemLogs), app.WithLevelVar(levelVar))
 		if err != nil {
 			logger.Error("startup failed", "error", err)
 			os.Exit(1)

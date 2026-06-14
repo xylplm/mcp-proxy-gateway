@@ -98,7 +98,7 @@ func irBuildService(
 	sessions SessionProvider,
 	callTimeout time.Duration,
 ) *Service {
-	invoker := NewSessionInvoker(states, sessions, callTimeout)
+	invoker := NewSessionInvoker(states, sessions, callTimeout, nil)
 	return NewService(cache, domain.NewRuleEngine(), upstreams, aliases, mcpFilters, apiKeyFilters).SetInvoker(invoker)
 }
 

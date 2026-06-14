@@ -135,6 +135,68 @@ func TestValidateServerListenConfig(t *testing.T) {
 	}
 }
 
+// TestValidateServerLogLevel 验证 server.log_level 取值校验：合法枚举通过，非法值报字段错误。
+func TestValidateServerLogLevel(t *testing.T) {
+	cases := []struct {
+		name    string
+		level   string
+		wantErr bool
+	}{
+		{name: "默认 info 合法", level: LogLevelInfo, wantErr: false},
+		{name: "debug 合法", level: LogLevelDebug, wantErr: false},
+		{name: "warn 合法", level: LogLevelWarn, wantErr: false},
+		{name: "error 合法", level: LogLevelError, wantErr: false},
+		{name: "空串视为默认放行", level: "", wantErr: false},
+		{name: "非法取值报错", level: "trace", wantErr: true},
+		{name: "大小写敏感报错", level: "INFO", wantErr: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := DefaultYAMLConfig()
+			cfg.Server.LogLevel = tc.level
+
+			err := ValidateYAMLConfig(cfg)
+			if !tc.wantErr {
+				if err != nil {
+					t.Fatalf("配置应通过校验，却返回错误：%v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("期望返回校验错误，却返回 nil")
+			}
+			var apiErr *domain.APIError
+			if !errors.As(err, &apiErr) {
+				t.Fatalf("期望错误类型为 *domain.APIError，实际为 %T", err)
+			}
+			if _, ok := apiErr.Fields["server.log_level"]; !ok {
+				t.Errorf("期望字段级错误包含 server.log_level，实际 Fields=%v", apiErr.Fields)
+			}
+		})
+	}
+}
+
+// TestNormalizeLogLevel 验证 NormalizeLogLevel 对合法值原样返回、空串与非法值回退到 info。
+func TestNormalizeLogLevel(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{in: LogLevelDebug, want: LogLevelDebug},
+		{in: LogLevelInfo, want: LogLevelInfo},
+		{in: LogLevelWarn, want: LogLevelWarn},
+		{in: LogLevelError, want: LogLevelError},
+		{in: "", want: LogLevelInfo},
+		{in: "trace", want: LogLevelInfo},
+		{in: "INFO", want: LogLevelInfo},
+	}
+	for _, tc := range cases {
+		if got := NormalizeLogLevel(tc.in); got != tc.want {
+			t.Errorf("NormalizeLogLevel(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 // TestValidateXiaoZhiEndpoint 验证启用小智接入时的接入点地址协议校验（Req 15.6）。
 func TestValidateXiaoZhiEndpoint(t *testing.T) {
 	cases := []struct {

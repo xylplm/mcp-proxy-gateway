@@ -40,6 +40,10 @@ func ValidateYAMLConfig(cfg YAMLConfig) error {
 	if strings.TrimSpace(cfg.Server.PublicMCPAddr) == "" && !cfg.Server.ExposeMCPOnAdminAddr {
 		fields["server.public_mcp_addr"] = "关闭管理端口 MCP 入口前，必须先配置独立 MCP 监听地址"
 	}
+	// server.log_level 取值 debug/info/warn/error，默认 info；空串视为默认放行。
+	if cfg.Server.LogLevel != "" && !ValidLogLevel(cfg.Server.LogLevel) {
+		fields["server.log_level"] = "日志级别取值非法（应为 debug/info/warn/error）"
+	}
 
 	// auth.session_timeout_s 范围 300-86400（Req 1.4、1.7）。
 	rangeCheck(fields, "auth.session_timeout_s", cfg.Auth.SessionTimeoutS, 300, 86400)

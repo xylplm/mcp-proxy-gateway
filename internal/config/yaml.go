@@ -34,6 +34,9 @@ type ServerConfig struct {
 	PublicMCPAddr string `yaml:"public_mcp_addr" json:"public_mcp_addr"`
 	// ExposeMCPOnAdminAddr 表示是否仍在管理端口暴露 /mcp/*，默认 true 兼容旧部署。
 	ExposeMCPOnAdminAddr bool `yaml:"expose_mcp_on_admin_addr" json:"expose_mcp_on_admin_addr"`
+	// LogLevel 为进程日志级别：debug/info/warn/error，默认 info。
+	// 通过管理台保存设置后即时生效（基于 slog.LevelVar），无需重启进程。
+	LogLevel string `yaml:"log_level" json:"log_level"`
 }
 
 // AdminConfig 为管理员凭证配置（Req 1）。
@@ -120,6 +123,32 @@ const (
 	ModeFull = "full"
 )
 
+// 日志级别取值常量。与 slog 级别对应，空串视为默认 info。
+const (
+	LogLevelDebug = "debug"
+	LogLevelInfo  = "info"
+	LogLevelWarn  = "warn"
+	LogLevelError = "error"
+)
+
+// ValidLogLevel 判断给定字符串是否为合法的日志级别取值（不含空串）。
+func ValidLogLevel(s string) bool {
+	switch s {
+	case LogLevelDebug, LogLevelInfo, LogLevelWarn, LogLevelError:
+		return true
+	default:
+		return false
+	}
+}
+
+// NormalizeLogLevel 把日志级别归一化：空串或非法值回退为默认 info。
+func NormalizeLogLevel(s string) string {
+	if ValidLogLevel(s) {
+		return s
+	}
+	return LogLevelInfo
+}
+
 // DefaultYAMLConfig 返回带有设计文档约定默认值的 YAML 配置（Req 18.5）。
 //
 // 该默认配置在 YAML 文件不存在时用于创建初始配置文件；其中管理员凭证为空、
@@ -130,6 +159,7 @@ func DefaultYAMLConfig() YAMLConfig {
 			AdminAddr:            ":8080",
 			PublicMCPAddr:        "",
 			ExposeMCPOnAdminAddr: true,
+			LogLevel:             LogLevelInfo,
 		},
 		Admin: AdminConfig{
 			Username:     "",

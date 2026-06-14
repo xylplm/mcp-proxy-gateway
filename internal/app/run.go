@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -23,6 +24,11 @@ var ErrRestart = errors.New("restart requested")
 func (a *App) Run(ctx context.Context) error {
 	runCtx, cancelRun := context.WithCancel(ctx)
 	defer cancelRun()
+
+	// 0) 首启应用 YAML 中配置的日志级别（LevelVar 初始为 Info，此处校正为实际配置值）。
+	if a.levelVar != nil && a.cfg != nil {
+		a.levelVar.Set(slogLevel(a.cfg.Config().Server.LogLevel))
+	}
 
 	// 1) 启动连通性探测：按序记录 PG/Redis/各启用上游/小智的连通性（Req 20.1-20.5）。
 	report := a.prober.ProbeStartup(runCtx)
@@ -132,8 +138,18 @@ func (a *App) startBackground(ctx context.Context) {
 // ApplySettings 将已保存的 YAML 配置应用到当前运行中的进程组件。
 //
 // 配置落盘由 config.Manager 负责；此处只处理需要即时影响运行态的部分：
-// 对外 MCP 模式影响后续新建连接，小智接入需要按新配置启停或重连。
+// 对外 MCP 模式影响后续新建连接，小智接入需要按新配置启停或重连，
+// 日志级别经 LevelVar 即时切换（无需重启进程）。
 func (a *App) ApplySettings(cfg config.YAMLConfig) error {
+	// 日志级别热更新：LevelVar 绑定到 console handler，设置后即时生效。
+	if a.levelVar != nil {
+		newLevel := slogLevel(cfg.Server.LogLevel)
+		a.levelVar.Set(newLevel)
+		if a.logger != nil {
+			a.logger.Info("日志级别已更新", "level", config.NormalizeLogLevel(cfg.Server.LogLevel))
+		}
+	}
+
 	// 双模式并行运行，无需全局模式切换。
 
 	if a.xiaozhiConn == nil {
@@ -184,6 +200,20 @@ func (a *App) RuntimeServerConfig() config.ServerConfig {
 		AdminAddr:            a.adminAddr,
 		PublicMCPAddr:        a.publicMCPAddr,
 		ExposeMCPOnAdminAddr: a.exposeMCPOnAdminAddr,
+	}
+}
+
+// slogLevel 把配置中的日志级别字符串映射为 slog.Level；非法或空值回退到 info。
+func slogLevel(s string) slog.Level {
+	switch s {
+	case config.LogLevelDebug:
+		return slog.LevelDebug
+	case config.LogLevelWarn:
+		return slog.LevelWarn
+	case config.LogLevelError:
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
 	}
 }
 

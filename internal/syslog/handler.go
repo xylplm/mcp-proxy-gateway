@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"runtime"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -26,12 +28,32 @@ func (h *Handler) Enabled(ctx context.Context, level slog.Level) bool {
 
 func (h *Handler) Handle(ctx context.Context, rec slog.Record) error {
 	if h.store != nil {
-		h.store.Add(rec.Level.String(), rec.Message, rec.Time, h.recordAttrs(rec))
+		h.store.Add(rec.Level.String(), rec.Message, rec.Time, sourceOf(rec), h.recordAttrs(rec))
 	}
 	if h.next != nil && h.next.Enabled(ctx, rec.Level) {
 		return h.next.Handle(ctx, rec)
 	}
 	return nil
+}
+
+// sourceOf extracts a short caller location (e.g. "service/subscribe_service.go:196")
+// from the record's program counter. Returns empty when the PC is unavailable.
+func sourceOf(rec slog.Record) string {
+	frames := runtime.CallersFrames([]uintptr{rec.PC})
+	frame, _ := frames.Next()
+	if frame.File == "" {
+		return ""
+	}
+	// 保留末两级路径，使标识稳定且足够定位，避免全路径过长。
+	file := frame.File
+	if idx := strings.LastIndex(file, "/"); idx >= 0 {
+		if prev := strings.LastIndex(file[:idx], "/"); prev >= 0 {
+			file = file[prev+1:]
+		} else {
+			file = file[idx+1:]
+		}
+	}
+	return file + ":" + strconv.Itoa(frame.Line)
 }
 
 func (h *Handler) WithAttrs(attrs []slog.Attr) slog.Handler {

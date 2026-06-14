@@ -96,6 +96,7 @@ func TestSessionInvokerUnavailableRejected(t *testing.T) {
 				&siFakeStates{state: state, lastErr: "拨号失败"},
 				&siFakeSessions{session: session, ok: true},
 				30*time.Second,
+				nil,
 			)
 
 			_, err := invoker.CallUpstream(context.Background(), "up-a", "read_file", json.RawMessage(`{}`))
@@ -114,6 +115,7 @@ func TestSessionInvokerNoSessionRejected(t *testing.T) {
 		&siFakeStates{state: domain.ConnAvailable},
 		&siFakeSessions{session: nil, ok: false},
 		30*time.Second,
+		nil,
 	)
 
 	_, err := invoker.CallUpstream(context.Background(), "up-a", "read_file", json.RawMessage(`{}`))
@@ -129,6 +131,7 @@ func TestSessionInvokerSuccessPassthrough(t *testing.T) {
 		&siFakeStates{state: domain.ConnAvailable},
 		&siFakeSessions{session: session, ok: true},
 		30*time.Second,
+		nil,
 	)
 
 	args := json.RawMessage(`{"path":"/tmp/a.txt"}`)
@@ -159,6 +162,7 @@ func TestSessionInvokerUpstreamErrorPassthrough(t *testing.T) {
 		&siFakeStates{state: domain.ConnAvailable},
 		&siFakeSessions{session: session, ok: true},
 		30*time.Second,
+		nil,
 	)
 
 	got, err := invoker.CallUpstream(context.Background(), "up-a", "read_file", json.RawMessage(`{}`))
@@ -182,6 +186,7 @@ func TestSessionInvokerTimeoutAborts(t *testing.T) {
 		&siFakeStates{state: domain.ConnAvailable},
 		&siFakeSessions{session: session, ok: true},
 		20*time.Millisecond,
+		nil,
 	)
 
 	got, err := invoker.CallUpstream(context.Background(), "up-a", "read_file", json.RawMessage(`{}`))
@@ -199,7 +204,8 @@ func TestSessionInvokerDefaultTimeout(t *testing.T) {
 	invoker := NewSessionInvoker(
 		&siFakeStates{state: domain.ConnAvailable},
 		&siFakeSessions{session: session, ok: true},
-		0, // 非正值回退到 DefaultUpstreamCallTimeout
+		0,    // 非正值回退到 DefaultUpstreamCallTimeout
+		nil,
 	)
 	if invoker.callTimeout != DefaultUpstreamCallTimeout {
 		t.Fatalf("非正超时应回退到默认值：got=%v want=%v", invoker.callTimeout, DefaultUpstreamCallTimeout)

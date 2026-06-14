@@ -49,6 +49,16 @@ func WithSystemLogs(store *syslog.Store) Option {
 	}
 }
 
+// WithLevelVar 注入可变的日志级别变量，供 ApplySettings 在运行时调整日志级别。
+//
+// console handler（stdout）的过滤级别绑定该 LevelVar；设置后所有共用同一 handler 的
+// logger（含经 slog.SetDefault 设置的全局 logger 及注入到各服务的 logger）即时生效。
+func WithLevelVar(lv *slog.LevelVar) Option {
+	return func(a *App) {
+		a.levelVar = lv
+	}
+}
+
 // App 持有装配完成的全部组件与后台服务句柄，提供启动连通性探测、对外服务与优雅停机。
 type App struct {
 	logger *slog.Logger
@@ -68,6 +78,8 @@ type App struct {
 	restartCh       chan struct{}
 
 	systemLogs *syslog.Store
+	// levelVar 为可变日志级别变量，绑定到 console handler，供 ApplySettings 热更新。
+	levelVar *slog.LevelVar
 
 	// 后台服务（生命周期由 Run 管理）。
 	scheduler    *syncsvc.Scheduler

@@ -45,4 +45,27 @@ func TestHandlerWithAttrsAndGroup(t *testing.T) {
 	}
 }
 
+// TestHandlerCapturesSource 验证通过 logger 方法记录的日志能捕获调用方源码位置。
+func TestHandlerCapturesSource(t *testing.T) {
+	store := NewStore(10)
+	logger := slog.New(NewHandler(nil, store))
+
+	logger.Info("source captured")
+	logs := store.List(0, "info", 10)
+	if len(logs) != 1 {
+		t.Fatalf("期望 1 条日志，实际 %d", len(logs))
+	}
+	src := logs[0].Source
+	if src == "" {
+		t.Fatalf("通过 logger.Info 记录的日志应捕获调用方源码位置，实际为空")
+	}
+	// 应指向本测试文件，且含行号。
+	if !strings.Contains(src, "handler_test.go") {
+		t.Errorf("source 应指向 handler_test.go，实际 %q", src)
+	}
+	if !strings.Contains(src, ":") {
+		t.Errorf("source 应含行号，实际 %q", src)
+	}
+}
+
 func timeNow() time.Time { return time.Unix(10, 0).UTC() }

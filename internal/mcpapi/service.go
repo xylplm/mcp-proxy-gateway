@@ -74,6 +74,7 @@ func (s *Service) SetDiscoveryLimit(limit int) {
 }
 func (s *Service) BuildServer(ctx context.Context, apiKeyID string, mode string) (*mcp.Server, error) {
 	full, smart := s.snapshot()
+	s.logger.Debug("构建对外 MCP 服务端", "apiKeyID", apiKeyID, "mode", mode)
 	srv := mcp.NewServer(
 		&mcp.Implementation{Name: apiServerName, Version: apiServerVersion},
 		&mcp.ServerOptions{Capabilities: &mcp.ServerCapabilities{Tools: &mcp.ToolCapabilities{ListChanged: true}}},
@@ -81,6 +82,7 @@ func (s *Service) BuildServer(ctx context.Context, apiKeyID string, mode string)
 
 	if mode == ModeFull {
 		if err := s.registerFullTools(ctx, srv, apiKeyID, full); err != nil {
+			s.logger.Warn("构建全量模式工具集合失败", "apiKeyID", apiKeyID, "error", err)
 			return nil, err
 		}
 		return srv, nil
@@ -99,12 +101,14 @@ func (s *Service) registerFullTools(ctx context.Context, srv *mcp.Server, apiKey
 	for _, t := range tools {
 		srv.AddTool(t, s.fullCallHandler(apiKeyID, t.Name, full))
 	}
+	s.logger.Debug("注册全量模式工具", "apiKeyID", apiKeyID, "count", len(tools))
 	return nil
 }
 
 // fullCallHandler 返回把指定对外工具名的调用经全量模式编排核心路由到上游的低层处理器。
 func (s *Service) fullCallHandler(apiKeyID, exposedName string, full *FullModeHandler) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		s.logger.Debug("全量模式工具调用", "apiKeyID", apiKeyID, "exposedName", exposedName)
 		return full.CallTool(aggregation.ContextWithMode(ctx, ModeFull), apiKeyID, exposedName, callArguments(req))
 	}
 }
@@ -134,6 +138,7 @@ func (s *Service) registerGatewayTools(srv *mcp.Server, apiKeyID string, smart *
 // gatewayHandler 返回处理指定网关工具调用的低层处理器，按网关工具名分派到智能模式编排核心。
 func (s *Service) gatewayHandler(apiKeyID, gatewayName string, smart *SmartModeHandler) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		s.logger.Debug("智能模式网关工具调用", "apiKeyID", apiKeyID, "gateway", gatewayName)
 		ctx = aggregation.ContextWithMode(ctx, ModeSmart)
 		args := callArguments(req)
 		switch gatewayName {

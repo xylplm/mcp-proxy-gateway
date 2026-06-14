@@ -18,6 +18,7 @@ type Entry struct {
 	Time    time.Time      `json:"time"`
 	Level   string         `json:"level"`
 	Message string         `json:"message"`
+	Source  string         `json:"source,omitempty"`
 	Attrs   map[string]any `json:"attrs,omitempty"`
 }
 
@@ -36,13 +37,19 @@ func NewStore(capacity int) *Store {
 	return &Store{capacity: capacity}
 }
 
-func (s *Store) Add(level, message string, at time.Time, attrs map[string]any) Entry {
+// Add appends a new entry to the ring buffer, returning the stored entry.
+// source is the caller's source location (e.g. "service.go:42"); empty when
+// unavailable.
+func (s *Store) Add(level, message string, at time.Time, source string, attrs map[string]any) Entry {
 	if at.IsZero() {
 		at = time.Now()
 	}
 	level = NormalizeLevel(level)
 	if len(attrs) == 0 {
 		attrs = nil
+	}
+	if source == "" {
+		source = ""
 	}
 
 	s.mu.Lock()
@@ -54,6 +61,7 @@ func (s *Store) Add(level, message string, at time.Time, attrs map[string]any) E
 		Time:    at,
 		Level:   level,
 		Message: message,
+		Source:  source,
 		Attrs:   attrs,
 	}
 	if len(s.entries) >= s.capacity {

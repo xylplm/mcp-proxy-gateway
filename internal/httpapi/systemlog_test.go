@@ -10,9 +10,9 @@ import (
 
 func TestSystemLogsQueryFiltersByLevelAndCursor(t *testing.T) {
 	store := syslog.NewStore(10)
-	store.Add("info", "started", time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC), nil)
-	store.Add("error", "failed", time.Date(2024, 1, 1, 0, 1, 0, 0, time.UTC), map[string]any{"code": "boom"})
-	store.Add("info", "ready", time.Date(2024, 1, 1, 0, 2, 0, 0, time.UTC), nil)
+	store.Add("info", "started", time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC), "", nil)
+	store.Add("error", "failed", time.Date(2024, 1, 1, 0, 1, 0, 0, time.UTC), "", map[string]any{"code": "boom"})
+	store.Add("info", "ready", time.Date(2024, 1, 1, 0, 2, 0, 0, time.UTC), "", nil)
 	e := newTestEngine(Deps{SystemLogs: store})
 
 	w := doJSON(e, http.MethodGet, "/api/admin/system-logs?afterId=1&level=info&limit=10", "")
@@ -30,7 +30,7 @@ func TestSystemLogsQueryFiltersByLevelAndCursor(t *testing.T) {
 
 func TestSystemLogsCanBeCleared(t *testing.T) {
 	store := syslog.NewStore(10)
-	store.Add("warn", "one", time.Now(), nil)
+	store.Add("warn", "one", time.Now(), "", nil)
 	e := newTestEngine(Deps{SystemLogs: store})
 
 	w := doJSON(e, http.MethodDelete, "/api/admin/system-logs", "")

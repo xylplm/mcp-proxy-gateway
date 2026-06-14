@@ -227,6 +227,7 @@ func (c *Connector) Start(ctx context.Context) error {
 	defer c.mu.Unlock()
 
 	if !c.enabled || c.endpoint == "" {
+		c.log.Debug("小智接入未启用或地址为空，跳过启动", "enabled", c.enabled, "endpoint", c.endpoint)
 		return nil
 	}
 	if c.started {
@@ -238,6 +239,8 @@ func (c *Connector) Start(ctx context.Context) error {
 			return domain.NewError(domain.CodeValidation, "小智接入未配置聚合服务或处理器")
 		}
 	}
+
+	c.log.Info("小智接入启动", "endpoint", c.endpoint, "mode", c.mode)
 
 	runCtx, cancel := context.WithCancel(ctx)
 	c.cancel = cancel
@@ -266,11 +269,13 @@ func (c *Connector) Stop() {
 	cancel := c.cancel
 	c.started = false
 	c.cancel = nil
+	endpoint := c.endpoint
 	c.mu.Unlock()
 
 	if cancel != nil {
 		cancel()
 	}
+	c.log.Info("小智接入停止", "endpoint", endpoint)
 	c.wg.Wait()
 }
 
@@ -321,11 +326,13 @@ func (c *Connector) Reconfigure(endpoint string, enabled bool, mode string) erro
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.endpoint = endpoint
-	c.enabled = enabled
 	if mode == "" {
 		mode = "full"
 	}
+	c.log.Info("小智接入配置变更", "endpoint", endpoint, "enabled", enabled, "mode", mode,
+		"prevEndpoint", c.endpoint, "prevEnabled", c.enabled, "prevMode", c.mode)
+	c.endpoint = endpoint
+	c.enabled = enabled
 	c.mode = mode
 	return nil
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"time"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
@@ -65,6 +66,8 @@ type SessionInvoker struct {
 	sessions SessionProvider
 	// callTimeout 为单次上游调用的超时时长（Req 10.8）。
 	callTimeout time.Duration
+	// log 为结构化日志器，记录上游调用的失败源头（不可用/无会话/超时/取消）。
+	log *slog.Logger
 }
 
 // 编译期断言：SessionInvoker 必须满足 UpstreamInvoker 接口契约。
@@ -75,14 +78,19 @@ var _ UpstreamInvoker = (*SessionInvoker)(nil)
 // callTimeout 为上游调用超时（Req 10.8）：非正值时回退到 DefaultUpstreamCallTimeout
 // （默认 30s）。装配层（任务 27.2）负责将 config.AggregationConfig.UpstreamCallTimeoutS
 // 转换为 time.Duration 并经此注入，再通过 Service.SetInvoker 接入 InvokeTool。
-func NewSessionInvoker(states ConnStateProvider, sessions SessionProvider, callTimeout time.Duration) *SessionInvoker {
+// logger 为空时回退到 slog.Default()。
+func NewSessionInvoker(states ConnStateProvider, sessions SessionProvider, callTimeout time.Duration, logger *slog.Logger) *SessionInvoker {
 	if callTimeout <= 0 {
 		callTimeout = DefaultUpstreamCallTimeout
+	}
+	if logger == nil {
+		logger = slog.Default()
 	}
 	return &SessionInvoker{
 		states:      states,
 		sessions:    sessions,
 		callTimeout: callTimeout,
+		log:         logger,
 	}
 }
 
@@ -101,12 +109,14 @@ func (in *SessionInvoker) CallUpstream(ctx context.Context, upstreamID, original
 		if lastErr != "" {
 			msg = msg + "：" + lastErr
 		}
+		in.log.Warn("上游调用失败：连接不可用", "upstreamID", upstreamID, "originalName", originalName, "state", state, "lastError", lastErr)
 		return domain.ToolResult{}, domain.NewError(domain.CodeUpstreamUnavailable, msg)
 	}
 
 	// 步骤 2：获取可调用会话；无会话视为不可用（Req 10.5）。
 	session, ok := in.sessions.Session(upstreamID)
 	if !ok || session == nil {
+		in.log.Warn("上游调用失败：无可用会话", "upstreamID", upstreamID, "originalName", originalName)
 		return domain.ToolResult{}, domain.NewError(domain.CodeUpstreamUnavailable, "上游 MCP 当前无可用会话")
 	}
 
@@ -146,6 +156,9 @@ func (in *SessionInvoker) CallUpstream(ctx context.Context, upstreamID, original
 	select {
 	case o := <-done:
 		// 调用在超时前完成：原样透传成功/上游错误结果（Req 10.3）。
+		if o.err != nil {
+			in.log.Debug("上游调用返回错误", "upstreamID", upstreamID, "originalName", originalName, "error", o.err)
+		}
 		return classify(o)
 	case <-callCtx.Done():
 		// 上下文到期或被取消：优先采纳「恰好同时完成」的结果，避免在边界误报超时；
@@ -155,8 +168,10 @@ func (in *SessionInvoker) CallUpstream(ctx context.Context, upstreamID, original
 			return classify(o)
 		default:
 			if errors.Is(callCtx.Err(), context.DeadlineExceeded) {
+				in.log.Warn("上游调用超时", "upstreamID", upstreamID, "originalName", originalName, "timeout", timeout)
 				return domain.ToolResult{}, domain.NewError(domain.CodeUpstreamTimeout, "上游 MCP 调用超时")
 			}
+			in.log.Warn("上游调用被取消", "upstreamID", upstreamID, "originalName", originalName)
 			return domain.ToolResult{}, domain.NewError(domain.CodeUpstreamUnavailable, "上游 MCP 调用被取消")
 		}
 	}

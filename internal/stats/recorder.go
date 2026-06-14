@@ -212,6 +212,7 @@ func (r *Recorder) Start(ctx context.Context) {
 	r.cancel = cancel
 	r.started = true
 	r.wg.Add(1)
+	r.log.Info("统计落库 worker 已启动", "batchSize", r.batchSize, "flushInterval", r.flushInterval, "hasBuffer", r.buffer != nil)
 	go r.run(runCtx)
 }
 
@@ -234,6 +235,7 @@ func (r *Recorder) Stop() {
 		cancel()
 	}
 	r.wg.Wait()
+	r.log.Info("统计落库 worker 已停止")
 }
 
 // Running 报告 worker 当前是否在运行（主要用于测试与状态查询）。
@@ -305,6 +307,9 @@ func (r *Recorder) shutdown(pending []store.CallStatRecord) {
 //
 // 任一环节失败均静默丢弃、不向调用方报错（Req 16.9）。
 func (r *Recorder) flush(ctx context.Context, pending []store.CallStatRecord) {
+	if len(pending) > 0 {
+		r.log.Debug("批量落库调用统计", "count", len(pending), "hasBuffer", r.buffer != nil)
+	}
 	if r.buffer == nil {
 		r.writeDirect(ctx, pending)
 		return

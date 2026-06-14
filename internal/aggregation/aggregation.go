@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -93,6 +94,9 @@ type Service struct {
 	// 为 nil 时聚合调用路径不采集统计；非 nil 时在工具调用完成后以非阻塞方式提交一条
 	// 调用记录，绝不阻塞主流程（Req 16.8、16.9）。
 	recorder StatRecorder
+	// log 为结构化日志器，用于记录调用链关键节点（入口/可见性拒绝/失败源头/统计提交）。
+	// 为 nil 时回退到 slog.Default()。
+	log *slog.Logger
 }
 
 // 编译期断言：Service 必须满足 domain.Aggregation_Service 接口契约。
@@ -114,6 +118,7 @@ func NewService(
 		aliases:       aliases,
 		mcpFilters:    mcpFilters,
 		apiKeyFilters: apiKeyFilters,
+		log:           slog.Default(),
 	}
 }
 
@@ -140,6 +145,23 @@ func (s *Service) SetInvoker(invoker UpstreamInvoker) *Service {
 func (s *Service) SetRecorder(recorder StatRecorder) *Service {
 	s.recorder = recorder
 	return s
+}
+
+// SetLogger 注入结构化日志器，供调用链关键节点记录（入口/可见性拒绝/失败/统计提交）。
+// 为空时回退到 slog.Default()。返回 *Service 以支持链式调用。
+func (s *Service) SetLogger(l *slog.Logger) *Service {
+	if l != nil {
+		s.log = l
+	}
+	return s
+}
+
+// logger 返回已注入的日志器（保证非 nil）。
+func (s *Service) logger() *slog.Logger {
+	if s.log != nil {
+		return s.log
+	}
+	return slog.Default()
 }
 
 // BuildToolSet 构建某 API Key 视角的可见聚合工具集合（执行完整六阶段管线，Req 10、13）。
@@ -169,31 +191,47 @@ func (s *Service) BuildToolSet(ctx context.Context, apiKeyID string) ([]domain.T
 // UpstreamInvoker 的实现方在任务 11.1 提供。当 invoker 未注入（nil）时，本方法在通过
 // 可见性校验后返回占位错误 domain.ErrNotImplemented——可见性校验逻辑始终完整执行。
 func (s *Service) InvokeTool(ctx context.Context, apiKeyID, exposedName string, args json.RawMessage) (domain.ToolResult, error) {
+	log := s.logger()
+	mode := ModeFromContext(ctx)
+	log.Debug("工具调用进入聚合层", "exposedName", exposedName, "apiKeyID", apiKeyID, "mode", mode)
+
 	// 步骤 1：构建该 API Key 视角的可见集合与反向映射。
 	_, reverse, err := s.buildToolSetWithReverseMap(ctx, apiKeyID)
 	if err != nil {
+		log.Warn("构建可见工具集合失败，调用未转发", "exposedName", exposedName, "apiKeyID", apiKeyID, "error", err)
 		return domain.ToolResult{}, err
 	}
 
 	// 步骤 2：可见性校验。不在可见集合内则拒绝且不转发（Req 10.4、11.7）。
 	entry, ok := reverse[exposedName]
 	if !ok {
+		// 可见性拒绝：不转发、不记统计。这是定位「调用未进统计」的关键节点，用 Info 记录。
+		log.Info("工具不在当前可见集合，拒绝调用（不转发、不记统计）",
+			"exposedName", exposedName, "apiKeyID", apiKeyID, "mode", mode)
 		return domain.ToolResult{}, domain.NewError(domain.CodeToolNotFound, "工具不存在于当前可见聚合工具集合中")
 	}
 
 	// 步骤 3-4：命中——反向映射已还原 (UpstreamID, OriginalName)，经窄接口透传转发。
 	// invoker 未注入时（任务 11.1 之前）返回占位错误；可见性校验在此之前已完整执行。
 	if s.invoker == nil {
+		log.Warn("上游调用转发器未注入，调用未执行", "exposedName", exposedName, "upstreamID", entry.UpstreamID)
 		return domain.ToolResult{}, domain.ErrNotImplemented
 	}
 
 	// 调用前记录起点，用于计算响应耗时（毫秒，Req 16.1）。统计写入绝不影响调用结果。
+	log.Debug("工具调用转发上游", "exposedName", exposedName, "upstreamID", entry.UpstreamID, "originalName", entry.OriginalName, "apiKeyID", apiKeyID, "mode", mode)
 	startedAt := time.Now()
 	result, callErr := s.invoker.CallUpstream(ctx, entry.UpstreamID, entry.OriginalName, args)
 
 	// 步骤 5：异步采集调用统计（Req 16.1、16.8、16.9）。
 	// 以非阻塞方式提交，主流程附加耗时极小且永不阻塞；记录器未注入时跳过。
 	s.recordCall(ctx, apiKeyID, exposedName, entry, startedAt, args, result, callErr)
+
+	if callErr != nil {
+		log.Warn("工具调用上游失败", "exposedName", exposedName, "upstreamID", entry.UpstreamID, "latencyMS", int(time.Since(startedAt).Milliseconds()), "error", callErr)
+	} else {
+		log.Debug("工具调用完成", "exposedName", exposedName, "upstreamID", entry.UpstreamID, "latencyMS", int(time.Since(startedAt).Milliseconds()), "isError", result.IsError, "mode", mode)
+	}
 
 	return result, callErr
 }
@@ -206,11 +244,13 @@ func (s *Service) InvokeTool(ctx context.Context, apiKeyID, exposedName string, 
 // 的语义一致（Req 10.3）。recorder 未注入时为无操作。
 func (s *Service) recordCall(ctx context.Context, apiKeyID, exposedName string, entry ReverseEntry, startedAt time.Time, args json.RawMessage, result domain.ToolResult, callErr error) {
 	if s.recorder == nil {
+		s.logger().Debug("统计记录器未注入，跳过调用统计", "exposedName", exposedName)
 		return
 	}
 	latencyMS := int(time.Since(startedAt).Milliseconds())
 	success := callErr == nil && !result.IsError
 	status, errMsg, failureDetail := callFailure(result, callErr)
+	mode := ModeFromContext(ctx)
 	s.recorder.RecordAsync(ctx, store.CallStatRecord{
 		UpstreamID:     entry.UpstreamID,
 		OriginalName:   entry.OriginalName,
@@ -224,8 +264,9 @@ func (s *Service) recordCall(ctx context.Context, apiKeyID, exposedName string, 
 		ResponseResult: result.Content,
 		ErrorMessage:   errMsg,
 		FailureDetail:  failureDetail,
-		Mode:           ModeFromContext(ctx),
+		Mode:           mode,
 	})
+	s.logger().Debug("调用统计已提交", "exposedName", exposedName, "upstreamID", entry.UpstreamID, "apiKeyID", apiKeyID, "success", success, "status", status, "latencyMS", latencyMS, "mode", mode)
 }
 
 type callFailureDetail struct {
@@ -339,11 +380,13 @@ func domainErrorBusinessCode(code domain.ErrorCode) int {
 // 该方法供 BuildToolSet 与（任务 4.6）InvokeTool 共同复用：后者需要反向映射来把对外名
 // 还原为 (上游标识, 原始名) 后转发调用（Req 10.6）。
 func (s *Service) buildToolSetWithReverseMap(ctx context.Context, apiKeyID string) ([]domain.ToolDef, map[string]ReverseEntry, error) {
+	log := s.logger()
 	bundles := make([]upstreamBundle, 0)
 
 	// 阶段 1：仅取启用上游，并从缓存读取其工具列表与绑定的规则。
 	upstreams, err := s.upstreams.ListUpstreams(ctx)
 	if err != nil {
+		log.Warn("读取上游列表失败", "apiKeyID", apiKeyID, "error", err)
 		return nil, nil, err
 	}
 
@@ -359,10 +402,12 @@ func (s *Service) buildToolSetWithReverseMap(ctx context.Context, apiKeyID strin
 
 		aliases, err := s.aliases.ListAliasesByUpstream(ctx, up.ID)
 		if err != nil {
+			log.Warn("读取上游别名规则失败", "upstreamID", up.ID, "error", err)
 			return nil, nil, err
 		}
 		mcpFilters, err := s.mcpFilters.ListMCPFiltersByUpstream(ctx, up.ID)
 		if err != nil {
+			log.Warn("读取上游 MCP 级屏蔽规则失败", "upstreamID", up.ID, "error", err)
 			return nil, nil, err
 		}
 
@@ -380,6 +425,7 @@ func (s *Service) buildToolSetWithReverseMap(ctx context.Context, apiKeyID strin
 	if apiKeyID != "" {
 		apiKeyFilters, err = s.apiKeyFilters.ListAPIKeyFiltersByAPIKey(ctx, apiKeyID)
 		if err != nil {
+			log.Warn("读取 API Key 级屏蔽规则失败", "apiKeyID", apiKeyID, "error", err)
 			return nil, nil, err
 		}
 	}
