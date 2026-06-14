@@ -26,6 +26,7 @@ permissions:
 
 env:
   IMAGE_NAME: xylplm/mcp-proxy-gateway
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   # ===========================================================================
