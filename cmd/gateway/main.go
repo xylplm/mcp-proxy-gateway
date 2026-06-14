@@ -6,6 +6,10 @@
 // 优雅停机，并在启动致命错误时记录日志并以非零码退出（Req 18.3/18.6、19.4、20.1）。
 package main
 
+// version 在 CI 构建时通过 -ldflags "-X 'main.version=1.0.xxxxx'" 注入，
+// 本地构建默认为 "dev"。
+var version = "dev"
+
 import (
 	"context"
 	"errors"

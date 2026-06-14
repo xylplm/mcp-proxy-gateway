@@ -12,11 +12,15 @@ const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 
   version?: string
 }
 
+// CI 构建时通过 VITE_APP_VERSION 注入日期版本号（如 1.0.202606141200），
+// 本地开发时 fallback 到 package.json 的 version 字段。
+const appVersion = process.env.VITE_APP_VERSION ?? pkg.version ?? '0.0.0'
+
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [vue(), vueJsx(), vueDevTools()],
   define: {
-    __APP_VERSION__: JSON.stringify(pkg.version ?? '0.0.0'),
+    __APP_VERSION__: JSON.stringify(appVersion),
   },
   resolve: {
     alias: {
