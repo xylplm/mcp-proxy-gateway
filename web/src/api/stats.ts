@@ -109,6 +109,8 @@ export interface TimeRangeQuery {
   start?: string
   /** 区间终点（RFC3339）；缺省取当前时刻。 */
   end?: string
+  /** 分组所用 IANA 时区名（如 Asia/Shanghai）；仅 daily 端点使用，缺省回退 UTC。 */
+  tz?: string
 }
 
 /** 维度统计响应体：{ counts: [...] }；后端可能返回 null，归一化为空数组。 */
@@ -145,7 +147,7 @@ interface ClearRecordsResponse {
   deleted: number
 }
 
-/** 构造仅含非空 start/end 的查询参数对象，避免传空串触发后端格式校验。 */
+/** 构造仅含非空 start/end/tz 的查询参数对象，避免传空串触发后端格式校验。 */
 function buildRangeParams(range: TimeRangeQuery): Record<string, string> {
   const params: Record<string, string> = {}
   if (range.start !== undefined && range.start !== '') {
@@ -153,6 +155,9 @@ function buildRangeParams(range: TimeRangeQuery): Record<string, string> {
   }
   if (range.end !== undefined && range.end !== '') {
     params.end = range.end
+  }
+  if (range.tz !== undefined && range.tz !== '') {
+    params.tz = range.tz
   }
   return params
 }

@@ -51,7 +51,7 @@ func (q *rankingFakeQuerier) Summary(context.Context, time.Time, time.Time) (sto
 	return store.StatsSummary{}, nil
 }
 
-func (q *rankingFakeQuerier) Daily(context.Context, time.Time, time.Time) ([]store.DailyCount, error) {
+func (q *rankingFakeQuerier) Daily(context.Context, time.Time, time.Time, string) ([]store.DailyCount, error) {
 	return nil, nil
 }
 

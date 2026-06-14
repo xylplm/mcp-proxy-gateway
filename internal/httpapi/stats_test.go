@@ -27,6 +27,7 @@ type fakeStats struct {
 
 	gotStart    time.Time
 	gotEnd      time.Time
+	gotTZ       string
 	gotLimit    int
 	gotAfterID  int64
 	gotAfterAt  time.Time
@@ -66,8 +67,8 @@ func (f *fakeStats) Summary(_ context.Context, start, end time.Time) (store.Stat
 	return f.summary, nil
 }
 
-func (f *fakeStats) Daily(_ context.Context, start, end time.Time) ([]store.DailyCount, error) {
-	f.gotStart, f.gotEnd = start, end
+func (f *fakeStats) Daily(_ context.Context, start, end time.Time, tz string) ([]store.DailyCount, error) {
+	f.gotStart, f.gotEnd, f.gotTZ = start, end, tz
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -212,6 +213,24 @@ func TestStatsDaily(t *testing.T) {
 	unmarshalData(t, w, &got)
 	if len(got.Days) != 1 || got.Days[0].TotalCalls != 7 {
 		t.Errorf("每日趋势结果不符：%+v", got.Days)
+	}
+	// tz 缺省时透传空串，后端回退 UTC，保持向后兼容。
+	if st.gotTZ != "" {
+		t.Errorf("缺省 tz 期望透传空串，实际 %q", st.gotTZ)
+	}
+}
+
+// TestStatsDailyForwardsTimezone 验证 tz 查询参数透传到统计服务，供后端按本地时区分组。
+func TestStatsDailyForwardsTimezone(t *testing.T) {
+	st := &fakeStats{daily: []store.DailyCount{}}
+	e := newTestEngine(Deps{Stats: st})
+
+	w := doJSON(e, http.MethodGet, "/api/admin/stats/daily?tz=Asia%2FShanghai", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("期望 HTTP 200，实际 %d", w.Code)
+	}
+	if st.gotTZ != "Asia/Shanghai" {
+		t.Errorf("tz 未透传：期望 Asia/Shanghai，实际 %q", st.gotTZ)
 	}
 }
 

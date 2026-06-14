@@ -34,8 +34,8 @@ type StatQuerier interface {
 	TopTools(ctx context.Context, start, end time.Time, limit int) ([]store.ToolRank, error)
 	// Summary 返回 [start, end] 闭区间内调用概览。
 	Summary(ctx context.Context, start, end time.Time) (store.StatsSummary, error)
-	// Daily 返回 [start, end] 闭区间内按日聚合的调用趋势。
-	Daily(ctx context.Context, start, end time.Time) ([]store.DailyCount, error)
+	// Daily 返回 [start, end] 闭区间内按指定时区（IANA 名，空串回退 UTC）自然日聚合的调用趋势。
+	Daily(ctx context.Context, start, end time.Time, tz string) ([]store.DailyCount, error)
 	// TopToolErrors 返回 [start, end] 闭区间内按失败次数降序排列的工具错误排行。
 	TopToolErrors(ctx context.Context, start, end time.Time, limit int) ([]store.ToolErrorRank, error)
 	// ListRecords 按最新时间倒序分页返回调用记录。
@@ -139,9 +139,9 @@ func (s *QueryService) Summary(ctx context.Context, start, end time.Time) (store
 	return s.repo.Summary(ctx, start, end)
 }
 
-// Daily 返回 [start, end] 闭区间内按日聚合的调用趋势。
-func (s *QueryService) Daily(ctx context.Context, start, end time.Time) ([]store.DailyCount, error) {
-	return s.repo.Daily(ctx, start, end)
+// Daily 返回 [start, end] 闭区间内按指定时区（IANA 名，空串回退 UTC）自然日聚合的调用趋势。
+func (s *QueryService) Daily(ctx context.Context, start, end time.Time, tz string) ([]store.DailyCount, error) {
+	return s.repo.Daily(ctx, start, end, tz)
 }
 
 // TopToolErrors 返回 [start, end] 闭区间内按失败次数降序排列的工具错误排行。

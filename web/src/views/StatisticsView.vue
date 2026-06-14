@@ -92,8 +92,23 @@ function toRFC3339(local: string): string | undefined {
   return d.toISOString()
 }
 
+// 浏览器所在 IANA 时区名；同步传给后端按此时区划分自然日，热力图网格也按此时区
+// 对齐日期 key，避免本地「今天」与后端 UTC 分组错位导致显示 0。
+const browserTZ = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+
+// 按 tz 时区把任意 Date 格式化为 YYYY-MM-DD（en-CA locale 默认输出 ISO 日期）。
+// 网格日期与后端 Day 都经此函数生成 key，保证两端「一天」的边界完全一致。
+function localDayKey(date: Date, tz: string): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(date)
+}
+
 function range(): TimeRangeQuery {
-  return { start: toRFC3339(startLocal.value), end: toRFC3339(endLocal.value) }
+  return { start: toRFC3339(startLocal.value), end: toRFC3339(endLocal.value), tz: browserTZ }
 }
 
 function formatInt(value: number): string {
@@ -178,7 +193,7 @@ const topErrorTool = computed(() => toolErrors.value[0] ?? null)
 const heatmapDays = computed(() => {
   const byDay = new Map<string, DailyCount>()
   for (const item of daily.value) {
-    byDay.set(new Date(item.Day).toISOString().slice(0, 10), item)
+    byDay.set(localDayKey(new Date(item.Day), browserTZ), item)
   }
   const end = endLocal.value === '' ? new Date() : new Date(endLocal.value)
   if (Number.isNaN(end.getTime())) end.setTime(Date.now())
@@ -191,7 +206,7 @@ const heatmapDays = computed(() => {
   for (let i = 0; i < dayCount; i += 1) {
     const date = new Date(start)
     date.setDate(start.getDate() + i)
-    const key = date.toISOString().slice(0, 10)
+    const key = localDayKey(date, browserTZ)
     const item = byDay.get(key) ?? null
     const count = item?.TotalCalls ?? 0
     const level = count === 0 ? 0 : Math.min(4, Math.ceil((count / max) * 4))

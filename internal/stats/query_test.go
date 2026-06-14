@@ -41,6 +41,7 @@ type fakeQuerier struct {
 	// 记录最近一次各方法收到的入参，用于断言透传与 limit 收敛。
 	lastStart    time.Time
 	lastEnd      time.Time
+	lastTZ       string
 	lastTopLimit int
 	clearCutoff  time.Time
 }
@@ -77,8 +78,8 @@ func (q *fakeQuerier) Summary(_ context.Context, start, end time.Time) (store.St
 	return q.summary, nil
 }
 
-func (q *fakeQuerier) Daily(_ context.Context, start, end time.Time) ([]store.DailyCount, error) {
-	q.lastStart, q.lastEnd = start, end
+func (q *fakeQuerier) Daily(_ context.Context, start, end time.Time, tz string) ([]store.DailyCount, error) {
+	q.lastStart, q.lastEnd, q.lastTZ = start, end, tz
 	if q.dailyErr != nil {
 		return nil, q.dailyErr
 	}
@@ -309,9 +310,12 @@ func TestSummaryDailyAndToolErrorsPassThrough(t *testing.T) {
 	if err != nil || summary.TotalCalls != 12 || summary.FailureCalls != 2 {
 		t.Fatalf("Summary 未透传：summary=%+v err=%v", summary, err)
 	}
-	daily, err := svc.Daily(context.Background(), start, end)
+	daily, err := svc.Daily(context.Background(), start, end, "Asia/Shanghai")
 	if err != nil || len(daily) != 1 || daily[0].TotalCalls != 3 {
 		t.Fatalf("Daily 未透传：daily=%+v err=%v", daily, err)
+	}
+	if repo.lastTZ != "Asia/Shanghai" {
+		t.Errorf("Daily tz 未透传：期望 Asia/Shanghai，实际 %q", repo.lastTZ)
 	}
 	errors, err := svc.TopToolErrors(context.Background(), start, end, 0)
 	if err != nil || len(errors) != 1 || errors[0].FailureCalls != 2 {

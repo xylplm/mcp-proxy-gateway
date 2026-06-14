@@ -402,14 +402,22 @@ func (r *CallStatRepo) Summary(ctx context.Context, start, end time.Time) (Stats
 	return out, nil
 }
 
-// Daily 返回 [start, end] 闭区间内按 UTC 自然日聚合的调用趋势。
-func (r *CallStatRepo) Daily(ctx context.Context, start, end time.Time) ([]DailyCount, error) {
+// Daily 返回 [start, end] 闭区间内按指定时区自然日聚合的调用趋势。
+//
+// tz 为 IANA 时区名（如 "Asia/Shanghai"），决定「一天」的切分边界；空串回退 UTC。
+// 时区名非法时返回字段级 VALIDATION 错误。调用方负责用与 tz 一致的本地日期 key
+// 匹配结果，避免前后端因时区定义不一致导致热力图错位。
+func (r *CallStatRepo) Daily(ctx context.Context, start, end time.Time, tz string) ([]DailyCount, error) {
 	if err := validateRange(start, end); err != nil {
+		return nil, err
+	}
+	zoneName, err := normalizeTimezoneName(tz)
+	if err != nil {
 		return nil, err
 	}
 	const q = `
 		SELECT
-			(date_trunc('day', called_at AT TIME ZONE 'UTC'))::date AS day,
+			(date_trunc('day', called_at AT TIME ZONE $3))::date AS day,
 			count(*) AS total_calls,
 			count(*) FILTER (WHERE success) AS success_calls,
 			count(*) FILTER (WHERE NOT success) AS failure_calls,
@@ -418,7 +426,7 @@ func (r *CallStatRepo) Daily(ctx context.Context, start, end time.Time) ([]Daily
 		WHERE called_at >= $1 AND called_at <= $2
 		GROUP BY day
 		ORDER BY day ASC`
-	rows, err := r.pool.Query(ctx, q, start, end)
+	rows, err := r.pool.Query(ctx, q, start, end, zoneName)
 	if err != nil {
 		return nil, err
 	}
@@ -738,4 +746,20 @@ func validateRange(start, end time.Time) error {
 		})
 	}
 	return nil
+}
+
+// normalizeTimezoneName 校验并归一化时区名，空串回退 UTC。
+//
+// 仅信任 Go 的 time.LoadLocation 校验结果，避免拼接任意字符串进 SQL。返回的
+// 名称可直接作为 AT TIME ZONE 参数传入 PostgreSQL（PG 与 Go 共用 IANA 命名）。
+func normalizeTimezoneName(tz string) (string, error) {
+	if tz == "" {
+		return "UTC", nil
+	}
+	if loc, err := time.LoadLocation(tz); err == nil && loc != nil {
+		return tz, nil
+	}
+	return "", domain.NewValidationError("时区参数非法", map[string]string{
+		"tz": "需为有效的 IANA 时区名，如 Asia/Shanghai",
+	})
 }
