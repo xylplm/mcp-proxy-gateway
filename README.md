@@ -81,6 +81,7 @@ Create a `docker-compose.yml`:
 ```yaml
 services:
   gateway:
+    container_name: mcp-proxy-gateway
     image: xylplm/mcp-proxy-gateway:latest
     ports:
       - "8080:8080"
@@ -101,6 +102,7 @@ services:
     restart: unless-stopped
 
   postgres:
+    container_name: postgres
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: mpg
@@ -111,6 +113,7 @@ services:
     restart: unless-stopped
 
   redis:
+    container_name: redis
     image: redis:7-alpine
     restart: unless-stopped
 
