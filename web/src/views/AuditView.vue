@@ -258,9 +258,9 @@ const pagerBtnClass =
                 </td>
                 <td class="px-3 py-3">{{ r.Target === '' ? '—' : r.Target }}</td>
                 <td class="max-w-md px-3 py-3 text-gray-500 dark:text-gray-400">
-                  <Tooltip :content="formatDetail(r.Detail)" placement="bottom-start">
+                  <AppTooltip :content="formatDetail(r.Detail)" placement="bottom-start">
                     <span class="block truncate">{{ formatDetail(r.Detail) }}</span>
-                  </Tooltip>
+                  </AppTooltip>
                 </td>
                 <td class="px-3 py-3 whitespace-nowrap text-gray-500 dark:text-gray-400">
                   {{ formatTime(r.OccurredAt) }}

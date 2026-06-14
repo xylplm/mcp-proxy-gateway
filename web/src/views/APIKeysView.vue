@@ -252,11 +252,11 @@ async function copyKey(key: APIKey): Promise<void> {
           <!-- 头部：名称 + 启停 -->
           <div class="mb-3 flex items-start justify-between gap-3">
             <div class="min-w-0">
-              <Tooltip :content="key.name" placement="bottom-start">
+              <AppTooltip :content="key.name" placement="bottom-start">
                 <div class="truncate font-medium text-gray-800 dark:text-white/90">
                   {{ key.name }}
                 </div>
-              </Tooltip>
+              </AppTooltip>
               <div class="mt-1 flex flex-wrap items-center gap-1.5">
                 <span
                   class="inline-flex items-center rounded-full px-2 py-0.5 text-xs"

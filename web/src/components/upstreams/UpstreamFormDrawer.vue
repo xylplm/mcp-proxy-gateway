@@ -870,12 +870,12 @@ const errorClass = 'mt-1.5 text-xs text-error-500'
               <div>
                 <div class="mb-2 flex items-center gap-2">
                   <span :class="labelClass" class="mb-0">接入方式</span>
-                  <Tooltip
+                  <AppTooltip
                     content="不同 MCP Server 会提供不同接入方式；本地命令通常来自 npm、uvx 或 docker，远程服务通常提供 URL。"
                     placement="right"
                   >
                     <InfoCircleIcon class="h-4 w-4 text-gray-400" aria-hidden="true" />
-                  </Tooltip>
+                  </AppTooltip>
                 </div>
                 <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <label

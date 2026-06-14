@@ -368,9 +368,9 @@ watch(
                 :key="rule.id"
                 class="flex items-center gap-3 rounded-xl border border-gray-200 bg-white p-3 dark:border-gray-800 dark:bg-white/[0.03]"
               >
-                <Tooltip :content="rule.pattern" placement="bottom-start" class="min-w-0 flex-1">
+                <AppTooltip :content="rule.pattern" placement="bottom-start" class="min-w-0 flex-1">
                   <code class="block truncate font-mono text-xs text-gray-700 dark:text-gray-300">{{ rule.pattern }}</code>
-                </Tooltip>
+                </AppTooltip>
                 <span
                   class="shrink-0 inline-flex items-center rounded-full px-2 py-0.5 text-xs"
                   :class="

@@ -298,9 +298,9 @@ defineExpose({ reload: load })
         class="flex flex-col rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-white/[0.03]"
       >
         <div class="mb-2 flex items-start justify-between gap-2">
-          <Tooltip :content="rule.pattern" placement="bottom-start" class="min-w-0 flex-1">
+          <AppTooltip :content="rule.pattern" placement="bottom-start" class="min-w-0 flex-1">
             <code class="block truncate rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-800 dark:bg-gray-800 dark:text-gray-200">{{ rule.pattern }}</code>
-          </Tooltip>
+          </AppTooltip>
           <span
             class="shrink-0 inline-flex items-center rounded-full px-2 py-0.5 text-xs"
             :class="rule.isRegex
@@ -312,11 +312,11 @@ defineExpose({ reload: load })
         </div>
         <div class="mb-3">
           <div v-if="rule.targetName" class="text-sm font-medium text-gray-800 dark:text-white/90">→ {{ rule.targetName }}</div>
-          <Tooltip v-if="rule.targetDesc" :content="rule.targetDesc" placement="bottom-start">
+          <AppTooltip v-if="rule.targetDesc" :content="rule.targetDesc" placement="bottom-start">
             <div class="mt-0.5 truncate text-xs text-gray-500 dark:text-gray-400">
               {{ rule.targetDesc }}
             </div>
-          </Tooltip>
+          </AppTooltip>
           <div class="mt-2 rounded-lg bg-gray-50 px-2.5 py-2 text-xs text-gray-500 dark:bg-gray-800/60 dark:text-gray-400">
             作用范围：{{ scopeLabel(rule) }}
           </div>

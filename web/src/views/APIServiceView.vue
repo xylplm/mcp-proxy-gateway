@@ -406,25 +406,6 @@ function guideCommandSnippet(): string {
   ])
 }
 
-function commandSnippet(): string {
-  if (selectedEndpoint.value.key === 'ws') {
-    const headers = headerLines()
-    const headerText = headers.length > 0 ? shellLines('', headers).trimStart() : ''
-    return `wscat -c "${guideAddress.value}"${headerText}`
-  }
-
-  if (selectedEndpoint.value.key === 'sse') {
-    const headers = ['-H "Accept: text/event-stream"', ...headerLines()]
-    return shellLines(`curl -N "${guideAddress.value}"`, headers)
-  }
-
-  const headers = ['-H "Content-Type: application/json"', ...headerLines()]
-  return shellLines(`curl -X POST "${guideAddress.value}"`, [
-    ...headers,
-    `-d '${JSON.stringify(jsonRPCPayload)}'`,
-  ])
-}
-
 function javascriptSnippetDesc(): string {
   if (selectedEndpoint.value.key === 'sse' && selectedGuideAuth.value !== 'query') {
     return '浏览器 EventSource 不支持自定义 Header，此处使用 fetch 读取事件流。'

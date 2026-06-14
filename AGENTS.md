@@ -34,7 +34,7 @@
 - 通用组件放 `web/src/components/common`，全局指令放 `web/src/directives`，并在 `web/src/main.ts` 注册。
 - Tooltip 使用公共能力：
   - 简单元素使用 `v-tooltip="'说明'"` 或 `v-tooltip:bottom-end="'说明'"`。
-  - 复杂包裹使用全局 `<Tooltip content="说明" placement="bottom-end">...</Tooltip>`。
+  - 复杂包裹使用全局 `<AppTooltip content="说明" placement="bottom-end">...</AppTooltip>`。
   - 不要为图标按钮使用原生 `title` 充当主要提示。
 - 图标按钮必须保留 `aria-label`；纯视觉 SVG 使用 `aria-hidden="true"`。
 - UI 文案面向用户表达业务含义，不要展示实现说明，例如“响应式卡片”“PC/2K/4K 布局”等。

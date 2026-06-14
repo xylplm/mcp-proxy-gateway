@@ -313,9 +313,9 @@ defineExpose({ reload: load })
         class="flex flex-col rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-white/[0.03]"
       >
         <div class="mb-3 flex items-start justify-between gap-2">
-          <Tooltip :content="rule.pattern" placement="bottom-start" class="min-w-0 flex-1">
+          <AppTooltip :content="rule.pattern" placement="bottom-start" class="min-w-0 flex-1">
             <code class="block truncate rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-800 dark:bg-gray-800 dark:text-gray-200">{{ rule.pattern }}</code>
-          </Tooltip>
+          </AppTooltip>
           <div class="flex shrink-0 items-center gap-2">
             <span
               class="inline-flex items-center rounded-full px-2 py-0.5 text-xs"

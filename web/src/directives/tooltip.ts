@@ -22,7 +22,7 @@ export interface TooltipOptions {
 
 export type TooltipDirectiveValue = string | TooltipOptions | null | undefined
 
-type NormalizedTooltipOptions = Required<TooltipOptions>
+type NormalizedTooltipOptions = Required<AppTooltipOptions>
 
 type TooltipBasePlacement = 'top' | 'right' | 'bottom' | 'left'
 type TooltipAlignment = 'start' | 'end' | undefined
@@ -212,7 +212,7 @@ function calculatePosition(
   }
 }
 
-function createState(el: HTMLElement, binding: DirectiveBinding<TooltipDirectiveValue>): TooltipState {
+function createState(el: HTMLElement, binding: DirectiveBinding<AppTooltipDirectiveValue>): TooltipState {
   const state: TooltipState = {
     id: `app-tooltip-${++tooltipIdSeed}`,
     options: normalizeOptions(binding.value, binding.arg),

@@ -468,7 +468,7 @@ onMounted(async () => {
       <div class="overflow-x-auto pb-1">
         <div ref="heatmapContainerRef" class="w-full">
           <div class="grid grid-flow-col grid-rows-7" :style="{ gridTemplateRows: `repeat(7, ${heatmapCellPx}px)`, gridAutoColumns: `${heatmapCellPx}px`, gap: `${heatmapGap}px` }">
-          <Tooltip
+          <AppTooltip
             v-for="day in heatmapDays"
             :key="day.key"
             :content="`${formatFullDate(day.date)}：${formatInt(day.item?.TotalCalls ?? 0)} 次，失败 ${formatInt(day.item?.FailureCalls ?? 0)} 次`"
@@ -479,7 +479,7 @@ onMounted(async () => {
               :style="{ height: `${heatmapCellPx}px`, width: `${heatmapCellPx}px` }"
               :class="heatmapLevelClass(day.level)"
             />
-          </Tooltip>
+          </AppTooltip>
           </div>
         </div>
       </div>

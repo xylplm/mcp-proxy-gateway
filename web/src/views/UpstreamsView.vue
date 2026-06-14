@@ -608,13 +608,13 @@ function goPage(p: number): void {
           </div>
 
           <!-- 最近错误（如有） -->
-          <Tooltip v-if="up.lastError" :content="up.lastError" placement="bottom-start">
+          <AppTooltip v-if="up.lastError" :content="up.lastError" placement="bottom-start">
             <p
               class="bg-error-50 text-error-600 dark:bg-error-500/10 dark:text-error-400 mb-3 truncate rounded-lg px-3 py-1.5 text-xs"
             >
               {{ up.lastError }}
             </p>
-          </Tooltip>
+          </AppTooltip>
 
           <!-- 操作 -->
           <div
