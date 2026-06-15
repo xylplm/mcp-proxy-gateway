@@ -59,6 +59,8 @@ type CallStatRecord struct {
 	FailureDetail json.RawMessage
 	// Mode 为调用使用的 MCP 模式（full/smart），默认 full。
 	Mode string
+	// Source 为调用来源（api/xiaozhi），默认 api。
+	Source string
 }
 
 // CallRecordView 是管理台调用记录列表与详情使用的单条调用视图。
@@ -79,6 +81,11 @@ type CallRecordView struct {
 	ErrorMessage   string
 	FailureDetail  json.RawMessage
 	Mode           string
+	// Source 为调用来源（api/xiaozhi），默认 api。
+	Source string
+	// Description 为查询时实时拼接的当前工具描述，仅作展示，不持久化。
+	// 由调用方（httpapi 层）据当前聚合工具集合填充，可能因别名规则变化而与调用当时不同。
+	Description string
 }
 
 // DimensionCount 为按某一维度（上游 MCP 或 API Key）聚合的调用条数（Req 16.2、16.4）。
@@ -87,6 +94,9 @@ type DimensionCount struct {
 	ID string
 	// Count 为该维度在时间范围内的调用条数（含成功与失败）。
 	Count int64
+	// Source 仅在 ID 为空（维度 NULL）时有意义，记录该 NULL 组的主要调用来源
+	// （api/xiaozhi）。非 NULL 维度的 Source 为空串。用于区分「小智接入」与真正的未知。
+	Source string
 }
 
 // ToolRank 为按工具维度的调用排行项（Req 16.3）。
@@ -151,7 +161,7 @@ func (r *CallStatRepo) Insert(ctx context.Context, records []CallStatRecord) err
 		"upstream_id", "original_name", "exposed_name",
 		"api_key_id", "called_at", "latency_ms", "success",
 		"status", "request_args", "response_result", "error_message", "failure_detail",
-		"mode",
+		"mode", "source",
 	}
 	rows := make([][]any, 0, len(records))
 	for _, rec := range records {
@@ -178,6 +188,7 @@ func (r *CallStatRepo) Insert(ctx context.Context, records []CallStatRecord) err
 			nullableText(rec.ErrorMessage),
 			nullableJSON(rec.FailureDetail),
 			normalizeMode(rec.Mode),
+			normalizeSource(rec.Source),
 		})
 	}
 
@@ -213,7 +224,8 @@ func (r *CallStatRepo) ListRecords(ctx context.Context, limit int, afterID int64
 			coalesce(cs.response_result, 'null'::jsonb),
 			coalesce(cs.error_message, ''),
 			coalesce(cs.failure_detail, 'null'::jsonb),
-			coalesce(cs.mode, 'full')
+			coalesce(cs.mode, 'full'),
+			coalesce(cs.source, 'api')
 		FROM call_stat cs
 		LEFT JOIN upstream_mcp up ON up.id = cs.upstream_id
 		LEFT JOIN api_key ak ON ak.id = cs.api_key_id
@@ -255,7 +267,8 @@ func (r *CallStatRepo) GetRecord(ctx context.Context, id int64) (CallRecordView,
 			coalesce(cs.response_result, 'null'::jsonb),
 			coalesce(cs.error_message, ''),
 			coalesce(cs.failure_detail, 'null'::jsonb),
-			coalesce(cs.mode, 'full')
+			coalesce(cs.mode, 'full'),
+			coalesce(cs.source, 'api')
 		FROM call_stat cs
 		LEFT JOIN upstream_mcp up ON up.id = cs.upstream_id
 		LEFT JOIN api_key ak ON ak.id = cs.api_key_id
@@ -288,6 +301,9 @@ func (r *CallStatRepo) ClearRecordsBefore(ctx context.Context, cutoff time.Time)
 }
 
 // CountByUpstream 统计 [start, end] 闭区间内各上游 MCP 的调用条数（含成功失败）（Req 16.2、16.5）。
+//
+// 当 upstream_id 为 NULL（未知上游）时，按 source 二次分组，使「小智接入」与真正的未知上游
+// 区分开（小智调用的 upstream_id 通常非空，此处分组主要为对称与健壮性）。
 //   - start 晚于 end 返回 CodeValidation（Req 16.7）。
 //   - 无记录返回空切片而非错误（Req 16.6）。
 func (r *CallStatRepo) CountByUpstream(ctx context.Context, start, end time.Time) ([]DimensionCount, error) {
@@ -295,7 +311,7 @@ func (r *CallStatRepo) CountByUpstream(ctx context.Context, start, end time.Time
 		return nil, err
 	}
 	const q = `
-		SELECT upstream_id, count(*)
+		SELECT upstream_id, count(*), coalesce(max(source), 'api')
 		FROM call_stat
 		WHERE called_at >= $1 AND called_at <= $2
 		GROUP BY upstream_id
@@ -304,6 +320,10 @@ func (r *CallStatRepo) CountByUpstream(ctx context.Context, start, end time.Time
 }
 
 // CountByAPIKey 统计 [start, end] 闭区间内各 API Key 的调用条数（含成功失败）（Req 16.4、16.5）。
+//
+// 当 api_key_id 为 NULL 时，按 source 区分：小智接入（source=xiaozhi）单独成组、
+// Source=xiaozhi；其余真正的未知（source=api）保留为未知、Source=api。非 NULL 的 API Key
+// 取其来源（通常为 api），不影响分组粒度。
 //   - start 晚于 end 返回 CodeValidation（Req 16.7）。
 //   - 无记录返回空切片而非错误（Req 16.6）。
 func (r *CallStatRepo) CountByAPIKey(ctx context.Context, start, end time.Time) ([]DimensionCount, error) {
@@ -311,10 +331,14 @@ func (r *CallStatRepo) CountByAPIKey(ctx context.Context, start, end time.Time) 
 		return nil, err
 	}
 	const q = `
-		SELECT api_key_id, count(*)
+		SELECT api_key_id, count(*),
+		       CASE WHEN bool_and(api_key_id IS NULL)
+		            THEN coalesce(max(source), 'api')
+		            ELSE 'api' END
 		FROM call_stat
 		WHERE called_at >= $1 AND called_at <= $2
-		GROUP BY api_key_id
+		GROUP BY api_key_id,
+		         CASE WHEN api_key_id IS NULL THEN source END
 		ORDER BY count(*) DESC`
 	return r.queryDimensionCounts(ctx, q, start, end)
 }
@@ -661,13 +685,14 @@ func (r *CallStatRepo) queryDimensionCounts(ctx context.Context, q string, start
 	result := make([]DimensionCount, 0)
 	for rows.Next() {
 		var (
-			id    pgtype.UUID
-			count int64
+			id     pgtype.UUID
+			count  int64
+			source string
 		)
-		if err := rows.Scan(&id, &count); err != nil {
+		if err := rows.Scan(&id, &count, &source); err != nil {
 			return nil, err
 		}
-		result = append(result, DimensionCount{ID: uuidString(id), Count: count})
+		result = append(result, DimensionCount{ID: uuidString(id), Count: count, Source: source})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -703,6 +728,7 @@ func scanCallRecordViews(rows pgx.Rows) ([]CallRecordView, error) {
 			&item.ErrorMessage,
 			&failure,
 			&item.Mode,
+			&item.Source,
 		); err != nil {
 			return nil, err
 		}
@@ -736,6 +762,14 @@ func normalizeMode(mode string) string {
 		return mode
 	}
 	return "full"
+}
+
+// normalizeSource 归一化调用来源，仅接受 api/xiaozhi，其余回退 api。
+func normalizeSource(source string) string {
+	if source == "api" || source == "xiaozhi" {
+		return source
+	}
+	return "api"
 }
 
 // validateRange checks that the statistics range start is not after end.

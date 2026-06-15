@@ -1,12 +1,15 @@
 package httpapi
 
 import (
+	"context"
+	"encoding/json"
 	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
+	"github.com/myGithub/mcp-proxy-gateway/internal/store"
 )
 
 // 本文件实现统计排行查询端点（Req 16.2、16.3、16.4、17.5）：
@@ -258,7 +261,12 @@ func (r *Router) statsCallRecords(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
-	respondOK(c, gin.H{"records": records})
+	descMap := r.buildDescriptionMap(c.Request.Context())
+	views := make([]callRecordResponseView, 0, len(records))
+	for _, rec := range records {
+		views = append(views, toCallRecordResponseView(rec, descMap))
+	}
+	respondOK(c, gin.H{"records": views})
 }
 
 // statsCallRecordDetail 返回单条调用记录详情。
@@ -279,7 +287,8 @@ func (r *Router) statsCallRecordDetail(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
-	respondOK(c, gin.H{"record": record})
+	descMap := r.buildDescriptionMap(c.Request.Context())
+	respondOK(c, gin.H{"record": toCallRecordResponseView(record, descMap)})
 }
 
 // clearStatsCallRecords 清空调用记录。
@@ -294,4 +303,90 @@ func (r *Router) clearStatsCallRecords(c *gin.Context) {
 		return
 	}
 	respondOK(c, gin.H{"deleted": deleted})
+}
+
+// callRecordResponseView 是调用记录的管理台响应视图，在 store.CallRecordView 基础上
+// 附加查询时实时拼接的工具描述（Description）。
+//
+// 字段名保持 PascalCase（与 store.CallRecordView 无 json tag 的历史序列化一致，前端
+// CallRecord 类型据此对齐）。Description 为 view-only 字段，非 DB 列，由调用方经
+// buildDescriptionMap 据「当前」聚合工具集合填充——因别名规则可能变化，它反映的是当前
+// 最新描述而非调用当时的快照，对 hover 展示场景足够。
+type callRecordResponseView struct {
+	ID             int64           `json:"ID"`
+	UpstreamID     string          `json:"UpstreamID"`
+	UpstreamName   string          `json:"UpstreamName"`
+	OriginalName   string          `json:"OriginalName"`
+	ExposedName    string          `json:"ExposedName"`
+	APIKeyID       string          `json:"APIKeyID"`
+	APIKeyName     string          `json:"APIKeyName"`
+	CalledAt       time.Time       `json:"CalledAt"`
+	LatencyMS      int             `json:"LatencyMS"`
+	Success        bool            `json:"Success"`
+	Status         string          `json:"Status"`
+	RequestArgs    json.RawMessage `json:"RequestArgs"`
+	ResponseResult json.RawMessage `json:"ResponseResult"`
+	ErrorMessage   string          `json:"ErrorMessage"`
+	FailureDetail  json.RawMessage `json:"FailureDetail"`
+	Mode           string          `json:"Mode"`
+	Source         string          `json:"Source"`
+	Description    string          `json:"Description"`
+}
+
+// buildDescriptionMap 构造「对外工具名 → 当前描述」映射，供调用记录附加 hover 描述。
+//
+// 以空 apiKeyID（全局视角）跑一次聚合 BuildToolSet，取回经别名/描述重写后的工具集合；
+// 聚合服务未注入或构建失败时返回空映射（降级为不展示描述），不阻断调用记录查询。
+// 不同 API Key 视角仅影响可见性、不改变描述，故用全局视角可覆盖所有记录。
+func (r *Router) buildDescriptionMap(ctx context.Context) map[string]string {
+	if r.aggregation == nil {
+		return nil
+	}
+	tools, err := r.aggregation.BuildToolSet(ctx, "")
+	if err != nil {
+		return nil
+	}
+	m := make(map[string]string, len(tools))
+	for _, t := range tools {
+		if t.Name != "" && t.Description != "" {
+			// 重复 Name 以后写入为准；同上游去重后 Name 通常唯一。
+			m[t.Name] = t.Description
+		}
+	}
+	return m
+}
+
+// toCallRecordResponseView 将仓储视图转为响应视图并附加工具描述。
+func toCallRecordResponseView(rec store.CallRecordView, descMap map[string]string) callRecordResponseView {
+	desc := ""
+	if descMap != nil {
+		// 优先按对外名匹配（别名重写后的展示名），回退到原始名。
+		if name := rec.ExposedName; name != "" {
+			desc = descMap[name]
+		}
+		if desc == "" && rec.OriginalName != "" {
+			desc = descMap[rec.OriginalName]
+		}
+	}
+	rec.Description = desc
+	return callRecordResponseView{
+		ID:             rec.ID,
+		UpstreamID:     rec.UpstreamID,
+		UpstreamName:   rec.UpstreamName,
+		OriginalName:   rec.OriginalName,
+		ExposedName:    rec.ExposedName,
+		APIKeyID:       rec.APIKeyID,
+		APIKeyName:     rec.APIKeyName,
+		CalledAt:       rec.CalledAt,
+		LatencyMS:      rec.LatencyMS,
+		Success:        rec.Success,
+		Status:         rec.Status,
+		RequestArgs:    rec.RequestArgs,
+		ResponseResult: rec.ResponseResult,
+		ErrorMessage:   rec.ErrorMessage,
+		FailureDetail:  rec.FailureDetail,
+		Mode:           rec.Mode,
+		Source:         rec.Source,
+		Description:    rec.Description,
+	}
 }

@@ -144,7 +144,7 @@ func (a *App) build(enc *crypto.Service, envCfg config.EnvConfig) error {
 		yamlCfg.XiaoZhi.Enabled,
 		nil,
 		xiaozhi.WithServerBuildFn(func(ctx context.Context, mode string) (*mcp.Server, error) {
-			return mcpService.BuildServer(ctx, "", mode)
+			return mcpService.BuildServerWithSource(ctx, "", mode, "xiaozhi")
 		}),
 		xiaozhi.WithBackoffPolicy(xzBackoff),
 		xiaozhi.WithLogger(a.logger),

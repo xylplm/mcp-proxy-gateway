@@ -18,6 +18,8 @@ export interface TooltipOptions {
   content: string
   placement?: TooltipPlacement
   disabled?: boolean
+  /** 是否换行展示长文本（用于工具描述等长内容）；默认 false 保持单行截断。 */
+  wrap?: boolean
 }
 
 export type TooltipDirectiveValue = string | TooltipOptions | null | undefined
@@ -46,6 +48,7 @@ const DEFAULT_OPTIONS: NormalizedTooltipOptions = {
   content: '',
   placement: 'top',
   disabled: false,
+  wrap: false,
 }
 
 function normalizeOptions(
@@ -275,6 +278,7 @@ function showTooltip(el: HTMLElement, state: TooltipState): void {
 
   state.tooltip.textContent = state.options.content
   state.tooltip.dataset.placement = state.options.placement
+  state.tooltip.classList.toggle('is-wrap', state.options.wrap)
 
   if (!document.body.contains(state.tooltip)) {
     document.body.appendChild(state.tooltip)

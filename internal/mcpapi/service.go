@@ -73,43 +73,52 @@ func (s *Service) SetDiscoveryLimit(limit int) {
 	s.smart = NewSmartModeHandler(s.agg, limit)
 }
 func (s *Service) BuildServer(ctx context.Context, apiKeyID string, mode string) (*mcp.Server, error) {
+	return s.BuildServerWithSource(ctx, apiKeyID, mode, "api")
+}
+
+// BuildServerWithSource 同 BuildServer，但允许指定调用来源（api/xiaozhi），供采集记录区分。
+// 由 serverBuildFn 调用方按接入来源传入（API 端点传 api，小智接入传 xiaozhi）；其余调用方
+// 仍可用 BuildServer，来源默认 api。
+func (s *Service) BuildServerWithSource(ctx context.Context, apiKeyID, mode, source string) (*mcp.Server, error) {
 	full, smart := s.snapshot()
-	s.logger.Debug("构建对外 MCP 服务端", "apiKeyID", apiKeyID, "mode", mode)
+	s.logger.Debug("构建对外 MCP 服务端", "apiKeyID", apiKeyID, "mode", mode, "source", source)
 	srv := mcp.NewServer(
 		&mcp.Implementation{Name: apiServerName, Version: apiServerVersion},
 		&mcp.ServerOptions{Capabilities: &mcp.ServerCapabilities{Tools: &mcp.ToolCapabilities{ListChanged: true}}},
 	)
 
 	if mode == ModeFull {
-		if err := s.registerFullTools(ctx, srv, apiKeyID, full); err != nil {
+		if err := s.registerFullTools(ctx, srv, apiKeyID, source, full); err != nil {
 			s.logger.Warn("构建全量模式工具集合失败", "apiKeyID", apiKeyID, "error", err)
 			return nil, err
 		}
 		return srv, nil
 	}
 
-	s.registerGatewayTools(srv, apiKeyID, smart)
+	s.registerGatewayTools(srv, apiKeyID, source, smart)
 	return srv, nil
 }
 
 // registerFullTools 在全量模式下把该 API Key 视角的全部可见聚合工具注册到 server（Req 11.2）。
-func (s *Service) registerFullTools(ctx context.Context, srv *mcp.Server, apiKeyID string, full *FullModeHandler) error {
+func (s *Service) registerFullTools(ctx context.Context, srv *mcp.Server, apiKeyID, source string, full *FullModeHandler) error {
 	tools, err := full.ListTools(ctx, apiKeyID)
 	if err != nil {
 		return fmt.Errorf("构建全量工具集合失败：%w", err)
 	}
 	for _, t := range tools {
-		srv.AddTool(t, s.fullCallHandler(apiKeyID, t.Name, full))
+		srv.AddTool(t, s.fullCallHandler(apiKeyID, source, t.Name, full))
 	}
 	s.logger.Debug("注册全量模式工具", "apiKeyID", apiKeyID, "count", len(tools))
 	return nil
 }
 
 // fullCallHandler 返回把指定对外工具名的调用经全量模式编排核心路由到上游的低层处理器。
-func (s *Service) fullCallHandler(apiKeyID, exposedName string, full *FullModeHandler) mcp.ToolHandler {
+func (s *Service) fullCallHandler(apiKeyID, source, exposedName string, full *FullModeHandler) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		s.logger.Debug("全量模式工具调用", "apiKeyID", apiKeyID, "exposedName", exposedName)
-		return full.CallTool(aggregation.ContextWithMode(ctx, ModeFull), apiKeyID, exposedName, callArguments(req))
+		ctx = aggregation.ContextWithMode(ctx, ModeFull)
+		ctx = aggregation.ContextWithSource(ctx, source)
+		return full.CallTool(ctx, apiKeyID, exposedName, callArguments(req))
 	}
 }
 
@@ -129,17 +138,18 @@ func callArguments(req *mcp.CallToolRequest) json.RawMessage {
 //
 // 各网关工具的发现型结果（工具摘要/分页/单工具定义）以 JSON 文本 content 回传；call_tool
 // 直接透传聚合服务返回的 MCP 调用结果（Req 10.3）。
-func (s *Service) registerGatewayTools(srv *mcp.Server, apiKeyID string, smart *SmartModeHandler) {
+func (s *Service) registerGatewayTools(srv *mcp.Server, apiKeyID, source string, smart *SmartModeHandler) {
 	for _, gt := range smart.GatewayTools() {
-		srv.AddTool(gt, s.gatewayHandler(apiKeyID, gt.Name, smart))
+		srv.AddTool(gt, s.gatewayHandler(apiKeyID, source, gt.Name, smart))
 	}
 }
 
 // gatewayHandler 返回处理指定网关工具调用的低层处理器，按网关工具名分派到智能模式编排核心。
-func (s *Service) gatewayHandler(apiKeyID, gatewayName string, smart *SmartModeHandler) mcp.ToolHandler {
+func (s *Service) gatewayHandler(apiKeyID, source, gatewayName string, smart *SmartModeHandler) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		s.logger.Debug("智能模式网关工具调用", "apiKeyID", apiKeyID, "gateway", gatewayName)
 		ctx = aggregation.ContextWithMode(ctx, ModeSmart)
+		ctx = aggregation.ContextWithSource(ctx, source)
 		args := callArguments(req)
 		switch gatewayName {
 		case GatewayToolListTools:

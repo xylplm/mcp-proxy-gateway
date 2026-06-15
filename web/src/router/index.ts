@@ -129,15 +129,6 @@ const router = createRouter({
       },
     },
     {
-      path: '/call-records/:id',
-      name: 'CallRecordDetail',
-      component: () => import('../views/CallRecordDetailView.vue'),
-      meta: {
-        title: '调用详情',
-        requiresAuth: true,
-      },
-    },
-    {
       path: '/settings',
       name: 'Settings',
       component: () => import('../views/SettingsView.vue'),

@@ -306,6 +306,13 @@ layer(base);
   transform: translateY(0);
 }
 
+/* 长文本（如工具描述）换行展示，覆盖默认的单行截断。 */
+.app-tooltip.is-wrap {
+  white-space: normal;
+  word-break: break-word;
+  max-width: min(360px, calc(100vw - 16px));
+}
+
 .dark .app-tooltip {
   background: #ffffff;
   color: #101828;

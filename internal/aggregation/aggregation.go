@@ -39,6 +39,26 @@ func ContextWithMode(ctx context.Context, mode string) context.Context {
 	return context.WithValue(ctx, modeContextKey{}, mode)
 }
 
+// sourceContextKey 用于把调用来源（api/xiaozhi）注入 context，供调用记录采集。
+//
+// 与 mode 机制同构：在调用入口（mcpapi 处理器、小智接入装配）注入，在采集点 recordCall
+// 读取。未设置时回退 "api"。采用 context 注入而非给 InvokeTool 加参数，避免改动
+// domain.Aggregation_Service 契约与全部 mock。
+type sourceContextKey struct{}
+
+// SourceFromContext 从 context 中提取调用来源；未设置时返回 "api"。
+func SourceFromContext(ctx context.Context) string {
+	if s, ok := ctx.Value(sourceContextKey{}).(string); ok && s != "" {
+		return s
+	}
+	return "api"
+}
+
+// ContextWithSource 返回携带调用来源的 context。
+func ContextWithSource(ctx context.Context, source string) context.Context {
+	return context.WithValue(ctx, sourceContextKey{}, source)
+}
+
 // UpstreamLister 是聚合服务读取「启用上游列表」所需的窄接口。
 //
 // 仅声明聚合所需的最小能力（按 sort_order 升序列出上游），不直接耦合具体的
@@ -252,6 +272,7 @@ func (s *Service) recordCall(ctx context.Context, apiKeyID, exposedName string, 
 	success := callErr == nil && !result.IsError
 	status, errMsg, failureDetail := callFailure(result, callErr)
 	mode := ModeFromContext(ctx)
+	source := SourceFromContext(ctx)
 	s.recorder.RecordAsync(ctx, store.CallStatRecord{
 		UpstreamID:     entry.UpstreamID,
 		OriginalName:   entry.OriginalName,
@@ -266,8 +287,9 @@ func (s *Service) recordCall(ctx context.Context, apiKeyID, exposedName string, 
 		ErrorMessage:   errMsg,
 		FailureDetail:  failureDetail,
 		Mode:           mode,
+		Source:         source,
 	})
-	s.logger().Debug("调用统计已提交", "exposedName", exposedName, "upstreamID", entry.UpstreamID, "apiKeyID", apiKeyID, "success", success, "status", status, "latencyMS", latencyMS, "mode", mode)
+	s.logger().Debug("调用统计已提交", "exposedName", exposedName, "upstreamID", entry.UpstreamID, "apiKeyID", apiKeyID, "success", success, "status", status, "latencyMS", latencyMS, "mode", mode, "source", source)
 }
 
 type callFailureDetail struct {

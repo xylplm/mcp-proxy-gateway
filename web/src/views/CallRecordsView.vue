@@ -2,6 +2,8 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import AdminLayout from '@/components/layout/AdminLayout.vue'
 import PageBreadcrumb from '@/components/common/PageBreadcrumb.vue'
+import AppTooltip from '@/components/common/AppTooltip.vue'
+import CallRecordDetailModal from '@/components/call-records/CallRecordDetailModal.vue'
 import { clearCallRecords, listCallRecords, type CallRecord } from '@/api/stats'
 import { RefreshIcon, TrashIcon } from '@/icons'
 import { useConfirm } from '@/composables/useConfirm'
@@ -20,6 +22,9 @@ const clearing = ref(false)
 let pollTimer: number | undefined
 const pageLimit = 30
 const maxLocalRecords = 120
+// 选中的记录 + 模态框开关。点击卡片打开详情大模态框，取代子路由跳转。
+const selectedRecord = ref<CallRecord | null>(null)
+const detailOpen = ref(false)
 
 const latestId = computed(() => records.value.reduce((max, item) => Math.max(max, item.ID), 0))
 const latestCalledAt = computed(() => records.value[0]?.CalledAt ?? '')
@@ -97,7 +102,46 @@ function modeClass(record: CallRecord): string {
 }
 
 function apiKeyLabel(record: CallRecord): string {
-  return record.APIKeyName || record.APIKeyID || '未知 API Key'
+  return record.APIKeyName || record.APIKeyID || 'API 调用'
+}
+
+// 来源标识：xiaozhi 显示「小智接入」，替代此前对无 API Key 记录的「未知 API Key」展示。
+function isXiaozhi(record: CallRecord): boolean {
+  return record.Source === 'xiaozhi'
+}
+
+function sourceLabel(record: CallRecord): string {
+  if (isXiaozhi(record)) return '小智接入'
+  return apiKeyLabel(record)
+}
+
+// 耗时分级：<1s 正常、1-3s 较慢、>3s 很慢。卡片耗时格与统计区平均耗时共用。
+function latencyLevel(value: number): 'normal' | 'warn' | 'danger' {
+  const v = Math.max(0, value)
+  if (v >= 3000) return 'danger'
+  if (v >= 1000) return 'warn'
+  return 'normal'
+}
+
+function latencyClass(value: number): string {
+  switch (latencyLevel(value)) {
+    case 'danger':
+      return 'text-error-600 dark:text-error-400'
+    case 'warn':
+      return 'text-warning-700 dark:text-warning-400'
+    default:
+      return 'text-gray-800 dark:text-white/90'
+  }
+}
+
+function openDetail(record: CallRecord): void {
+  selectedRecord.value = record
+  detailOpen.value = true
+}
+
+function closeDetail(): void {
+  detailOpen.value = false
+  selectedRecord.value = null
 }
 
 function mergeLatest(nextRecords: CallRecord[]): void {
@@ -294,7 +338,7 @@ const cardClass =
       </section>
       <section :class="cardClass">
         <p class="text-sm text-gray-500 dark:text-gray-400">平均耗时</p>
-        <p class="mt-2 text-2xl font-semibold text-gray-800 dark:text-white/90">
+        <p class="mt-2 text-2xl font-semibold" :class="latencyClass(avgLatency)">
           {{ formatLatency(avgLatency) }}
         </p>
       </section>
@@ -314,19 +358,35 @@ const cardClass =
     </div>
 
     <div v-else class="grid grid-cols-1 gap-3 xl:grid-cols-2 3xl:grid-cols-3">
-      <router-link
+      <div
         v-for="record in records"
         :key="record.ID"
-        :to="`/call-records/${record.ID}`"
-        class="group rounded-2xl border border-gray-200 bg-white p-4 transition hover:border-brand-300 hover:shadow-theme-sm dark:border-gray-800 dark:bg-white/[0.03] dark:hover:border-brand-500/40"
+        role="button"
+        tabindex="0"
+        class="group cursor-pointer rounded-2xl border border-gray-200 bg-white p-4 transition hover:border-brand-300 hover:shadow-theme-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-400 dark:border-gray-800 dark:bg-white/[0.03] dark:hover:border-brand-500/40"
+        @click="openDetail(record)"
+        @keydown.enter="openDetail(record)"
+        @keydown.space.prevent="openDetail(record)"
       >
         <div class="flex items-start justify-between gap-3">
           <div class="min-w-0">
-            <p class="truncate text-sm font-semibold text-gray-800 dark:text-white/90">
-             <span>{{ toolLabel(record) }}</span>    <span class="shrink-0 rounded-full px-2 py-1 mr-1 text-xs font-medium" :class="modeClass(record)">
-            {{ modeLabel(record) }}        </span>
-  
-            </p>
+            <div class="flex items-center gap-1">
+              <AppTooltip
+                :content="record.Description || ''"
+                placement="top-start"
+                :disabled="!record.Description"
+                :wrap="true"
+                tag="span"
+                class="min-w-0"
+              >
+                <span class="cursor-help truncate text-sm font-semibold text-gray-800 dark:text-white/90">
+                  {{ toolLabel(record) }}
+                </span>
+              </AppTooltip>
+              <span class="shrink-0 rounded-full px-2 py-1 mr-1 text-xs font-medium" :class="modeClass(record)">
+                {{ modeLabel(record) }}
+              </span>
+            </div>
             <p class="mt-1 truncate text-xs text-gray-500 dark:text-gray-400">
               {{ mcpLabel(record) }}
             </p>
@@ -351,19 +411,27 @@ const cardClass =
             </p>
           </div>
           <div>
-            <p class="text-xs text-gray-400 dark:text-gray-500">API Key</p>
-            <p class="mt-1 truncate text-sm text-gray-700 dark:text-gray-300">
-              {{ apiKeyLabel(record) }}
+            <p class="text-xs text-gray-400 dark:text-gray-500">调用来源</p>
+            <p class="mt-1 flex items-center gap-1 truncate text-sm text-gray-700 dark:text-gray-300">
+              <span
+                v-if="isXiaozhi(record)"
+                class="inline-flex shrink-0 rounded-full bg-brand-50 px-1.5 py-0.5 text-xs font-medium text-brand-600 dark:bg-brand-500/10 dark:text-brand-400"
+              >
+                小智
+              </span>
+              <span class="truncate">{{ sourceLabel(record) }}</span>
             </p>
           </div>
           <div>
             <p class="text-xs text-gray-400 dark:text-gray-500">耗时</p>
-            <p class="mt-1 text-sm font-medium text-gray-800 dark:text-white/90">
+            <p class="mt-1 text-sm font-medium" :class="latencyClass(record.LatencyMS)">
               {{ formatLatency(record.LatencyMS) }}
             </p>
           </div>
         </div>
-      </router-link>
+      </div>
     </div>
+
+    <CallRecordDetailModal :open="detailOpen" :record="selectedRecord" @close="closeDetail" />
   </AdminLayout>
 </template>

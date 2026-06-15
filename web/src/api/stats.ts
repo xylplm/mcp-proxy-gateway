@@ -28,6 +28,8 @@ export interface DimensionCount {
   ID: string
   /** 该维度在时间区间内的调用条数（含成功与失败）。 */
   Count: number
+  /** 仅在 ID 为空（维度 NULL）时有意义，记录该 NULL 组的主要调用来源（api/xiaozhi）。非 NULL 维度为空串。 */
+  Source?: string
 }
 
 /**
@@ -101,6 +103,10 @@ export interface CallRecord {
   ErrorMessage: string
   FailureDetail?: CallFailureDetail | null
   Mode?: string
+  /** 调用来源（api/xiaozhi）；xiaozhi 表示小智接入调用。 */
+  Source?: string
+  /** 工具描述（查询时实时拼接），用于工具名 hover 展示；可能为空。 */
+  Description?: string
 }
 
 /** 时间区间查询参数；start/end 均为可选 RFC3339 字符串。 */

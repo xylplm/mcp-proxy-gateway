@@ -141,9 +141,14 @@ function upstreamLabel(id: string): string {
   return upstreamNames.value[id] ?? id
 }
 
-function apiKeyLabel(id: string): string {
-  if (id === '') return '(未知 Key)'
-  return apiKeyNames.value[id] ?? id
+// API Key 维度标签：空 ID 时按 Source 区分——小智接入显示「小智接入」，其余才是真正的未知。
+// 非 NULL 维度显示 Key 名称，缺失时回退标识。
+function apiKeyLabel(item: DimensionCount): string {
+  if (item.ID === '') {
+    if (item.Source === 'xiaozhi') return '小智接入'
+    return '(未知 Key)'
+  }
+  return apiKeyNames.value[item.ID] ?? item.ID
 }
 
 function toolLabel(t: Pick<ToolRank, 'UpstreamID' | 'OriginalName'>): string {
@@ -250,14 +255,14 @@ const toolRankOptions = computed<ApexOptions>(() => ({
   tooltip: { y: { formatter: (value: number) => `${formatInt(value)} 次` } },
 }))
 
-const upstreamDistribution = computed(() => topDimensionItems(upstreamCounts.value, upstreamLabel))
+const upstreamDistribution = computed(() => topDimensionItems(upstreamCounts.value, (item) => upstreamLabel(item.ID)))
 const apiKeyDistribution = computed(() => topDimensionItems(apiKeyCounts.value, apiKeyLabel))
 
-function topDimensionItems(items: DimensionCount[], labeler: (id: string) => string) {
+function topDimensionItems(items: DimensionCount[], labeler: (item: DimensionCount) => string) {
   const total = items.reduce((sum, item) => sum + item.Count, 0)
   return items.slice(0, 6).map((item) => ({
     id: item.ID,
-    label: labeler(item.ID),
+    label: labeler(item),
     count: item.Count,
     percent: total === 0 ? 0 : (item.Count / total) * 100,
   }))
