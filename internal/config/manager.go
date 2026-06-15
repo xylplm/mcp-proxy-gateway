@@ -137,6 +137,10 @@ func (m *Manager) Save(cfg YAMLConfig) error {
 		return err
 	}
 
+	// 归一化对外访问地址：去首尾空白与末尾斜杠，便于前端按端点路径拼接。
+	cfg.Server.PublicURL = normalizeAccessURL(cfg.Server.PublicURL)
+	cfg.Server.LanURL = normalizeAccessURL(cfg.Server.LanURL)
+
 	dataDir := filepath.Dir(m.yamlPath)
 	if err := writeYAML(dataDir, m.yamlPath, cfg); err != nil {
 		return err

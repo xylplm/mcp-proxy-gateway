@@ -35,6 +35,10 @@ export interface ServerConfig {
   expose_mcp_on_admin_addr: boolean
   /** 进程日志级别：debug/info/warn/error，默认 info。保存设置后即时生效。 */
   log_level: LogLevel
+  /** 公网用户访问本网关的完整外网地址；为空表示未配置，前端按当前访问域名推断。 */
+  public_url: string
+  /** 内网/局域网用户访问本网关的完整内网地址；为空表示未配置。 */
+  lan_url: string
 }
 
 /**
