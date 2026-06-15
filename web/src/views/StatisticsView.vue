@@ -20,6 +20,7 @@ import {
 } from '@/api/stats'
 import { listAPIKeys } from '@/api/apikeys'
 import { listUpstreams } from '@/api/upstreams'
+import { getAggregatedTools } from '@/api/tools'
 
 const startLocal = ref('')
 const endLocal = ref('')
@@ -33,6 +34,7 @@ const toolRanks = ref<ToolRank[]>([])
 const toolErrors = ref<ToolErrorRank[]>([])
 const upstreamNames = ref<Record<string, string>>({})
 const apiKeyNames = ref<Record<string, string>>({})
+const toolDescriptions = ref<Record<string, string>>({})
 let queryTimer: number | undefined
 let statsRequestSeq = 0
 const heatmapLegendLevels = [0, 1, 2, 3, 4] as const
@@ -155,6 +157,11 @@ function toolLabel(t: Pick<ToolRank, 'UpstreamID' | 'OriginalName'>): string {
   return `${upstreamLabel(t.UpstreamID)} / ${t.OriginalName}`
 }
 
+// 工具描述用 "upstreamId:originalName" 做键，缺失时返回空串（指令会自动不显示 tooltip）。
+function toolDescription(t: Pick<ToolRank, 'UpstreamID' | 'OriginalName'>): string {
+  return toolDescriptions.value[`${t.UpstreamID}:${t.OriginalName}`] ?? ''
+}
+
 function heatmapLevelClass(level: number): string {
   if (level === 1) return 'bg-success-100 dark:bg-success-500/20'
   if (level === 2) return 'bg-success-300 dark:bg-success-500/40'
@@ -242,18 +249,10 @@ const trendOptions = computed<ApexOptions>(() => ({
   legend: { position: 'top', horizontalAlign: 'right' },
 }))
 
-const toolRankSeries = computed(() => [
-  { name: '调用次数', data: toolRanks.value.map((t) => t.Count) },
-])
-const toolRankOptions = computed<ApexOptions>(() => ({
-  chart: { type: 'bar', toolbar: { show: false }, fontFamily: 'Outfit, sans-serif' },
-  plotOptions: { bar: { horizontal: true, borderRadius: 4, barHeight: '58%' } },
-  colors: ['#465fff'],
-  dataLabels: { enabled: false },
-  grid: { borderColor: '#e5e7eb', strokeDashArray: 4 },
-  xaxis: { categories: toolRanks.value.map(toolLabel) },
-  tooltip: { y: { formatter: (value: number) => `${formatInt(value)} 次` } },
-}))
+// 工具调用排行改用手写条形列表：第一行工具名、第二行所属 MCP（小字），
+// 避免长拼接名在图表轴标签里被截断，并与相邻卡片风格保持一致。
+const toolRankTotal = computed(() => toolRanks.value.reduce((sum, t) => sum + t.Count, 0))
+const toolRankMax = computed(() => toolRanks.value.reduce((m, t) => Math.max(m, t.Count), 0))
 
 const upstreamDistribution = computed(() => topDimensionItems(upstreamCounts.value, (item) => upstreamLabel(item.ID)))
 const apiKeyDistribution = computed(() => topDimensionItems(apiKeyCounts.value, apiKeyLabel))
@@ -270,9 +269,18 @@ function topDimensionItems(items: DimensionCount[], labeler: (item: DimensionCou
 
 async function loadNameMaps(): Promise<void> {
   try {
-    const [ups, keys] = await Promise.all([listUpstreams(), listAPIKeys()])
+    const [ups, keys, tools] = await Promise.all([
+      listUpstreams(),
+      listAPIKeys(),
+      getAggregatedTools(),
+    ])
     upstreamNames.value = Object.fromEntries(ups.map((u) => [u.id, u.config.name]))
     apiKeyNames.value = Object.fromEntries(keys.map((k) => [k.id, k.name]))
+    toolDescriptions.value = Object.fromEntries(
+      tools.tools
+        .filter((t) => t.description.trim() !== '')
+        .map((t) => [`${t.upstreamId}:${t.originalName}`, t.description]),
+    )
   } catch {
     // 名称映射失败时回退为标识展示。
   }
@@ -559,15 +567,63 @@ onMounted(async () => {
 
     <div class="mt-6 grid grid-cols-1 gap-5 xl:grid-cols-2">
       <section :class="cardClass">
-        <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">工具调用排行</h3>
-        <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">优先排查高频工具的流量集中度。</p>
-        <apexchart
-          v-if="toolRanks.length > 0"
-          type="bar"
-          :height="Math.max(260, toolRanks.length * 42)"
-          :options="toolRankOptions"
-          :series="toolRankSeries"
-        />
+        <div class="mb-4 flex items-end justify-between gap-3">
+          <div>
+            <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">工具调用排行</h3>
+            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">优先排查高频工具的流量集中度。</p>
+          </div>
+          <span
+            v-if="toolRanks.length > 0"
+            class="shrink-0 rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600 dark:bg-gray-800 dark:text-gray-300"
+          >
+            合计 {{ formatInt(toolRankTotal) }} 次
+          </span>
+        </div>
+        <div v-if="toolRanks.length > 0" class="space-y-3">
+          <div
+            v-for="(item, index) in toolRanks"
+            :key="`${item.UpstreamID}:${item.OriginalName}`"
+            class="rounded-lg border border-gray-200 p-3 dark:border-gray-800"
+          >
+            <div class="flex items-start justify-between gap-3">
+              <div class="flex min-w-0 items-start gap-2">
+                <span
+                  class="shrink-0 pt-0.5 text-xs font-semibold tabular-nums text-gray-400 dark:text-gray-500"
+                >{{ index + 1 }}</span>
+                <div class="min-w-0 flex-1">
+                  <span
+                    v-tooltip="{
+                      content: toolDescription(item),
+                      placement: 'bottom-start',
+                      wrap: true,
+                      disabled: toolDescription(item) === '',
+                    }"
+                    class="block truncate text-sm font-medium text-gray-800 dark:text-white/90"
+                  >
+                    {{ item.OriginalName }}
+                  </span>
+                  <div class="mt-1 truncate text-xs text-gray-500 dark:text-gray-400">
+                    {{ upstreamLabel(item.UpstreamID) }}
+                  </div>
+                </div>
+              </div>
+              <div class="shrink-0 text-right">
+                <div class="text-sm font-semibold tabular-nums text-gray-800 dark:text-white/90">
+                  {{ formatInt(item.Count) }}
+                </div>
+                <div class="text-xs text-gray-500 dark:text-gray-400">
+                  {{ formatPercent(toolRankTotal === 0 ? 0 : (item.Count / toolRankTotal) * 100) }}
+                </div>
+              </div>
+            </div>
+            <div class="mt-3 h-1.5 rounded-full bg-gray-100 dark:bg-gray-800">
+              <div
+                class="h-1.5 rounded-full bg-brand-500"
+                :style="{ width: `${toolRankMax === 0 ? 0 : (item.Count / toolRankMax) * 100}%` }"
+              ></div>
+            </div>
+          </div>
+        </div>
         <div v-else class="py-12 text-center text-sm text-gray-400 dark:text-gray-500">
           暂无工具调用记录
         </div>
