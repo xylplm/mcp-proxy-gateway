@@ -112,9 +112,9 @@ func asAPIError(t *testing.T, err error) *domain.APIError {
 	return apiErr
 }
 
-// TestCreateReturnsPlaintextOnceAndMetadataHidesIt 验证创建成功返回一次性明文密钥，
-// 且元数据视图不含完整明文，仓储仅持久化哈希与前缀（Req 12.1、12.3）。
-func TestCreateReturnsPlaintextOnceAndMetadataHidesIt(t *testing.T) {
+// TestCreateReturnsPlaintextAndPersistsIt 验证创建成功返回明文密钥，
+// 且仓储同时持久化哈希与明文（自部署场景，便于管理台二次查看）。
+func TestCreateReturnsPlaintextAndPersistsIt(t *testing.T) {
 	repo := newTestRepo()
 	mgr := New(repo)
 
@@ -123,7 +123,7 @@ func TestCreateReturnsPlaintextOnceAndMetadataHidesIt(t *testing.T) {
 		t.Fatalf("创建不应失败：%v", err)
 	}
 
-	// 明文密钥仅本次返回一次，应具备固定前缀与足够长度。
+	// 明文密钥应具备固定前缀与足够长度。
 	if !strings.HasPrefix(created.PlaintextKey, keyPlaintextPrefix) {
 		t.Errorf("明文密钥应以 %q 开头，实际 %q", keyPlaintextPrefix, created.PlaintextKey)
 	}
@@ -142,7 +142,7 @@ func TestCreateReturnsPlaintextOnceAndMetadataHidesIt(t *testing.T) {
 		t.Errorf("创建时间期望 %v，实际 %v", repo.now, created.CreatedAt)
 	}
 
-	// 元数据视图仅暴露展示前缀（明文前 12 字符），绝不暴露完整明文（Req 12.3）。
+	// 元数据视图暴露展示前缀（明文前 12 字符）与完整明文，供二次查看。
 	if created.KeyPrefix != created.PlaintextKey[:keyPrefixLen] {
 		t.Errorf("展示前缀期望 %q，实际 %q", created.PlaintextKey[:keyPrefixLen], created.KeyPrefix)
 	}
@@ -150,14 +150,17 @@ func TestCreateReturnsPlaintextOnceAndMetadataHidesIt(t *testing.T) {
 		t.Error("展示前缀不应等于完整明文密钥")
 	}
 
-	// 仓储侧只应存哈希与前缀，绝不存明文（Req 12.3）。
+	// 仓储侧同时持久化明文与哈希：哈希用于鉴权等值查询，明文供管理台二次查看。
 	row := repo.rows[created.ID]
 	if string(row.KeyHash) == created.PlaintextKey {
-		t.Error("仓储不应以明文形式存储密钥")
+		t.Error("哈希字段不应直接存明文")
 	}
 	wantHash := sha256.Sum256([]byte(created.PlaintextKey))
 	if string(row.KeyHash) != string(wantHash[:]) {
-		t.Error("仓储应存储明文的 SHA-256 哈希")
+		t.Error("哈希字段应存储明文的 SHA-256 摘要")
+	}
+	if row.KeyPlain != created.PlaintextKey {
+		t.Errorf("明文字段应持久化完整明文，期望 %q，实际 %q", created.PlaintextKey, row.KeyPlain)
 	}
 	if row.KeyPrefix != created.KeyPrefix {
 		t.Errorf("仓储前缀期望 %q，实际 %q", created.KeyPrefix, row.KeyPrefix)
@@ -273,8 +276,9 @@ func TestListEmptyReturnsEmptySlice(t *testing.T) {
 	}
 }
 
-// TestListReturnsMetadataWithoutPlaintext 验证列表仅返回元数据且不含完整明文密钥（Req 12.3）。
-func TestListReturnsMetadataWithoutPlaintext(t *testing.T) {
+// TestListReturnsMetadataWithPlaintext 验证列表返回元数据并携带完整明文密钥，
+// 供管理台二次查看/复制（自部署场景）；鉴权仍走哈希。
+func TestListReturnsMetadataWithPlaintext(t *testing.T) {
 	repo := newTestRepo()
 	mgr := New(repo)
 
@@ -292,7 +296,10 @@ func TestListReturnsMetadataWithoutPlaintext(t *testing.T) {
 	}
 
 	meta := list[0]
-	// 列表项的任何字符串字段都不应等于完整明文密钥（Req 12.3）。
+	// 列表项携带完整明文密钥（PlaintextKey），与创建时一致。
+	if meta.PlaintextKey != created.PlaintextKey {
+		t.Errorf("列表明文期望 %q，实际 %q", created.PlaintextKey, meta.PlaintextKey)
+	}
 	if meta.KeyPrefix == created.PlaintextKey {
 		t.Error("列表展示前缀不应等于完整明文密钥")
 	}

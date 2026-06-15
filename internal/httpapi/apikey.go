@@ -12,10 +12,14 @@ import (
 
 // 本文件实现 API Key 管理端点（Req 12.1、13.1、13.9、21）：
 //
+// 明文存储说明：自部署场景下 API Key 的明文密钥会持久化（api_key.key_plain 列），
+// List/Get 接口均返回明文，便于管理台二次查看与复制；鉴权仍走 key_hash 等值查询，
+// 明文不参与鉴权。DB 被拖库即等价明文泄露，部署时需妥善保护数据库访问权限。
+//
 // API Key 生命周期（Req 12.1）：
-//   GET    /api/admin/apikeys              列出全部 API Key 元数据（不含明文）
-//   POST   /api/admin/apikeys              创建 API Key（仅此刻返回一次明文）
-//   GET    /api/admin/apikeys/:id          查询单个 API Key 元数据
+//   GET    /api/admin/apikeys              列出全部 API Key 元数据（含明文）
+//   POST   /api/admin/apikeys              创建 API Key（生成明文，后续可经 List/Get 二次查看）
+//   GET    /api/admin/apikeys/:id          查询单个 API Key 元数据（含明文）
 //   POST   /api/admin/apikeys/:id/enable   启用 API Key
 //   POST   /api/admin/apikeys/:id/disable  停用 API Key
 //   DELETE /api/admin/apikeys/:id          删除 API Key（级联清理规则与 ACL）
@@ -115,7 +119,7 @@ func (r *Router) registerAPIKeyRoutes(g *gin.RouterGroup) {
 	g.DELETE("/acl/:entryId", r.deleteACL)
 }
 
-// listAPIKeys 返回全部 API Key 元数据（不含明文，Req 12.3、12.9）。
+// listAPIKeys 返回全部 API Key 元数据（含明文，自部署场景供二次查看/复制）。
 func (r *Router) listAPIKeys(c *gin.Context) {
 	if r.apiKeys == nil {
 		respondServiceUnavailable(c, "API Key 服务未就绪")
@@ -131,7 +135,8 @@ func (r *Router) listAPIKeys(c *gin.Context) {
 
 // createAPIKey 创建一个 API Key（Req 12.1）。
 //
-// 响应携带一次性明文密钥（PlaintextKey），此后任何查询都无法再取得；调用方须提示用户立即保存。
+// 生成新的明文密钥（PlaintextKey）并持久化，响应中返回该明文。由于明文同时入库，
+// 后续 List/Get 仍可经管理台二次查看；调用方仍应在创建时即提示用户妥善保存。
 func (r *Router) createAPIKey(c *gin.Context) {
 	if r.apiKeys == nil {
 		respondServiceUnavailable(c, "API Key 服务未就绪")
@@ -153,7 +158,7 @@ func (r *Router) createAPIKey(c *gin.Context) {
 	respondCreated(c, created)
 }
 
-// getAPIKey 查询单个 API Key 的元数据（不含明文，Req 12.3、12.7）。
+// getAPIKey 查询单个 API Key 的元数据（含明文，Req 12.7）。
 func (r *Router) getAPIKey(c *gin.Context) {
 	if r.apiKeys == nil {
 		respondServiceUnavailable(c, "API Key 服务未就绪")

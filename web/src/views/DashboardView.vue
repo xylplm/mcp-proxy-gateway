@@ -11,7 +11,8 @@
  * 数据源：
  * - listUpstreams（@/api/upstreams）→ 上游卡片；
  * - listAPIKeys（@/api/apikeys）→ API Key 卡片；
- * - statsByUpstream（@/api/stats，最近 7 天）→ 调用量卡片。
+ * - statsByUpstream（@/api/stats，最近 7 天）→ 调用量卡片；
+ * - getAggregatedTools（@/api/tools）→ 有效工具卡片。
  *
  * 容错：统一 loading / error 状态；任一数据加载失败给出整体错误提示并支持重试。
  * 响应式：指标卡网格在手机 1 列、平板 2 列、大屏 4 列（Tailwind 断点）。
@@ -33,7 +34,6 @@ import {
 import { listUpstreams } from '@/api/upstreams'
 import { listAPIKeys } from '@/api/apikeys'
 import { statsByUpstream } from '@/api/stats'
-import { getSettings, type YAMLConfig } from '@/api/settings'
 import { getAggregatedTools } from '@/api/tools'
 
 const loading = ref(true)
@@ -51,8 +51,6 @@ const apiKeyEnabled = ref(0)
 // 最近 7 天调用量
 const recentCalls = ref(0)
 const effectiveToolCount = ref(0)
-
-const settings = ref<YAMLConfig | null>(null)
 
 /** 指标卡描述。 */
 interface MetricCard {
@@ -123,11 +121,10 @@ async function loadOverview(): Promise<void> {
   loading.value = true
   loadError.value = ''
   try {
-    const [upstreams, apiKeys, counts, cfg, aggregated] = await Promise.all([
+    const [upstreams, apiKeys, counts, aggregated] = await Promise.all([
       listUpstreams(),
       listAPIKeys(),
       statsByUpstream({ start: sevenDaysAgoRFC3339() }),
-      getSettings(),
       getAggregatedTools(),
     ])
 
@@ -140,7 +137,6 @@ async function loadOverview(): Promise<void> {
 
     recentCalls.value = counts.reduce((sum, c) => sum + c.Count, 0)
     effectiveToolCount.value = aggregated.count
-    settings.value = cfg
   } catch (err) {
     loadError.value = errorMessage(err)
   } finally {

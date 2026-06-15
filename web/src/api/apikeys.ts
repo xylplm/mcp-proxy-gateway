@@ -4,14 +4,15 @@
  * 设计要点（对应 design.md「路由分面」与 Req 12.1、13.1、13.9、17.5、21）：
  * - 全部端点挂载于管理前缀 `/api/admin`（见 internal/httpapi/apikey.go）；
  * - 复用全局 Axios 实例（`@/api/request`），自动注入 JWT 并处理 401（Req 17.6）；
- * - 明文密钥（plaintextKey）仅在「创建」响应中返回一次（Req 12.3），List/Get 永不回显，
- *   故仅 CreatedAPIKey 含该字段，列表/详情视图类型不含。
+ * - 自部署场景下 API Key 明文密钥会持久化到数据库，List/Get/Create 响应均返回明文
+ *   （plaintextKey），供管理台随时查看/复制；鉴权仍走哈希等值查询，明文不参与鉴权。
+ *   DB 被拖库即等价明文泄露，部署时需妥善保护数据库访问权限。
  *
  * 后端真实路由（已实现，见 internal/httpapi/apikey.go）：
  *   API Key 生命周期（Req 12.1）：
- *     GET    /apikeys              列出全部 API Key 元数据（不含明文）
- *     POST   /apikeys              创建 API Key（仅此刻返回一次明文）
- *     GET    /apikeys/:id          查询单个 API Key 元数据
+ *     GET    /apikeys              列出全部 API Key 元数据（含明文）
+ *     POST   /apikeys              创建 API Key（生成明文并持久化）
+ *     GET    /apikeys/:id          查询单个 API Key 元数据（含明文）
  *     POST   /apikeys/:id/enable   启用 API Key
  *     POST   /apikeys/:id/disable  停用 API Key
  *     DELETE /apikeys/:id          删除 API Key（级联清理规则与 ACL）
@@ -160,7 +161,7 @@ interface ListACLResponse {
 
 // ── API Key 生命周期（Req 12.1） ──────────────────────────────────────────
 
-/** 列出全部 API Key 元数据（不含明文，Req 12.3、12.9）。 */
+/** 列出全部 API Key 元数据（含明文，供管理台二次查看/复制）。 */
 export async function listAPIKeys(): Promise<APIKey[]> {
   const res = await request.get<ListAPIKeysResponse>('/apikeys')
   return res.data?.apiKeys ?? []
@@ -168,14 +169,15 @@ export async function listAPIKeys(): Promise<APIKey[]> {
 
 /**
  * 创建一个 API Key（Req 12.1）。
- * 响应携带一次性明文密钥（plaintextKey），调用方须提示用户立即妥善保存（Req 12.3）。
+ * 生成新的明文密钥（plaintextKey）并持久化，响应返回该明文。由于明文同时入库，
+ * 后续 List/Get 仍可经管理台二次查看；创建时仍应提示用户妥善保存。
  */
 export async function createAPIKey(payload: CreateAPIKeyRequest): Promise<CreatedAPIKey> {
   const res = await request.post<CreatedAPIKey>('/apikeys', payload)
   return res.data
 }
 
-/** 查询单个 API Key 的元数据（不含明文，Req 12.7）。 */
+/** 查询单个 API Key 的元数据（含明文，Req 12.7）。 */
 export async function getAPIKey(id: string): Promise<APIKey> {
   const res = await request.get<APIKey>(`/apikeys/${encodeURIComponent(id)}`)
   return res.data

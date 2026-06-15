@@ -248,7 +248,7 @@ func TestInvokeToolNilInvokerPlaceholder(t *testing.T) {
 	mcpFilters := &invFakeMCPFilters{byUpstream: map[string][]domain.FilterRule{}}
 	apiKeyFilters := &invFakeAPIKeyFilters{byAPIKey: map[string][]domain.FilterRule{}}
 
-	// 不调用 SetInvoker，invoker 保持 nil（任务 11.1 之前的占位状态）。
+	// 不调用 SetInvoker，invoker 保持 nil（模拟未接线装配的防御性兜底）。
 	svc := invNewService(cache, upstreams, aliases, mcpFilters, apiKeyFilters)
 
 	// 命中可见工具：通过可见性校验后因未接线上游会话返回占位错误。

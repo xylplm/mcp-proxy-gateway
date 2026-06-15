@@ -37,7 +37,6 @@ const gridClass = computed(() =>
 
 /** 当前配置表单模型（加载后填充）。 */
 const config = ref<YAMLConfig | null>(null)
-const serverSnapshot = ref('')
 
 /** Port helpers: strip ':prefix on load, restore on save. */
 const adminPort = ref<number|string>('')
@@ -80,7 +79,6 @@ async function loadSettings(): Promise<void> {
   loadError.value = ''
   try {
     config.value = await getSettings()
-    serverSnapshot.value = snapshotServerConfig(config.value)
     adminPort.value = addrToPort(config.value.server.admin_addr)
     publicMCPPort.value = addrToPort(config.value.server.public_mcp_addr)
   } catch (err) {
@@ -123,7 +121,6 @@ async function saveSettings(): Promise<void> {
   saving.value = true
   try {
     config.value = await updateSettings(config.value, { restart: true })
-    serverSnapshot.value = snapshotServerConfig(config.value)
     adminPort.value = addrToPort(config.value.server.admin_addr)
     publicMCPPort.value = addrToPort(config.value.server.public_mcp_addr)
     toast.success('系统设置已保存，网关正在重启')
@@ -132,10 +129,6 @@ async function saveSettings(): Promise<void> {
   } finally {
     saving.value = false
   }
-}
-
-function snapshotServerConfig(value: YAMLConfig): string {
-  return JSON.stringify(value.server)
 }
 
 /** 通用样式类（TailAdmin 风格）。 */

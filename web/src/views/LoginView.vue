@@ -6,7 +6,7 @@
  * - 进入时调用公开端点 GET /api/auth/status：
  *   · initialized=false → 自动跳转到 /register，由首次初始化页接管；
  *   · initialized=true  → 渲染登录表单。
- * - 提交时调用 POST /api/admin/auth/login，成功后保存 token 并按 query.redirect 回跳。
+ * - 提交时调用公开端点 POST /api/auth/login，成功后保存 token 并按 query.redirect 回跳。
  * - 提供「忘记密码」入口，弹窗说明离线密码重置流程（在 data 目录创建标记文件并重启）。
  */
 import { onMounted, reactive, ref } from 'vue'

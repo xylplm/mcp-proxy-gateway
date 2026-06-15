@@ -122,10 +122,11 @@ func New(repo APIKeyRepository) *Manager {
 	return &Manager{repo: repo}
 }
 
-// Create 创建一个全局唯一的 API Key（Req 12.1、12.3、12.8）。
+// Create 创建一个全局唯一的 API Key（Req 12.1、12.8）。
 //
 // 流程：校验名称长度（1-100）→ 生成高熵明文密钥并计算哈希与展示前缀 → 以启用状态
-// 持久化哈希、前缀与元数据。返回结构包含一次性明文密钥（PlaintextKey），此后不可再取。
+// 持久化哈希、明文、前缀与元数据。返回结构携带明文密钥（PlaintextKey）；由于明文同时
+// 入库，后续 List/Get 仍可经管理台二次查看。
 //
 // 错误语义：
 //   - 名称长度不在 1 至 100 个字符范围内：返回 VALIDATION（Fields 含 name），
@@ -156,7 +157,7 @@ func (m *Manager) Create(ctx context.Context, in CreateInput) (Created, error) {
 	return Created{Metadata: toMetadata(row)}, nil
 }
 
-// Get 按标识返回单个 API Key 的元数据（不含明文，Req 12.3）；不存在返回 NOT_FOUND（Req 12.7）。
+// Get 按标识返回单个 API Key 的元数据（含明文，供管理台二次查看/复制）；不存在返回 NOT_FOUND（Req 12.7）。
 func (m *Manager) Get(ctx context.Context, id string) (Metadata, error) {
 	row, err := m.repo.Get(ctx, id)
 	if err != nil {
@@ -165,10 +166,10 @@ func (m *Manager) Get(ctx context.Context, id string) (Metadata, error) {
 	return toMetadata(row), nil
 }
 
-// List 返回所有 API Key 的元数据，按创建时间倒序（Req 12.3、12.9）。
+// List 返回所有 API Key 的元数据，按创建时间倒序（Req 12.9）。
 //
-// 返回视图仅含名称、前缀、启停状态、有效期等元数据，绝不包含任何完整明文密钥
-// （Req 12.3）；系统中无任何 API Key 时返回空切片而非错误（Req 12.9）。
+// 返回视图携带完整明文密钥（PlaintextKey），供管理台二次查看/复制（自部署场景）；
+// 鉴权仍走 KeyHash，明文不参与鉴权。系统中无任何 API Key 时返回空切片而非错误（Req 12.9）。
 func (m *Manager) List(ctx context.Context) ([]Metadata, error) {
 	rows, err := m.repo.List(ctx)
 	if err != nil {
@@ -212,11 +213,12 @@ func validateName(name string) error {
 // generateKey 生成一个新的明文密钥及其哈希与展示前缀。
 //
 // 返回值：
-//   - plaintext：完整明文密钥，形如 "mpg_<base64url(32 字节随机数)>"，仅创建时返回一次。
+//   - plaintext：完整明文密钥，形如 "mpg_<base64url(32 字节随机数)>"，会作为 key_plain 持久化，
+//     并经管理台 List/Get 二次查看。
 //   - hash：明文的 SHA-256 摘要字节，作为 key_hash 持久化。选用 SHA-256 而非 bcrypt，
 //     是为了让鉴权中间件（任务 14.4）能以等值查询（GetByHash）按密钥快速定位 API Key；
 //     由于明文本身具备 256 位随机熵，等价于不可枚举，故无需 bcrypt 的加盐慢哈希。
-//   - prefix：明文的前 keyPrefixLen 个字符，仅作展示用途（Req 12.3）。
+//   - prefix：明文的前 keyPrefixLen 个字符，仅作展示用途。
 func generateKey() (plaintext string, hash []byte, prefix string, err error) {
 	buf := make([]byte, keyRandomBytes)
 	if _, err = rand.Read(buf); err != nil {

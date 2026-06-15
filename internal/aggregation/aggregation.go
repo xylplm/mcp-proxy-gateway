@@ -76,9 +76,9 @@ type APIKeyFilterLister interface {
 //   - engine：规则引擎（domain.Rule_Engine），提供屏蔽/别名/匹配的纯函数能力。
 //   - upstreams/aliases/mcpFilters/apiKeyFilters：数据访问窄接口。
 //
-// 本类型的 BuildToolSet 在任务 4.1 实现；InvokeTool 的可见性校验与别名反向映射路由
-// 在任务 4.6 实现，转发动作经可选注入的 UpstreamInvoker（窄接口）占位；真实的上游会话
-// 调用与超时控制在任务 11.1 接入。
+// 本类型的 BuildToolSet 实现工具聚合；InvokeTool 的可见性校验与别名反向映射路由
+// 经可选注入的 UpstreamInvoker（窄接口）转发，真实上游会话调用与超时控制由
+// upstream_invoker.go 实现，生产装配在 app/build.go 注入。
 type Service struct {
 	cache         domain.Tool_Cache
 	engine        domain.Rule_Engine
@@ -86,9 +86,9 @@ type Service struct {
 	aliases       AliasLister
 	mcpFilters    MCPFilterLister
 	apiKeyFilters APIKeyFilterLister
-	// invoker 为上游调用转发器（窄接口），可选注入。
-	// 为 nil 时表示尚未接线真实上游会话（任务 11.1），此时 InvokeTool 在通过
-	// 可见性校验后返回占位错误；可见性校验逻辑始终完整执行（Req 10.4、11.7）。
+	// invoker 为上游调用转发器（窄接口），可选注入（生产装配见 app/build.go）。
+	// 为 nil 时（仅未接线装配或单元测试）InvokeTool 在通过可见性校验后返回防御性
+	// 占位错误；可见性校验逻辑始终完整执行（Req 10.4、11.7）。
 	invoker UpstreamInvoker
 	// recorder 为调用统计异步记录器（窄接口），可选注入（Req 16.1、16.8）。
 	// 为 nil 时聚合调用路径不采集统计；非 nil 时在工具调用完成后以非阻塞方式提交一条
@@ -125,8 +125,8 @@ func NewService(
 // SetInvoker 注入上游调用转发器（窄接口），供 InvokeTool 在反向映射后转发调用。
 //
 // 采用可选 setter 而非修改 NewService 签名，以避免破坏既有调用方：未注入时（invoker
-// 为 nil），InvokeTool 仍完整执行可见性校验（Req 10.4、11.7），仅在校验通过后因尚未
-// 接线真实上游会话而返回占位错误。真实转发器由任务 11.1 提供并通过本方法注入。
+// 为 nil），InvokeTool 仍完整执行可见性校验（Req 10.4、11.7），仅在校验通过后因未
+// 接线上游会话而返回防御性占位错误。真实转发器由 upstream_invoker.go 实现并通过本方法注入。
 //
 // 返回 *Service 以支持链式调用。
 func (s *Service) SetInvoker(invoker UpstreamInvoker) *Service {
@@ -188,8 +188,9 @@ func (s *Service) BuildToolSet(ctx context.Context, apiKeyID string) ([]domain.T
 //     16.8、16.9）；statistics 写入绝不阻塞主流程、其失败不影响调用结果返回。
 //
 // 注意：真实的上游会话调用、连接不可用判断与调用超时控制（Req 10.5、10.8）由
-// UpstreamInvoker 的实现方在任务 11.1 提供。当 invoker 未注入（nil）时，本方法在通过
-// 可见性校验后返回占位错误 domain.ErrNotImplemented——可见性校验逻辑始终完整执行。
+// UpstreamInvoker 的实现方提供（生产装配见 app/build.go 的 SetInvoker 注入）。当 invoker
+// 未注入（nil）时——仅见于未接线装配或单元测试——本方法在通过可见性校验后返回防御性
+// 占位错误 domain.ErrNotImplemented，可见性校验逻辑始终完整执行。
 func (s *Service) InvokeTool(ctx context.Context, apiKeyID, exposedName string, args json.RawMessage) (domain.ToolResult, error) {
 	log := s.logger()
 	mode := ModeFromContext(ctx)
@@ -212,7 +213,7 @@ func (s *Service) InvokeTool(ctx context.Context, apiKeyID, exposedName string, 
 	}
 
 	// 步骤 3-4：命中——反向映射已还原 (UpstreamID, OriginalName)，经窄接口透传转发。
-	// invoker 未注入时（任务 11.1 之前）返回占位错误；可见性校验在此之前已完整执行。
+	// invoker 未注入时（仅未接线装配或单元测试）返回防御性占位错误；可见性校验在此之前已完整执行。
 	if s.invoker == nil {
 		log.Warn("上游调用转发器未注入，调用未执行", "exposedName", exposedName, "upstreamID", entry.UpstreamID)
 		return domain.ToolResult{}, domain.ErrNotImplemented

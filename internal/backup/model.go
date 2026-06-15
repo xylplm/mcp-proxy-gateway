@@ -49,7 +49,8 @@ type UpstreamEntry struct {
 
 // APIKeyEntry 为单个 API Key 元数据及其从属配置的备份条目。
 type APIKeyEntry struct {
-	// Meta 为 API Key 元数据（仅哈希与前缀，永不含明文，Req 12.3）。
+	// Meta 为 API Key 元数据（含明文密钥 KeyPlain，与运行态一致；鉴权仍走 KeyHash）。
+	// 备份文件因此等价于明文密钥载体，导出/传输时需按密钥对待。
 	Meta store.APIKey `json:"meta"`
 	// FilterRules 为绑定在该 API Key 上的屏蔽规则。
 	FilterRules []domain.FilterRule `json:"filterRules"`
