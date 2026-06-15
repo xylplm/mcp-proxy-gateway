@@ -44,13 +44,6 @@ func ValidateYAMLConfig(cfg YAMLConfig) error {
 	if cfg.Server.LogLevel != "" && !ValidLogLevel(cfg.Server.LogLevel) {
 		fields["server.log_level"] = "日志级别取值非法（应为 debug/info/warn/error）"
 	}
-	// server.public_url / server.lan_url 为空表示未配置；非空时需为 http/https 完整地址。
-	if err := validateAccessURL(cfg.Server.PublicURL); err != nil {
-		fields["server.public_url"] = err.Error()
-	}
-	if err := validateAccessURL(cfg.Server.LanURL); err != nil {
-		fields["server.lan_url"] = err.Error()
-	}
 
 	// auth.session_timeout_s 范围 300-86400（Req 1.4、1.7）。
 	rangeCheck(fields, "auth.session_timeout_s", cfg.Auth.SessionTimeoutS, 300, 86400)
@@ -154,32 +147,4 @@ func validateXiaoZhiEndpoint(endpoint string) error {
 		return fmt.Errorf("接入点地址缺少主机名")
 	}
 	return nil
-}
-
-// validateAccessURL 校验对外访问地址（public_url / lan_url）。
-//
-// 为空表示未配置，放行；非空时必须为 http/https 协议的完整地址且含主机名，
-// 例如 https://mcp.example.com:8443。路径部分无意义，由前端按端点路径拼接。
-func validateAccessURL(raw string) error {
-	s := strings.TrimSpace(raw)
-	if s == "" {
-		return nil
-	}
-	u, err := url.Parse(s)
-	if err != nil {
-		return fmt.Errorf("地址格式非法：%v", err)
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return fmt.Errorf("协议必须为 http 或 https，如 https://mcp.example.com:8443")
-	}
-	if u.Host == "" {
-		return fmt.Errorf("地址缺少主机名，如 https://mcp.example.com:8443")
-	}
-	return nil
-}
-
-// normalizeAccessURL 规范化对外访问地址：去首尾空白、去末尾斜杠。
-// 供 Manager.Save 在校验通过后对 public_url / lan_url 做归一化，避免拼接路径时出现重复斜杠。
-func normalizeAccessURL(raw string) string {
-	return strings.TrimRight(strings.TrimSpace(raw), "/")
 }

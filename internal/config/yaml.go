@@ -37,13 +37,6 @@ type ServerConfig struct {
 	// LogLevel 为进程日志级别：debug/info/warn/error，默认 info。
 	// 通过管理台保存设置后即时生效（基于 slog.LevelVar），无需重启进程。
 	LogLevel string `yaml:"log_level" json:"log_level"`
-	// PublicURL 为公网用户访问本网关的完整外网地址（如 https://mcp.example.com:8443）。
-	// 容器部署时管理台无法自动探测真实可达域名与端口，填写后用于对外接口地址示例与对接引导；
-	// 为空表示未配置，前端按当前访问域名推断。
-	PublicURL string `yaml:"public_url" json:"public_url"`
-	// LanURL 为内网/局域网用户访问本网关的完整内网地址（如 http://192.168.1.10:8081）。
-	// 用途同 PublicURL，面向内网访问场景；为空表示未配置。
-	LanURL string `yaml:"lan_url" json:"lan_url"`
 }
 
 // AdminConfig 为管理员凭证配置（Req 1）。

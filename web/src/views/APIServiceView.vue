@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import AdminLayout from '@/components/layout/AdminLayout.vue'
 import PageBreadcrumb from '@/components/common/PageBreadcrumb.vue'
 import {
@@ -81,101 +81,17 @@ const xiaozhiMode = ref<MCPMode>('full')
 const endpointTab = ref<'full' | 'smart'>('full')
 const fieldErrors = reactive<Record<string, string>>({})
 
-/**
- * 对外地址视图：容器部署时无法自动探测真实可达域名与端口，由用户在系统设置中显式声明
- * 外网/内网地址。此处按配置情况动态提供可切换的视图（外网/内网/容器内），容器内沿用
- * window.location 推断作为兜底，永远可用。
- */
-type AddressView = 'public' | 'lan' | 'container'
-const ADDRESS_VIEW_KEY = 'mpg:api-service:address-view'
-function readStoredAddressView(): AddressView | null {
-  try {
-    const v = sessionStorage.getItem(ADDRESS_VIEW_KEY)
-    if (v === 'public' || v === 'lan' || v === 'container') return v
-  } catch {
-    // sessionStorage 不可用时忽略，降级为默认选择。
-  }
-  return null
-}
-const addressView = ref<AddressView>(readStoredAddressView() ?? 'container')
-watch(addressView, (v) => {
-  try {
-    sessionStorage.setItem(ADDRESS_VIEW_KEY, v)
-  } catch {
-    // 忽略写入失败。
-  }
-})
-
 const effectiveServer = computed<ServerConfig | null>(() => runtimeServer.value ?? settings.value?.server ?? null)
 const listenerReused = computed(() => (effectiveServer.value?.public_mcp_addr.trim() ?? '') === '')
 const listenerPendingRestart = computed(
   () => settings.value !== null && runtimeServer.value !== null && JSON.stringify(settings.value.server) !== JSON.stringify(runtimeServer.value),
 )
 
-/** 当前配置下可用的地址视图列表：配置了外网/内网才出现对应项，容器内永远兜底。 */
-const availableAddressViews = computed<{ key: AddressView; label: string }[]>(() => {
-  const list: { key: AddressView; label: string }[] = []
-  if ((effectiveServer.value?.public_url.trim() ?? '') !== '') list.push({ key: 'public', label: '外网' })
-  if ((effectiveServer.value?.lan_url.trim() ?? '') !== '') list.push({ key: 'lan', label: '内网' })
-  list.push({ key: 'container', label: '容器内' })
-  return list
-})
-/** 可用视图 ≥2 时才显示切换器（只有容器内时不显示）。 */
-const showAddressSwitcher = computed(() => availableAddressViews.value.length >= 2)
-/** 当前选中视图对应的中文标签，用于监听模式提示说明。 */
-const addressViewLabel = computed(() => availableAddressViews.value.find((v) => v.key === addressView.value)?.label ?? '容器内')
-// 配置变化导致当前视图失效时降级到容器内；初始若有外网则默认选中外网。
-watch(availableAddressViews, (list, prev) => {
-  if (!list.some((v) => v.key === addressView.value)) {
-    addressView.value = list.some((v) => v.key === 'public') ? 'public' : list.some((v) => v.key === 'lan') ? 'lan' : 'container'
-  } else if (!prev || prev.length === 1) {
-    // 首次加载或从仅容器内变为多视图时，若用户未主动选择过外网/内网，则默认选中外网。
-    const stored = readStoredAddressView()
-    if (stored && list.some((v) => v.key === stored)) {
-      addressView.value = stored
-    } else if (list.some((v) => v.key === 'public')) {
-      addressView.value = 'public'
-    }
-  }
-}, { immediate: true })
-
-// 归一化用户配置的对外访问地址（去首尾空白与末尾斜杠），非法或空返回 null。
-function normalizeAccessURL(raw: string | undefined): string | null {
-  const s = (raw ?? '').trim().replace(/\/+$/, '')
-  return s === '' ? null : s
-}
-
-// 容器内视图：沿用监听端口 + window.location 推断（程序在容器内无法感知真实可达域名端口）。
-const containerHTTP = computed(() => {
-  if (typeof window === 'undefined') return ''
-  const configured = effectiveServer.value?.public_mcp_addr.trim() ?? ''
-  if (configured === '') return window.location.origin
-  const protocol = window.location.protocol
-  const host = hostWithConfiguredPort(configured)
-  return `${protocol}//${host}`
-})
-const containerWS = computed(() => {
-  if (typeof window === 'undefined') return ''
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-  const configured = effectiveServer.value?.public_mcp_addr.trim() ?? ''
-  const host = configured === '' ? window.location.host : hostWithConfiguredPort(configured)
-  return `${protocol}//${host}`
-})
-
-// 当前地址视图下的对外 base origin（HTTP 与 WS）。
-// 外网/内网取自系统设置中的显式配置；容器内为兜底推断；配置缺失时回退到容器内。
-const mcpOrigin = computed(() => {
-  if (addressView.value === 'public') return normalizeAccessURL(effectiveServer.value?.public_url) ?? containerHTTP.value
-  if (addressView.value === 'lan') return normalizeAccessURL(effectiveServer.value?.lan_url) ?? containerHTTP.value
-  return containerHTTP.value
-})
-const wsOrigin = computed(() => {
-  let http: string
-  if (addressView.value === 'public') http = normalizeAccessURL(effectiveServer.value?.public_url) ?? containerHTTP.value
-  else if (addressView.value === 'lan') http = normalizeAccessURL(effectiveServer.value?.lan_url) ?? containerHTTP.value
-  else http = containerHTTP.value
-  return http.replace(/^http/, 'ws')
-})
+// 对外地址采用占位符：网关部署在容器内，无法预知用户真实的对外域名、IP 与端口。
+// http(s) / ws(s) 表示协议二选一（按是否启用 TLS 填写），<your-host> 与 <port> 为占位符，
+// 由用户根据实际对外可达地址替换。
+const HTTP_ORIGIN = 'http(s)://<your-host>:<port>'
+const WS_ORIGIN = 'ws(s)://<your-host>:<port>'
 
 const mcpPortModeLabel = computed(() => {
   if (effectiveServer.value === null) return '加载中'
@@ -185,7 +101,7 @@ const mcpPortModeLabel = computed(() => {
 
 const mcpPortSecurityText = computed(() => {
   if (effectiveServer.value === null) return '加载监听配置中'
-  if (listenerPendingRestart.value) return '监听配置已保存，网关重启完成后会按新配置生效。当前地址仍按运行中配置生成。'
+  if (listenerPendingRestart.value) return '监听配置已保存，网关重启完成后会按新配置生效。'
   if (listenerReused.value) return '当前对外 MCP 与管理台共用监听端口。公网暴露时建议启用独立 MCP 端口，并关闭管理端口 MCP 入口。'
   if (effectiveServer.value.expose_mcp_on_admin_addr) return '独立 MCP 端口已运行，但管理端口仍保留 /mcp/* 兼容入口。公网部署建议关闭兼容入口。'
   return '独立 MCP 端口已运行，管理端口不暴露 /mcp/*。'
@@ -210,7 +126,7 @@ const endpoints = computed<EndpointItem[]>(() => [
     key: 'sse',
     name: 'SSE',
     badge: '事件流',
-    address: `${mcpOrigin.value}/mcp/sse`,
+    address: `${HTTP_ORIGIN}/mcp/sse`,
     desc: '适合仍使用 SSE 传输的 MCP 客户端。',
     clientType: 'sse',
     guideDesc: '兼容旧版或仍以事件流建立会话的客户端，适合需要保持服务端推送通道的场景。',
@@ -219,7 +135,7 @@ const endpoints = computed<EndpointItem[]>(() => [
     key: 'http',
     name: 'Streamable HTTP',
     badge: '推荐',
-    address: `${mcpOrigin.value}/mcp/http`,
+    address: `${HTTP_ORIGIN}/mcp/http`,
     desc: '适合支持新版 HTTP 传输的客户端。',
     clientType: 'streamable-http',
     guideDesc: '当前最推荐的远程 MCP 接入方式，配置简单，适合绝大多数支持新版 MCP 传输的客户端。',
@@ -228,7 +144,7 @@ const endpoints = computed<EndpointItem[]>(() => [
     key: 'ws',
     name: 'WebSocket',
     badge: '长连接',
-    address: `${wsOrigin.value}/mcp/ws`,
+    address: `${WS_ORIGIN}/mcp/ws`,
     desc: '适合需要稳定双向通道的客户端。',
     clientType: 'websocket',
     guideDesc: '适合需要长连接和双向通信的客户端，浏览器直连时建议使用查询参数认证。',
@@ -240,7 +156,7 @@ const smartEndpoints = computed<EndpointItem[]>(() => [
     key: 'sse',
     name: 'SSE',
     badge: '事件流',
-    address: `${mcpOrigin.value}/mcp/smart/sse`,
+    address: `${HTTP_ORIGIN}/mcp/smart/sse`,
     desc: '智能模式 SSE 端点。',
     clientType: 'sse',
     guideDesc: '智能模式 SSE 传输端点。',
@@ -249,7 +165,7 @@ const smartEndpoints = computed<EndpointItem[]>(() => [
     key: 'http',
     name: 'Streamable HTTP',
     badge: '推荐',
-    address: `${mcpOrigin.value}/mcp/smart/http`,
+    address: `${HTTP_ORIGIN}/mcp/smart/http`,
     desc: '智能模式 HTTP 端点。',
     clientType: 'streamable-http',
     guideDesc: '智能模式 Streamable HTTP 端点，适合大多数客户端。',
@@ -258,35 +174,12 @@ const smartEndpoints = computed<EndpointItem[]>(() => [
     key: 'ws',
     name: 'WebSocket',
     badge: '长连接',
-    address: `${wsOrigin.value}/mcp/smart/ws`,
+    address: `${WS_ORIGIN}/mcp/smart/ws`,
     desc: '智能模式 WebSocket 端点。',
     clientType: 'websocket',
     guideDesc: '智能模式 WebSocket 端点。',
   },
 ])
-
-function hostWithConfiguredPort(addr: string): string {
-  const trimmed = addr.trim()
-  if (trimmed === '') return window.location.host
-  if (trimmed.startsWith(':')) return `${window.location.hostname}${trimmed}`
-  const bracketIndex = trimmed.lastIndexOf(']:')
-  if (bracketIndex >= 0) {
-    const host = trimmed.slice(1, bracketIndex)
-    const port = trimmed.slice(bracketIndex + 2)
-    return wildcardHost(host) ? `${window.location.hostname}:${port}` : trimmed
-  }
-  const lastColon = trimmed.lastIndexOf(':')
-  if (lastColon > 0) {
-    const host = trimmed.slice(0, lastColon)
-    const port = trimmed.slice(lastColon + 1)
-    return wildcardHost(host) ? `${window.location.hostname}:${port}` : trimmed
-  }
-  return `${window.location.hostname}:${trimmed}`
-}
-
-function wildcardHost(host: string): boolean {
-  return host === '' || host === '0.0.0.0' || host === '::' || host === '[::]'
-}
 
 const authOptions: ReadonlyArray<AuthOption> = [
   {
@@ -776,22 +669,6 @@ const errClass = 'mt-1 text-xs text-error-500'
             </p>
           </div>
           <div class="flex items-center gap-3">
-            <div
-              v-if="showAddressSwitcher"
-              class="inline-flex items-center gap-1 rounded-lg border border-gray-200 bg-gray-50 p-1 dark:border-gray-800 dark:bg-white/[0.03]"
-            >
-              <button
-                v-for="view in availableAddressViews"
-                :key="view.key"
-                v-tooltip:bottom-end="view.key === 'public' ? '公网用户访问本网关的地址' : view.key === 'lan' ? '内网/局域网用户访问本网关的地址' : '按当前访问域名与监听端口推断，容器内可达地址'"
-                type="button"
-                class="rounded-md px-3 py-1.5 text-xs font-medium transition"
-                :class="addressView === view.key ? 'bg-white text-gray-800 shadow-sm dark:bg-gray-800 dark:text-white/90' : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300'"
-                @click="addressView = view.key"
-              >
-                {{ view.label }}
-              </button>
-            </div>
             <button
               type="button"
               class="inline-flex items-center justify-center gap-2 rounded-lg bg-brand-500 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-brand-600"
@@ -801,6 +678,12 @@ const errClass = 'mt-1 text-xs text-error-500'
               对接引导
             </button>
           </div>
+        </div>
+
+        <div class="mt-4 rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-gray-800 dark:bg-white/[0.02]">
+          <p class="text-xs leading-5 text-gray-500 dark:text-gray-400">
+            下方地址为占位符。<span class="font-mono text-gray-700 dark:text-gray-200">http(s)</span> 按是否启用 TLS 选择 http 或 https，<span class="font-mono text-gray-700 dark:text-gray-200">&lt;your-host&gt;</span> 填域名或 IP，<span class="font-mono text-gray-700 dark:text-gray-200">&lt;port&gt;</span> 填对外映射端口。网关部署在容器中，无法预知你的真实网络环境，请按实际可达地址替换。
+          </p>
         </div>
 
         <div class="mt-4 flex gap-1 rounded-lg border border-gray-200 bg-gray-50 p-1 dark:border-gray-800 dark:bg-white/[0.03]">
@@ -861,21 +744,6 @@ const errClass = 'mt-1 text-xs text-error-500'
               </button>
             </div>
           </article>
-        </div>
-
-        <div
-          v-if="!showAddressSwitcher"
-          class="mt-4 flex flex-col gap-2 rounded-lg border border-gray-200 bg-gray-50 p-3 sm:flex-row sm:items-center sm:justify-between dark:border-gray-800 dark:bg-white/[0.02]"
-        >
-          <p class="text-xs leading-5 text-gray-500 dark:text-gray-400">
-            当前地址按容器内访问推断，可能与外网/内网真实地址不一致。配置外网或内网访问地址后可一键切换。
-          </p>
-          <router-link
-            to="/settings"
-            class="inline-flex h-8 shrink-0 items-center rounded-lg border border-gray-200 bg-white px-3 text-xs font-medium text-gray-700 transition hover:border-brand-300 hover:text-brand-600 dark:border-gray-700 dark:bg-white/5 dark:text-gray-300 dark:hover:border-brand-500/40 dark:hover:text-brand-400"
-          >
-            去配置访问地址
-          </router-link>
         </div>
 
         <div :class="mcpPortNoticeClass">
@@ -1224,7 +1092,6 @@ const errClass = 'mt-1 text-xs text-error-500'
                       <h4 class="text-sm font-semibold text-gray-800 dark:text-white/90">当前对接信息</h4>
                       <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
                         {{ selectedEndpoint.name }} · {{ selectedAuth.label }}
-                        <span class="text-gray-400 dark:text-gray-500">· 地址来源：{{ addressViewLabel }}</span>
                       </p>
                     </div>
                     <button
@@ -1240,6 +1107,9 @@ const errClass = 'mt-1 text-xs text-error-500'
                   </div>
                   <div class="mt-4 rounded-lg bg-gray-50 p-3 dark:bg-gray-900/60">
                     <p class="break-all font-mono text-xs leading-5 text-gray-700 dark:text-gray-200">{{ guideAddress }}</p>
+                    <p class="mt-2 text-[11px] leading-5 text-gray-400 dark:text-gray-500">
+                      地址为占位符，请按实际对外可达地址替换：http(s) 选 http 或 https，&lt;your-host&gt; 填域名或 IP，&lt;port&gt; 填对外端口。
+                    </p>
                   </div>
                   <div class="mt-3 rounded-lg bg-gray-50 p-3 dark:bg-gray-900/60">
                     <p class="text-xs text-gray-400 dark:text-gray-500">认证</p>

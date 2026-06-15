@@ -376,33 +376,6 @@ const errClass = 'mt-1 text-xs text-error-500'
               {{ fieldErrors['server.log_level'] }}
             </p>
           </div>
-
-          <div class="mt-5 rounded-xl border border-gray-100 bg-gray-50 p-4 dark:border-gray-800 dark:bg-white/[0.02]">
-            <FieldLabel label="外网访问地址" tooltip="公网用户访问本网关的完整地址。容器部署时管理台无法自动探测真实可达域名与端口，填写后对外接口地址示例与对接引导会显示真实外网地址。" />
-            <input
-              v-model.trim="config.server.public_url"
-              type="text"
-              placeholder="https://mcp.example.com:8443"
-              :class="inputClass"
-            />
-            <p :class="hintClass">可选。留空则按当前访问域名推断。需为 http/https 完整地址，含协议、域名和端口。</p>
-            <p v-if="fieldErrors['server.public_url']" :class="errClass">
-              {{ fieldErrors['server.public_url'] }}
-            </p>
-            <div class="mt-5">
-              <FieldLabel label="内网访问地址" tooltip="内网/局域网用户访问本网关的完整地址。填写后对外接口地址与对接引导可切换到内网视图。" />
-              <input
-                v-model.trim="config.server.lan_url"
-                type="text"
-                placeholder="http://192.168.1.10:8081"
-                :class="inputClass"
-              />
-              <p :class="hintClass">可选。留空则不显示内网视图。需为 http/https 完整地址，含协议、域名和端口。</p>
-              <p v-if="fieldErrors['server.lan_url']" :class="errClass">
-                {{ fieldErrors['server.lan_url'] }}
-              </p>
-            </div>
-          </div>
         </section>
 
         <!-- 对外 API 默认值 -->
