@@ -11,6 +11,7 @@
 CREATE TABLE upstream_mcp (
     id             UUID PRIMARY KEY,
     name           VARCHAR(100) NOT NULL UNIQUE,          -- 名称唯一（Req 2.7）
+    tags           TEXT[]       NOT NULL DEFAULT '{}',    -- 管理台分组与识别标签
     transport      VARCHAR(32)  NOT NULL,                 -- stdio|sse|streamable-http|websocket
     conn_params    JSONB        NOT NULL,                 -- 传输相关连接参数
     credential     TEXT         NOT NULL DEFAULT '',      -- 鉴权凭证明文（自部署场景，便于编辑回显与复制）
@@ -60,7 +61,8 @@ CREATE TABLE filter_rule_mcp_upstream (
 CREATE TABLE api_key (
     id            UUID PRIMARY KEY,
     name          VARCHAR(100) NOT NULL,
-    key_hash      BYTEA NOT NULL,                          -- 仅存哈希，不存明文（Req 12.3）
+    key_hash      BYTEA NOT NULL,                          -- 鉴权用哈希
+    key_plain     TEXT NOT NULL DEFAULT '',                -- 明文密钥（自部署场景，便于二次查看与复制）
     key_prefix    VARCHAR(12) NOT NULL,                    -- 展示用前缀
     enabled       BOOLEAN NOT NULL DEFAULT true,
     expires_at    TIMESTAMPTZ,                             -- 可选有效期（Req 12.6）
@@ -97,14 +99,21 @@ CREATE TABLE tool_cache (
 -- 注意：PostgreSQL 声明式分区要求主键必须包含分区键，因此主键为 (id, called_at)；
 -- id 仍由 BIGSERIAL 序列自增生成，全表共享同一序列。
 CREATE TABLE call_stat (
-    id            BIGSERIAL,
-    upstream_id   UUID,                                    -- 稳定统计维度（不随别名/排序改名而断裂）
-    original_name VARCHAR(100) NOT NULL,                   -- 上游原始工具名（稳定标识）
-    exposed_name  VARCHAR(100),                            -- 调用时的对外名，仅作展示
-    api_key_id    UUID,
-    called_at     TIMESTAMPTZ NOT NULL,                    -- 毫秒精度
-    latency_ms    INTEGER NOT NULL,
-    success       BOOLEAN NOT NULL,
+    id              BIGSERIAL,
+    upstream_id     UUID,                                    -- 稳定统计维度（不随别名/排序改名而断裂）
+    original_name   VARCHAR(100) NOT NULL,                   -- 上游原始工具名（稳定标识）
+    exposed_name    VARCHAR(100),                            -- 调用时的对外名，仅作展示
+    api_key_id      UUID,
+    called_at       TIMESTAMPTZ NOT NULL,                    -- 毫秒精度
+    latency_ms      INTEGER NOT NULL,
+    success         BOOLEAN NOT NULL,
+    status          VARCHAR(32) NOT NULL DEFAULT 'success',  -- success|upstream_error|failed
+    request_args    JSONB,                                   -- 调用入参
+    response_result JSONB,                                   -- 调用出参
+    error_message   TEXT,                                    -- 失败错误说明
+    failure_detail  JSONB,                                   -- 失败诊断详情
+    mode            VARCHAR(16) NOT NULL DEFAULT 'full',     -- full|smart
+    source          VARCHAR(16) NOT NULL DEFAULT 'api',      -- api|xiaozhi
     PRIMARY KEY (id, called_at)
 ) PARTITION BY RANGE (called_at);
 
@@ -118,6 +127,10 @@ CREATE INDEX idx_call_stat_called_at            ON call_stat (called_at);
 CREATE INDEX idx_call_stat_upstream_called_at   ON call_stat (upstream_id, called_at);
 CREATE INDEX idx_call_stat_apikey_called_at     ON call_stat (api_key_id, called_at);
 CREATE INDEX idx_call_stat_upstream_orig_name   ON call_stat (upstream_id, original_name);
+CREATE INDEX idx_call_stat_called_at_id_desc    ON call_stat (called_at DESC, id DESC);
+CREATE INDEX idx_call_stat_status_called_at     ON call_stat (status, called_at DESC);
+CREATE INDEX idx_call_stat_mode                 ON call_stat (mode);
+CREATE INDEX idx_call_stat_source               ON call_stat (source);
 
 -- 审计日志（Req 22）
 CREATE TABLE audit_log (

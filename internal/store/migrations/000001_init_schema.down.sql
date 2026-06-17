@@ -7,7 +7,9 @@ DROP TABLE IF EXISTS call_stat;          -- 级联删除其全部分区（含 ca
 DROP TABLE IF EXISTS tool_cache;
 DROP TABLE IF EXISTS api_key_acl;
 DROP TABLE IF EXISTS filter_rule_apikey;
+DROP TABLE IF EXISTS filter_rule_mcp_upstream;
 DROP TABLE IF EXISTS filter_rule_mcp;
+DROP TABLE IF EXISTS alias_rule_upstream;
 DROP TABLE IF EXISTS alias_rule;
 DROP TABLE IF EXISTS api_key;
 DROP TABLE IF EXISTS upstream_mcp;

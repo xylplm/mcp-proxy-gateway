@@ -219,13 +219,13 @@ func (r *CallStatRepo) ListRecords(ctx context.Context, limit int, afterID int64
 			cs.called_at,
 			cs.latency_ms,
 			cs.success,
-			coalesce(cs.status, CASE WHEN cs.success THEN 'success' WHEN coalesce(cs.error_message, '') <> '' THEN 'failed' ELSE 'upstream_error' END),
+			cs.status,
 			coalesce(cs.request_args, 'null'::jsonb),
 			coalesce(cs.response_result, 'null'::jsonb),
 			coalesce(cs.error_message, ''),
 			coalesce(cs.failure_detail, 'null'::jsonb),
-			coalesce(cs.mode, 'full'),
-			coalesce(cs.source, 'api')
+			cs.mode,
+			cs.source
 		FROM call_stat cs
 		LEFT JOIN upstream_mcp up ON up.id = cs.upstream_id
 		LEFT JOIN api_key ak ON ak.id = cs.api_key_id
@@ -262,13 +262,13 @@ func (r *CallStatRepo) GetRecord(ctx context.Context, id int64) (CallRecordView,
 			cs.called_at,
 			cs.latency_ms,
 			cs.success,
-			coalesce(cs.status, CASE WHEN cs.success THEN 'success' WHEN coalesce(cs.error_message, '') <> '' THEN 'failed' ELSE 'upstream_error' END),
+			cs.status,
 			coalesce(cs.request_args, 'null'::jsonb),
 			coalesce(cs.response_result, 'null'::jsonb),
 			coalesce(cs.error_message, ''),
 			coalesce(cs.failure_detail, 'null'::jsonb),
-			coalesce(cs.mode, 'full'),
-			coalesce(cs.source, 'api')
+			cs.mode,
+			cs.source
 		FROM call_stat cs
 		LEFT JOIN upstream_mcp up ON up.id = cs.upstream_id
 		LEFT JOIN api_key ak ON ak.id = cs.api_key_id
@@ -311,8 +311,8 @@ func (r *CallStatRepo) CountByUpstream(ctx context.Context, start, end time.Time
 		return nil, err
 	}
 	const q = `
-		SELECT upstream_id, count(*), coalesce(max(source), 'api')
-		FROM call_stat
+			SELECT upstream_id, count(*), max(source)
+			FROM call_stat
 		WHERE called_at >= $1 AND called_at <= $2
 		GROUP BY upstream_id
 		ORDER BY count(*) DESC`
@@ -331,10 +331,10 @@ func (r *CallStatRepo) CountByAPIKey(ctx context.Context, start, end time.Time) 
 		return nil, err
 	}
 	const q = `
-		SELECT api_key_id, count(*),
-		       CASE WHEN bool_and(api_key_id IS NULL)
-		            THEN coalesce(max(source), 'api')
-		            ELSE 'api' END
+			SELECT api_key_id, count(*),
+			       CASE WHEN bool_and(api_key_id IS NULL)
+			            THEN max(source)
+			            ELSE 'api' END
 		FROM call_stat
 		WHERE called_at >= $1 AND called_at <= $2
 		GROUP BY api_key_id,

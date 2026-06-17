@@ -102,9 +102,9 @@ func registerMCPRoutes(engine *gin.Engine, w routerWiring) {
 	w.mcpEndpoints.RegisterSmart(mcpGroup)
 }
 
-// repoUpstreamGet 经连接管理器无法直接取回加密凭证行，故由本方法直接走仓储读取单条上游行。
+// repoUpstreamGet 经连接管理器无法直接读取持久化行，故由本方法直接走仓储读取单条上游行。
 //
-// 仅供启动探测路径复用（其余调用路径已持有解密后的配置）。
+// 仅供启动探测路径复用。
 func (a *App) repoUpstreamGet(ctx context.Context, id string) (*store.UpstreamRow, error) {
 	return store.NewUpstreamRepo(a.pool).Get(ctx, id)
 }

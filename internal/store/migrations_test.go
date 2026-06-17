@@ -69,12 +69,34 @@ func TestInitMigrationDefinesCoreTables(t *testing.T) {
 		t.Error("call_stat 缺少默认分区，迁移后可能无法写入统计记录")
 	}
 
+	// 初始化脚本应直接包含正式上线前折叠后的最终 schema。
+	currentColumns := []string{
+		"tags           TEXT[]       NOT NULL DEFAULT '{}'",
+		"key_plain     TEXT NOT NULL DEFAULT ''",
+		"status          VARCHAR(32) NOT NULL DEFAULT 'success'",
+		"request_args    JSONB",
+		"response_result JSONB",
+		"error_message   TEXT",
+		"failure_detail  JSONB",
+		"mode            VARCHAR(16) NOT NULL DEFAULT 'full'",
+		"source          VARCHAR(16) NOT NULL DEFAULT 'api'",
+	}
+	for _, col := range currentColumns {
+		if !strings.Contains(sql, col) {
+			t.Errorf("初始迁移缺少当前 schema 字段: %s", col)
+		}
+	}
+
 	// design.md 标注的 call_stat 关键索引。
 	indexCols := []string{
 		"(called_at)",
 		"(upstream_id, called_at)",
 		"(api_key_id, called_at)",
 		"(upstream_id, original_name)",
+		"(called_at DESC, id DESC)",
+		"(status, called_at DESC)",
+		"(mode)",
+		"(source)",
 	}
 	for _, cols := range indexCols {
 		if !strings.Contains(sql, cols) {

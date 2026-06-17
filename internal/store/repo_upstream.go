@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"time"
 
@@ -228,7 +227,7 @@ func scanUpstream(row pgx.Row) (*UpstreamRow, error) {
 		tags       []string
 		transport  string
 		connParams []byte
-		credential sql.NullString
+		credential string
 		enabled    bool
 		sortOrder  int
 		autoSync   bool
@@ -254,7 +253,7 @@ func scanUpstream(row pgx.Row) (*UpstreamRow, error) {
 		Tags:       tags,
 		Transport:  domain.TransportType(transport),
 		ConnParams: params,
-		Credential: credential.String,
+		Credential: credential,
 		Enabled:    enabled,
 		SortOrder:  sortOrder,
 		AutoSync:   autoSync,
