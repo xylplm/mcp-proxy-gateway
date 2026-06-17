@@ -2,8 +2,10 @@ package app
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -11,11 +13,28 @@ import (
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/aggregation"
 	"github.com/myGithub/mcp-proxy-gateway/internal/apikey"
+	"github.com/myGithub/mcp-proxy-gateway/internal/auth"
 	"github.com/myGithub/mcp-proxy-gateway/internal/config"
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
 	"github.com/myGithub/mcp-proxy-gateway/internal/manager"
 	"github.com/myGithub/mcp-proxy-gateway/internal/transport"
 )
+
+// inMemoryConfigStore 是 auth.ConfigStore 的内存替身，供 EnsureJWTSecret 单测使用。
+type inMemoryConfigStore struct {
+	cfg config.YAMLConfig
+}
+
+func newInMemoryConfigStore() *inMemoryConfigStore {
+	return &inMemoryConfigStore{cfg: config.DefaultYAMLConfig()}
+}
+
+func (s *inMemoryConfigStore) Config() config.YAMLConfig { return s.cfg }
+
+func (s *inMemoryConfigStore) Save(cfg config.YAMLConfig) error {
+	s.cfg = cfg
+	return nil
+}
 
 // TestRetryPolicyFromConfig 验证连接配置到退避策略的映射（秒 → time.Duration，字段对应）。
 func TestRetryPolicyFromConfig(t *testing.T) {
@@ -52,23 +71,33 @@ func TestXiaoZhiBackoffFromConfig(t *testing.T) {
 	}
 }
 
-// TestSigningKeyDeterministicAndNonEmpty 验证 JWT 签名密钥派生稳定且非空、且不等于原始密钥。
-func TestSigningKeyDeterministicAndNonEmpty(t *testing.T) {
-	const key = "0123456789abcdef0123456789abcdef"
-	k1 := signingKey(key)
-	k2 := signingKey(key)
-	if len(k1) == 0 {
-		t.Fatal("签名密钥不应为空")
-	}
-	if string(k1) != string(k2) {
-		t.Fatal("相同主密钥应派生出相同签名密钥")
-	}
-	if string(k1) == key {
-		t.Fatal("签名密钥不应直接等于加密主密钥")
-	}
-	if string(signingKey("another-key")) == string(k1) {
-		t.Fatal("不同主密钥应派生出不同签名密钥")
-	}
+// TestEnsureJWTSecretGeneratesAndPersists 验证 EnsureJWTSecret 在密钥为空时生成非空密钥并写回，
+// 在密钥已存在时保持不变（幂等）。
+func TestEnsureJWTSecretGeneratesAndPersists(t *testing.T) {
+	t.Run("为空时生成并写回", func(t *testing.T) {
+		store := newInMemoryConfigStore()
+		if err := auth.EnsureJWTSecret(store, slog.Default()); err != nil {
+			t.Fatalf("生成 JWT 密钥不应失败：%v", err)
+		}
+		secret := store.cfg.JWTSecret
+		if secret == "" {
+			t.Fatal("生成后 jwt_secret 不应为空")
+		}
+		if _, err := base64.RawURLEncoding.DecodeString(secret); err != nil {
+			t.Fatalf("生成的 jwt_secret 应为合法 base64url：%v", err)
+		}
+	})
+
+	t.Run("已存在时保持不变（幂等）", func(t *testing.T) {
+		store := newInMemoryConfigStore()
+		store.cfg.JWTSecret = "preset-secret"
+		if err := auth.EnsureJWTSecret(store, slog.Default()); err != nil {
+			t.Fatalf("已有密钥时不应失败：%v", err)
+		}
+		if store.cfg.JWTSecret != "preset-secret" {
+			t.Fatalf("已有密钥应保持不变，实际 %q", store.cfg.JWTSecret)
+		}
+	})
 }
 
 // TestResolveAPIKeyID 验证从已鉴权上下文取出 API Key 标识；无上下文时返回 ok=false。

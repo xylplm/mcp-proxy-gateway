@@ -57,7 +57,7 @@ The whole system ships as a **single Docker image** — the frontend assets are 
 - **Multi-dimension statistics & audit** — call counts and rankings by upstream / tool / API Key; audit trail for key admin operations and logins; both with retention cleanup.
 - **XiaoZhi AI integration** — acts as an outbound WebSocket client to a XiaoZhi remote MCP endpoint, providing the aggregated capability to voice terminals.
 - **Responsive admin UI** — built on Tailwind CSS, covering five breakpoints: mobile / tablet / PC / wide / 4K.
-- **Secure by default** — upstream credentials encrypted at rest with AES-GCM, admin password salted-hashed with bcrypt, two fully isolated middleware chains (admin JWT vs. external API Key).
+- **Self-hosted friendly** — upstream credentials are stored in plaintext for easy review/editing in your own deployment; admin password is salted-hashed with bcrypt; admin JWT and external API Key use isolated middleware chains.
 
 ## 🧱 Tech Stack
 
@@ -91,8 +91,6 @@ services:
       MPG_PG_DSN: "postgres://mpg:mpg_password@postgres:5432/mpg?sslmode=disable"
       MPG_REDIS_ADDR: "redis:6379"
       MPG_REDIS_PASSWORD: ""
-      # 32-byte key for AES-256. Generate with `openssl rand -hex 32` (64 hex chars).
-      MPG_ENCRYPTION_KEY: "replace-with-your-own-32-byte-random-key"
       MPG_DATA_DIR: "/data"
     volumes:
       - mpg_data:/data
@@ -138,7 +136,6 @@ docker run -d --name mcp-proxy-gateway \
   -e MPG_PG_DSN="postgres://user:pass@host:5432/db?sslmode=disable" \
   -e MPG_REDIS_ADDR="host:6379" \
   -e MPG_REDIS_PASSWORD="" \
-  -e MPG_ENCRYPTION_KEY="$(openssl rand -hex 32)" \
   -v mpg_data:/data \
   xylplm/mcp-proxy-gateway:latest
 ```
@@ -164,24 +161,16 @@ docker pull xylplm/mcp-proxy-gateway:1.0.202606071302
 
 ## ⚙️ Environment Variables
 
-Database/Redis connections and the encryption master key are injected via **environment variables** (not stored in YAML). Other general settings live in a YAML file under `/data` and can be edited from the admin UI's **System Settings**.
+Database/Redis connections are injected via **environment variables**. Other general settings live in a YAML file under `/data` and can be edited from the admin UI's **System Settings**. The JWT signing secret is generated automatically on first startup and stored in `config.yaml`.
 
 | Variable | Required | Default | Description |
 |----------|:--------:|---------|-------------|
 | `MPG_PG_DSN` | ✅ | — | PostgreSQL DSN, e.g. `postgres://user:pass@host:5432/db?sslmode=disable` |
 | `MPG_REDIS_ADDR` | ✅ | — | Redis address, e.g. `host:6379` |
 | `MPG_REDIS_PASSWORD` | ❌ | empty | Redis password; leave empty if none |
-| `MPG_ENCRYPTION_KEY` | ✅ | — | AES-GCM master key; must decode to **16 / 24 / 32 bytes** (32 recommended for AES-256). Accepts raw bytes / hex / base64 |
 | `MPG_DATA_DIR` | ❌ | `/data` | Data directory for the YAML config and local persistent data |
 
-Generate an encryption key:
-
-```bash
-openssl rand -hex 32      # 64 hex chars  → decodes to 32 bytes
-openssl rand -base64 32   # 44 base64 chars → decodes to 32 bytes
-```
-
-> If a required env var is missing/invalid, the YAML is malformed, or the encryption key is invalid, the process logs the error at startup and **fails fast** (refuses to start).
+> If a required env var is missing/invalid or the YAML is malformed, the process logs the error at startup and **fails fast** (refuses to start).
 
 ### Service Routes
 
@@ -234,10 +223,9 @@ docker run -d --name mpg-redis -p 6379:6379 redis:7-alpine
 
 ```bash
 # Set required env vars (PowerShell example)
-$env:MPG_PG_DSN         = "postgres://mpg:mpg_password@localhost:5432/mpg?sslmode=disable"
-$env:MPG_REDIS_ADDR     = "localhost:6379"
-$env:MPG_ENCRYPTION_KEY = "0123456789abcdef0123456789abcdef"  # 32-byte example, do NOT use in production
-$env:MPG_DATA_DIR       = "./data"
+$env:MPG_PG_DSN     = "postgres://mpg:mpg_password@localhost:5432/mpg?sslmode=disable"
+$env:MPG_REDIS_ADDR = "localhost:6379"
+$env:MPG_DATA_DIR   = "./data"
 
 # Run the gateway (frontend can be hot-reloaded separately, see below)
 go run ./cmd/gateway
@@ -281,7 +269,6 @@ mcp-proxy-gateway/
 │   ├── app/                # Main assembly: component wiring, route facets, startup/shutdown
 │   ├── config/             # Configuration (env vars + YAML)
 │   ├── store/              # Repositories, connection pools, DB migrations
-│   ├── crypto/             # Encryption service (AES-GCM)
 │   ├── domain/             # Domain core: types, rule engine, unified error model
 │   ├── aggregation/        # Aggregation service (deterministic pipeline + call routing)
 │   ├── transport/          # Transport adapters (stdio/SSE/HTTP/WebSocket)

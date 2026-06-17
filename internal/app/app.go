@@ -1,6 +1,6 @@
 // Package app 负责把 MCP Proxy Gateway 的全部组件装配为一个可运行系统（任务 27.2）。
 //
-// 装配遵循依赖链：Config_Manager → DB/Redis/迁移 → Encryption → 各应用服务 →
+// 装配遵循依赖链：Config_Manager → DB/Redis/迁移 → 各应用服务 →
 // 领域核心 → 入站路由（静态 SPA / 管理 REST API / 对外 MCP API / healthz）。管理面
 // （JWT）与服务面（API Key + 限流 + 来源白名单）在路由前缀与中间件链上完全分离
 // （设计「路由分面」，Req 11.8、17.1）。启动时先做连通性探测再对外提供服务（Req 20.1）。
@@ -22,7 +22,6 @@ import (
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/audit"
 	"github.com/myGithub/mcp-proxy-gateway/internal/config"
-	"github.com/myGithub/mcp-proxy-gateway/internal/crypto"
 	"github.com/myGithub/mcp-proxy-gateway/internal/health"
 	"github.com/myGithub/mcp-proxy-gateway/internal/manager"
 	"github.com/myGithub/mcp-proxy-gateway/internal/mcpapi"
@@ -120,14 +119,7 @@ func New(ctx context.Context, logger *slog.Logger, opts ...Option) (*App, error)
 		return nil, err
 	}
 
-	// 2) 加密服务：MPG_ENCRYPTION_KEY 留空时回退到内置默认密钥并告警，
-	//    非空时校验长度与有效性（无效即返回错误，Req 19.4）。
-	enc, err := crypto.New(envCfg.EncryptionKey, logger)
-	if err != nil {
-		return nil, err
-	}
-
-	// 3) 数据层：PG 连接池 + Redis 客户端 + 执行向上迁移（迁移在连接成功后、对外服务前，Req 23.3）。
+	// 2) 数据层：PG 连接池 + Redis 客户端 + 执行向上迁移（迁移在连接成功后、对外服务前，Req 23.3）。
 	pool, err := store.NewPGPool(ctx, envCfg.PGDSN)
 	if err != nil {
 		return nil, err
@@ -157,8 +149,8 @@ func New(ctx context.Context, logger *slog.Logger, opts ...Option) (*App, error)
 		}
 	}
 
-	// 4) 构造各应用服务、领域核心与入站路由。
-	if err := a.build(enc, envCfg); err != nil {
+	// 3) 构造各应用服务、领域核心与入站路由。
+	if err := a.build(envCfg); err != nil {
 		_ = a.closeInfra()
 		return nil, err
 	}

@@ -13,18 +13,6 @@ import (
 	"github.com/myGithub/mcp-proxy-gateway/internal/transport"
 )
 
-// CredentialAction 表示更新上游时如何处理已保存的鉴权凭证。
-type CredentialAction string
-
-const (
-	// CredentialReplace 表示使用提交的 credential 替换原凭证。
-	CredentialReplace CredentialAction = "replace"
-	// CredentialKeep 表示保留原凭证。
-	CredentialKeep CredentialAction = "keep"
-	// CredentialClear 表示清除原凭证。
-	CredentialClear CredentialAction = "clear"
-)
-
 // 名称长度约束：服务名称需在 1 至 100 个字符之间（Req 2.1、2.2）。
 const (
 	// minNameLen 为上游 MCP 名称的最小字符数。
@@ -42,30 +30,20 @@ const (
 // 仅声明本组件实际使用的方法，便于在单元测试（任务 9.2）中以 mock 替换，
 // 同时使依赖关系一目了然。*store.UpstreamRepo 满足该接口。
 type UpstreamRepository interface {
-	// Create 持久化上游配置，credentialEnc 为加密后的凭证字节（可为 nil）。
-	Create(ctx context.Context, cfg domain.UpstreamConfig, credentialEnc []byte) (*store.UpstreamRow, error)
+	// Create 持久化上游配置，凭证以明文随 cfg.Credential 存储（可为空）。
+	Create(ctx context.Context, cfg domain.UpstreamConfig) (*store.UpstreamRow, error)
 	// Get 按标识查询单条上游；不存在返回 NOT_FOUND。
 	Get(ctx context.Context, id string) (*store.UpstreamRow, error)
 	// List 返回全部上游，无数据返回空切片。
 	List(ctx context.Context) ([]store.UpstreamRow, error)
-	// Update 更新指定上游的配置（含 credentialEnc）。
-	Update(ctx context.Context, id string, cfg domain.UpstreamConfig, credentialEnc []byte) (*store.UpstreamRow, error)
+	// Update 更新指定上游的配置（凭证明文随 cfg.Credential）。
+	Update(ctx context.Context, id string, cfg domain.UpstreamConfig) (*store.UpstreamRow, error)
 	// SetEnabled 仅更新启停状态。
 	SetEnabled(ctx context.Context, id string, enabled bool) error
 	// SetSortOrder 仅更新单个上游的排序值。
 	SetSortOrder(ctx context.Context, id string, sortOrder int) error
 	// Delete 删除指定上游，其从属规则与缓存持久副本由 DB 外键级联清理。
 	Delete(ctx context.Context, id string) error
-}
-
-// CredentialEncryptor 是凭证加密窄接口，对应 Encryption_Service 的加密能力（Req 19.1）。
-//
-// *crypto.Service 满足该接口。
-type CredentialEncryptor interface {
-	// Encrypt 对明文凭证加密，返回密文字节。
-	Encrypt(plaintext []byte) ([]byte, error)
-	// Decrypt 对持久化的加密凭证解密，返回明文字节。
-	Decrypt(ciphertext []byte) ([]byte, error)
 }
 
 // ToolCacheCleaner 是工具缓存清理窄接口，用于删除上游时级联清理缓存（Req 2.5、6.6）。
@@ -83,7 +61,7 @@ type ConnParamsValidator func(cfg domain.UpstreamConfig) error
 
 // Manager 是连接管理器（MCP_Manager）的实现。
 //
-// 任务 9.1 实现上游 MCP 的增删查改、名称唯一与字段校验，以及凭证加密存储；
+// 任务 9.1 实现上游 MCP 的增删查改、名称唯一与字段校验；凭证以明文存储，便于编辑回显；
 // 任务 9.3 实现启用/停用（SetEnabled）与排序（Reorder，含完整性校验）；
 // 任务 9.5 实现连接生命周期状态机与指数退避重试（GetState/Reconnect/连接重建）。
 //
@@ -93,8 +71,6 @@ type ConnParamsValidator func(cfg domain.UpstreamConfig) error
 type Manager struct {
 	// repo 为上游 MCP 仓储。
 	repo UpstreamRepository
-	// enc 为凭证加密服务。
-	enc CredentialEncryptor
 	// cache 为工具缓存清理能力。
 	cache ToolCacheCleaner
 	// validate 为连接参数校验函数。
@@ -147,11 +123,10 @@ func WithDialer(d Dialer) Option {
 // New 构造连接管理器。
 //
 // validate 为 nil 时回退到 transport.ValidateConnParams；logger 为 nil 时回退到
-// slog.Default()。repo、enc、cache 为必需依赖。退避策略默认取 DefaultRetryPolicy，
+// slog.Default()。repo、cache 为必需依赖。退避策略默认取 DefaultRetryPolicy，
 // 可经 WithRetryPolicy 覆盖；拨号器经 WithDialer 注入。
 func New(
 	repo UpstreamRepository,
-	enc CredentialEncryptor,
 	cache ToolCacheCleaner,
 	validate ConnParamsValidator,
 	logger *slog.Logger,
@@ -166,7 +141,6 @@ func New(
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &Manager{
 		repo:       repo,
-		enc:        enc,
 		cache:      cache,
 		validate:   validate,
 		logger:     logger,
@@ -181,11 +155,11 @@ func New(
 	return m
 }
 
-// Create 创建上游 MCP 服务（Req 2.1、2.2、2.7、19.1、19.3）。
+// Create 创建上游 MCP 服务（Req 2.1、2.2、2.7）。
 //
-// 流程：字段校验 → 加密凭证 → 持久化。任一字段非法时返回标识每个无效字段的
+// 流程：字段校验 → 持久化。任一字段非法时返回标识每个无效字段的
 // 校验错误且不持久化（Req 2.2）；名称与既有上游重复时仓储层返回 CONFLICT（Req 2.7）。
-// 返回的 Upstream 不含明文凭证（Req 19.3）。
+// 凭证以明文随 cfg.Credential 存储，返回的 Upstream 含明文凭证以便前端编辑回显。
 func (m *Manager) Create(ctx context.Context, cfg domain.UpstreamConfig) (domain.Upstream, error) {
 	var err error
 	cfg, err = m.validateConfig(cfg)
@@ -193,73 +167,34 @@ func (m *Manager) Create(ctx context.Context, cfg domain.UpstreamConfig) (domain
 		return domain.Upstream{}, err
 	}
 
-	credentialEnc, err := m.encryptCredential(cfg.Credential)
-	if err != nil {
-		return domain.Upstream{}, err
-	}
-
-	row, err := m.repo.Create(ctx, cfg, credentialEnc)
+	row, err := m.repo.Create(ctx, cfg)
 	if err != nil {
 		return domain.Upstream{}, err
 	}
 
 	// 登记连接并按启停状态启动重试退避循环（启用）或置为不可用（停用）（Req 5.1、5.4）。
-	// 连接持有完整配置（含明文凭证，仅内存），供拨号与后续重建使用，无需再次解密。
+	// 连接持有完整配置（含明文凭证，仅内存），供拨号与后续重建使用。
 	cfg.SortOrder = row.Config.SortOrder
 	m.rebuildConnection(row.ID, cfg)
 	return m.toUpstream(row), nil
 }
 
-// Update 更新某个已存在的上游 MCP 服务配置（Req 2.4、2.6、2.7、19.1、19.3）。
+// Update 更新某个已存在的上游 MCP 服务配置（Req 2.4、2.6、2.7）。
 //
-// 流程：字段校验 → 加密凭证 → 持久化 → 按新配置重建连接。标识不存在返回 NOT_FOUND
+// 流程：字段校验 → 持久化 → 按新配置重建连接。标识不存在返回 NOT_FOUND
 // （Req 2.6），名称与其他上游重复返回 CONFLICT（Req 2.7）。
 //
 // 连接重建（Req 2.4 后半句）：停止该上游既有的重试循环、写入新配置，再按新配置的
 // 启停状态重新拨号建立连接（或在停用时置为不可用），从而使更新后的连接参数立即生效。
+// 凭证以明文随 cfg.Credential 整体覆盖，不再区分 keep/replace/clear。
 func (m *Manager) Update(ctx context.Context, id string, cfg domain.UpstreamConfig) (domain.Upstream, error) {
-	return m.UpdateWithCredentialAction(ctx, id, cfg, CredentialReplace)
-}
-
-// UpdateWithCredentialAction 更新某个已存在的上游 MCP 服务配置，并按 action 明确处理凭证。
-func (m *Manager) UpdateWithCredentialAction(ctx context.Context, id string, cfg domain.UpstreamConfig, action CredentialAction) (domain.Upstream, error) {
 	var err error
-	if action == "" {
-		action = CredentialReplace
-	}
-	if action != CredentialReplace && action != CredentialKeep && action != CredentialClear {
-		return domain.Upstream{}, domain.NewValidationError("上游 MCP 配置校验失败", map[string]string{
-			"credentialAction": "凭证处理方式只能是 keep、replace 或 clear",
-		})
-	}
-
-	if action == CredentialClear {
-		cfg.Credential = ""
-	}
-
 	cfg, err = m.validateConfig(cfg)
 	if err != nil {
 		return domain.Upstream{}, err
 	}
 
-	var credentialEnc []byte
-	if action == CredentialKeep {
-		cfg.Credential, err = m.currentCredential(ctx, id)
-		if err != nil {
-			return domain.Upstream{}, err
-		}
-		credentialEnc = nil
-	} else {
-		credentialEnc, err = m.encryptCredential(cfg.Credential)
-		if err != nil {
-			return domain.Upstream{}, err
-		}
-		if action == CredentialClear {
-			credentialEnc = []byte{}
-		}
-	}
-
-	row, err := m.repo.Update(ctx, id, cfg, credentialEnc)
+	row, err := m.repo.Update(ctx, id, cfg)
 	if err != nil {
 		return domain.Upstream{}, err
 	}
@@ -272,8 +207,8 @@ func (m *Manager) UpdateWithCredentialAction(ctx context.Context, id string, cfg
 
 // RestoreConnections 从持久化仓储恢复全部上游的连接状态机登记。
 //
-// 该方法用于进程启动后把数据库中已有的上游重新放回内存连接池；配置中的鉴权凭证会
-// 解密后仅保存在内存中，供连接拨号使用。已启用上游会启动连接循环，停用上游仅登记
+// 该方法用于进程启动后把数据库中已有的上游重新放回内存连接池；配置中的明文凭证
+// 仅保存在内存中供连接拨号使用。已启用上游会启动连接循环，停用上游仅登记
 // 为 unavailable，便于后续启用/重连时复用同一条恢复路径。
 func (m *Manager) RestoreConnections(ctx context.Context) error {
 	rows, err := m.repo.List(ctx)
@@ -281,11 +216,7 @@ func (m *Manager) RestoreConnections(ctx context.Context) error {
 		return err
 	}
 	for i := range rows {
-		cfg, err := m.configFromRow(&rows[i])
-		if err != nil {
-			return err
-		}
-		m.rebuildConnection(rows[i].ID, cfg)
+		m.rebuildConnection(rows[i].ID, rows[i].Config)
 	}
 	return nil
 }
@@ -295,48 +226,10 @@ func (m *Manager) restoreConnectionFromStore(ctx context.Context, id string, ena
 	if err != nil {
 		return err
 	}
-	cfg, err := m.configFromRow(row)
-	if err != nil {
-		return err
-	}
+	cfg := row.Config
 	cfg.Enabled = enabled
 	m.rebuildConnection(id, cfg)
 	return nil
-}
-
-func (m *Manager) configFromRow(row *store.UpstreamRow) (domain.UpstreamConfig, error) {
-	cfg := row.Config
-	if len(row.CredentialEnc) == 0 {
-		return cfg, nil
-	}
-	plain, err := m.enc.Decrypt(row.CredentialEnc)
-	if err != nil {
-		return domain.UpstreamConfig{}, err
-	}
-	cfg.Credential = string(plain)
-	return cfg, nil
-}
-
-func (m *Manager) currentCredential(ctx context.Context, id string) (string, error) {
-	m.connsMu.Lock()
-	c := m.conns[id]
-	m.connsMu.Unlock()
-	if c != nil {
-		credential := c.config().Credential
-		if credential != "" {
-			return credential, nil
-		}
-	}
-
-	row, err := m.repo.Get(ctx, id)
-	if err != nil {
-		return "", err
-	}
-	cfg, err := m.configFromRow(row)
-	if err != nil {
-		return "", err
-	}
-	return cfg.Credential, nil
 }
 
 // Delete 删除某个已存在的上游 MCP 服务并级联清理（Req 2.5、2.6、6.6）。
@@ -541,23 +434,12 @@ func normalizeTags(tags []string) ([]string, error) {
 	return out, nil
 }
 
-// encryptCredential 在写库前对鉴权凭证明文加密（Req 19.1）。
-//
-// 凭证为空时不加密，返回 nil 表示无凭证；否则返回密文字节用于持久化。
-func (m *Manager) encryptCredential(credential string) ([]byte, error) {
-	if credential == "" {
-		return nil, nil
-	}
-	return m.enc.Encrypt([]byte(credential))
-}
-
 // toUpstream 将仓储行映射为对外返回的领域对象。
 //
-// 仓储层已确保 Config.Credential 为空（不返回明文凭证，Req 19.3）；此处补充当前
+// 凭证以明文随 Config.Credential 返回，供前端编辑时直接回显；此处仅补充当前
 // 连接状态与最近失败原因（由连接生命周期状态机维护，Req 5.4）。
 func (m *Manager) toUpstream(row *store.UpstreamRow) domain.Upstream {
 	up := row.Upstream
-	up.Config.Credential = "" // 防御性确保不外泄明文凭证（Req 19.3）。
 	state, lastErr := m.GetState(row.ID)
 	up.State = state
 	up.LastError = lastErr

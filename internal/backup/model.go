@@ -41,10 +41,8 @@ type BusinessConfig struct {
 type UpstreamEntry struct {
 	// ID 为上游 MCP 标识；保留以维持别名/屏蔽规则的归属关系与导入导出等价性。
 	ID string `json:"id"`
-	// Config 为上游配置（不含明文凭证，明文从不持久化）。
+	// Config 为上游配置；凭证明文随 Config.Credential 一并备份（自部署场景，明文存储）。
 	Config domain.UpstreamConfig `json:"config"`
-	// CredentialEnc 为加密后的鉴权凭证字节；无凭证时为 nil（JSON 中编码为 base64）。
-	CredentialEnc []byte `json:"credentialEnc,omitempty"`
 }
 
 // APIKeyEntry 为单个 API Key 元数据及其从属配置的备份条目。

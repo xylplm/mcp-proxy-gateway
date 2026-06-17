@@ -199,12 +199,11 @@ func (c *dialedConn) Close() error {
 //
 // 它优先复用 sessionDialer 注册表中已建立的会话（连接可用时零额外开销）；若该上游
 // 当前无活跃会话，则依据其持久化配置临时建立一条会话拉取后立即关闭，以支持「缓存缺失
-// 触发一次拉取」等场景（Req 6.3）。凭证解密由注入的 decryptConfig 完成。
+// 触发一次拉取」等场景（Req 6.3）。凭证明文随持久化配置直接携带，无需解密。
 type toolFetcher struct {
-	dialer        *sessionDialer
-	factory       transport.TransportFactory
-	repo          *store.UpstreamRepo
-	decryptConfig func(row store.UpstreamRow) (domain.UpstreamConfig, error)
+	dialer  *sessionDialer
+	factory transport.TransportFactory
+	repo    *store.UpstreamRepo
 }
 
 func (f *toolFetcher) FetchTools(ctx context.Context, upstreamID string) ([]domain.ToolDef, error) {
@@ -218,11 +217,7 @@ func (f *toolFetcher) FetchTools(ctx context.Context, upstreamID string) ([]doma
 	if err != nil {
 		return nil, err
 	}
-	cfg, err := f.decryptConfig(*row)
-	if err != nil {
-		return nil, err
-	}
-	sess, err := f.factory.NewSession(cfg)
+	sess, err := f.factory.NewSession(row.Config)
 	if err != nil {
 		return nil, err
 	}

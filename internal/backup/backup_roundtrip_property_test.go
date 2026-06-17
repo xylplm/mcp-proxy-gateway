@@ -187,17 +187,21 @@ func genValidBusinessConfig(t *rapid.T) BusinessConfig {
 	for i := 0; i < nUp; i++ {
 		upID := fmt.Sprintf("upstream-%d-%s", i, genNonEmptyToken(t, fmt.Sprintf("upID%d", i)))
 		upstreamIDs = append(upstreamIDs, upID)
+		var credential string
+		if rapid.Bool().Draw(t, fmt.Sprintf("upCred%d_present", i)) {
+			credential = genNonEmptyToken(t, fmt.Sprintf("upCred%d", i))
+		}
 		entry := UpstreamEntry{
 			ID: upID,
 			Config: domain.UpstreamConfig{
 				Name:       genNonEmptyToken(t, fmt.Sprintf("upName%d", i)),
 				Transport:  rapid.SampledFrom(validTransports).Draw(t, fmt.Sprintf("upTransport%d", i)),
 				ConnParams: genConnParams(t, fmt.Sprintf("upConn%d", i)),
+				Credential: credential,
 				Enabled:    rapid.Bool().Draw(t, fmt.Sprintf("upEnabled%d", i)),
 				SortOrder:  rapid.IntRange(0, 100).Draw(t, fmt.Sprintf("upSort%d", i)),
 				AutoSync:   rapid.Bool().Draw(t, fmt.Sprintf("upAutoSync%d", i)),
 			},
-			CredentialEnc: genOptionalBytes(t, fmt.Sprintf("upCred%d", i)),
 		}
 		bc.Upstreams = append(bc.Upstreams, entry)
 	}

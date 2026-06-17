@@ -6,8 +6,8 @@
  *   `/api/admin/auth/change-password`；二者均复用全局 Axios 实例（`@/api/request`，
  *   baseURL=`/api/admin`），自动注入 JWT 并处理 401（Req 17.6）。
  * - 后端 GET /settings 返回 `{ settings: YAMLConfig }`，其中管理员凭证（用户名/哈希）
- *   已被清空，仅保留 `admin.initialized` 标志；PUT /settings 接收完整 YAMLConfig（沿用
- *   既有管理员凭证，本端点不参与改密）。请求/响应的 JSON 形状直接对应后端 YAMLConfig
+ *   与 JWT 签名密钥已被清空，仅保留 `admin.initialized` 标志；PUT /settings 接收完整
+ *   YAMLConfig（沿用既有管理员凭证与 JWT 签名密钥，本端点不参与改密或密钥轮换）。请求/响应的 JSON 形状直接对应后端 YAMLConfig
  *   的 `yaml` 标签（snake_case 键名）。
  * - 改密走专用端点 POST /auth/change-password（相对 baseURL，即
  *   `/api/admin/auth/change-password`），请求体为 `{ currentPassword, newPassword }`。
@@ -126,6 +126,8 @@ export interface XiaoZhiConfig {
 export interface YAMLConfig {
   server: ServerConfig
   admin: AdminConfig
+  /** JWT 签名密钥；GET 时为空，PUT 时后端会强制沿用已保存值，前端不应修改。 */
+  jwt_secret?: string
   auth: AuthConfig
   sync: SyncConfig
   connection: ConnectionConfig

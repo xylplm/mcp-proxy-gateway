@@ -13,7 +13,7 @@ CREATE TABLE upstream_mcp (
     name           VARCHAR(100) NOT NULL UNIQUE,          -- 名称唯一（Req 2.7）
     transport      VARCHAR(32)  NOT NULL,                 -- stdio|sse|streamable-http|websocket
     conn_params    JSONB        NOT NULL,                 -- 传输相关连接参数
-    credential_enc BYTEA,                                 -- 加密后的鉴权凭证（Req 19）
+    credential     TEXT         NOT NULL DEFAULT '',      -- 鉴权凭证明文（自部署场景，便于编辑回显与复制）
     enabled        BOOLEAN      NOT NULL DEFAULT true,
     sort_order     INTEGER      NOT NULL,                 -- 排序（Req 3.4）
     auto_sync      BOOLEAN      NOT NULL DEFAULT false,   -- 自动同步开关（Req 7）

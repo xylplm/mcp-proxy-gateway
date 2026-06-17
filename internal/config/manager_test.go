@@ -16,7 +16,6 @@ func setRequiredEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("MPG_PG_DSN", "postgres://user:pass@localhost:5432/mpg?sslmode=disable")
 	t.Setenv("MPG_REDIS_ADDR", "localhost:6379")
-	t.Setenv("MPG_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
 }
 
 // asAPIError 将 error 断言为 *domain.APIError，失败则终止用例。
@@ -105,8 +104,7 @@ func TestLoadEnvConfigFailsWhenRequiredMissing(t *testing.T) {
 }
 
 // TestLoadFailsWhenRequiredEnvMissing 验证必需环境变量缺失时 Load 直接返回错误并终止，
-// 不会创建任何配置文件（Req 18.3）。注：MPG_ENCRYPTION_KEY 已改为可选（缺失时回退到内置默认密钥），
-// 故此处用 MPG_PG_DSN 验证「真正必需」的环境变量缺失即触发早失败。
+// 不会创建任何配置文件（Req 18.3）。此处用 MPG_PG_DSN 验证必需环境变量缺失即触发早失败。
 func TestLoadFailsWhenRequiredEnvMissing(t *testing.T) {
 	setRequiredEnv(t)
 	t.Setenv("MPG_PG_DSN", "")
@@ -212,7 +210,7 @@ func TestLoadEnvConfigSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadEnvConfig 不应返回错误：%v", err)
 	}
-	if cfg.PGDSN == "" || cfg.RedisAddr == "" || cfg.EncryptionKey == "" {
+	if cfg.PGDSN == "" || cfg.RedisAddr == "" {
 		t.Errorf("必需字段不应为空：%+v", cfg)
 	}
 	if cfg.DataDir != "/data" {

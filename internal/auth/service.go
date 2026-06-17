@@ -54,7 +54,7 @@ type Claims struct {
 type Service struct {
 	// store 为配置存储，承载管理员凭证与会话超时配置。
 	store ConfigStore
-	// signingKey 为 JWT（HMAC-SHA256）签名密钥；来自环境注入的密钥材料。
+	// signingKey 为 JWT（HMAC-SHA256）签名密钥；启动期从 config.yaml 的 jwt_secret 读取。
 	signingKey []byte
 	// now 返回当前时间，便于在测试中注入可控时钟。
 	now func() time.Time

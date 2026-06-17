@@ -36,7 +36,6 @@ MCP Proxy Gateway（MCP 桥接代理网关）是一个通用的 MCP（Model Cont
 - **Tailwind CSS（Tailwind_CSS）**：基于原子化工具类（utility classes）的 CSS 框架，作为前端管理界面的样式基础。
 - **健康检查服务（Health_Service）**：负责暴露系统与连接健康状态的组件。
 - **审计日志服务（Audit_Service）**：负责记录管理操作与关键事件的组件。
-- **加密服务（Encryption_Service）**：负责对存储的敏感凭证进行加密与解密的组件。
 - **快捷模板（Quick_Template）**：用于快速添加常用第三方 MCP 服务的预设配置模板。
 - **模板市场（Template_Market）**：提供分类化、可检索的内置快捷模板集合，供管理员快速浏览并接入常用第三方 MCP 服务的组件。
 - **快捷模板分类（Template_Category）**：用于对快捷模板进行归类的维度（如搜索、开发工具、数据库与存储等）。

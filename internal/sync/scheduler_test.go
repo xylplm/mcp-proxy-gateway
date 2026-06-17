@@ -241,7 +241,6 @@ func newTestConfigManager(t *testing.T) *config.Manager {
 	// 设置必需环境变量为合法值；t.Setenv 会在用例结束后自动恢复。
 	t.Setenv("MPG_PG_DSN", "postgres://user:pass@localhost:5432/mpg?sslmode=disable")
 	t.Setenv("MPG_REDIS_ADDR", "localhost:6379")
-	t.Setenv("MPG_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
 
 	dataDir := t.TempDir()
 	mgr, err := config.Load(nil, dataDir)

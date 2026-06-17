@@ -50,11 +50,11 @@ func sampleBusiness() BusinessConfig {
 					Name:       "demo-upstream",
 					Transport:  domain.TransportSSE,
 					ConnParams: map[string]any{"url": "https://example.com/sse"},
+					Credential: "plain-credential",
 					Enabled:    true,
 					SortOrder:  0,
 					AutoSync:   true,
 				},
-				CredentialEnc: []byte{0x01, 0x02, 0x03},
 			},
 		},
 		AliasRules: []domain.AliasRule{

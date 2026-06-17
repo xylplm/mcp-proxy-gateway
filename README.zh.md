@@ -57,7 +57,7 @@
 - **多维统计与审计**：按上游 / 工具 / API Key 维度统计调用量与排行，关键管理操作与登录留痕审计，均支持保留期清理。
 - **小智 AI 接入**：作为出站 WebSocket 客户端连接小智远程 MCP 接入点，将聚合能力提供给语音终端。
 - **响应式管理界面**：基于 Tailwind CSS，覆盖手机 / 平板 / PC / 宽屏 / 4K 五档断点。
-- **安全默认**：上游凭证 AES-GCM 加密存储、管理员密码 bcrypt 加盐哈希、两套鉴权中间件链（管理面 JWT 与对外面 API Key）完全隔离。
+- **自部署友好**：上游凭证明文存储，便于在自己的部署环境中查看和编辑；管理员密码 bcrypt 加盐哈希；管理面 JWT 与对外面 API Key 两套鉴权中间件链完全隔离。
 
 ## 🧱 技术栈
 
@@ -91,8 +91,6 @@ services:
       MPG_PG_DSN: "postgres://mpg:mpg_password@postgres:5432/mpg?sslmode=disable"
       MPG_REDIS_ADDR: "redis:6379"
       MPG_REDIS_PASSWORD: ""
-      # 32 字节密钥用于 AES-256。可用 `openssl rand -hex 32` 生成（64 个十六进制字符）
-      MPG_ENCRYPTION_KEY: "请替换为你自己的 32 字节随机密钥"
       MPG_DATA_DIR: "/data"
     volumes:
       - mpg_data:/data
@@ -138,7 +136,6 @@ docker run -d --name mcp-proxy-gateway \
   -e MPG_PG_DSN="postgres://用户:密码@主机:5432/库名?sslmode=disable" \
   -e MPG_REDIS_ADDR="主机:6379" \
   -e MPG_REDIS_PASSWORD="" \
-  -e MPG_ENCRYPTION_KEY="$(openssl rand -hex 32)" \
   -v mpg_data:/data \
   xylplm/mcp-proxy-gateway:latest
 ```
@@ -164,24 +161,16 @@ docker pull xylplm/mcp-proxy-gateway:1.0.202606071302
 
 ## ⚙️ 环境变量
 
-数据库、Redis 连接与加密主密钥通过**环境变量**注入（不写入 YAML），其余常规配置保存在 `/data` 下的 YAML 文件，并可在管理界面的「系统设置」中修改。
+数据库、Redis 连接通过**环境变量**注入，其余常规配置保存在 `/data` 下的 YAML 文件，并可在管理界面的「系统设置」中修改。JWT 签名密钥会在首次启动时自动生成并写入 `config.yaml`。
 
 | 变量 | 必需 | 默认值 | 说明 |
 |------|:----:|--------|------|
 | `MPG_PG_DSN` | ✅ | — | PostgreSQL 连接串，如 `postgres://用户:密码@主机:5432/库名?sslmode=disable` |
 | `MPG_REDIS_ADDR` | ✅ | — | Redis 地址，如 `主机:6379` |
 | `MPG_REDIS_PASSWORD` | ❌ | 空 | Redis 密码，无密码留空 |
-| `MPG_ENCRYPTION_KEY` | ✅ | — | AES-GCM 主密钥，解码后须为 **16 / 24 / 32 字节**（推荐 32 字节即 AES-256）。支持原始字节 / 十六进制 / base64 三种书写形式 |
 | `MPG_DATA_DIR` | ❌ | `/data` | 数据目录路径，存放 YAML 配置与本地持久化数据 |
 
-生成加密密钥的常用方式：
-
-```bash
-openssl rand -hex 32      # 64 个十六进制字符 → 解码为 32 字节
-openssl rand -base64 32   # 44 个 base64 字符 → 解码为 32 字节
-```
-
-> 必需环境变量缺失或无效、YAML 非法、加密密钥无效时，进程会在启动日志中记录错误并**终止启动**（fail-fast）。
+> 必需环境变量缺失或无效、YAML 非法时，进程会在启动日志中记录错误并**终止启动**（fail-fast）。
 
 ### 服务端口
 
@@ -236,10 +225,9 @@ docker run -d --name mpg-redis -p 6379:6379 redis:7-alpine
 
 ```bash
 # 配置必需环境变量（PowerShell 示例）
-$env:MPG_PG_DSN         = "postgres://mpg:mpg_password@localhost:5432/mpg?sslmode=disable"
-$env:MPG_REDIS_ADDR     = "localhost:6379"
-$env:MPG_ENCRYPTION_KEY = "0123456789abcdef0123456789abcdef"  # 32 字节示例，请勿用于生产
-$env:MPG_DATA_DIR       = "./data"
+$env:MPG_PG_DSN     = "postgres://mpg:mpg_password@localhost:5432/mpg?sslmode=disable"
+$env:MPG_REDIS_ADDR = "localhost:6379"
+$env:MPG_DATA_DIR   = "./data"
 
 # 运行网关（开发态前端可单独热更，见下）
 go run ./cmd/gateway
@@ -283,7 +271,6 @@ mcp-proxy-gateway/
 │   ├── app/                # 主程序装配：组件接线、路由分面、启停
 │   ├── config/             # 配置管理（环境变量 + YAML）
 │   ├── store/              # 仓储层、连接池、数据库迁移
-│   ├── crypto/             # 加密服务（AES-GCM）
 │   ├── domain/             # 领域核心：类型、规则引擎、统一错误模型
 │   ├── aggregation/        # 聚合服务（确定性管线 + 调用路由）
 │   ├── transport/          # 传输适配层（stdio/SSE/HTTP/WebSocket）

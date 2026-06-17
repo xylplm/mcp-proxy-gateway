@@ -52,8 +52,9 @@ func (f *fakeSettingsRuntime) RequestRestart() {
 
 func TestGetSettingsHidesAdminCredentials(t *testing.T) {
 	s := &fakeSettings{cfg: config.YAMLConfig{
-		Admin: config.AdminConfig{Username: "admin", PasswordHash: "secret-hash", Initialized: true},
-		Sync:  config.SyncConfig{Cron: "0 */30 * * * *", TimeoutS: 30},
+		Admin:     config.AdminConfig{Username: "admin", PasswordHash: "secret-hash", Initialized: true},
+		JWTSecret: "jwt-secret",
+		Sync:      config.SyncConfig{Cron: "0 */30 * * * *", TimeoutS: 30},
 	}}
 	e := newTestEngine(Deps{Settings: s})
 
@@ -68,6 +69,9 @@ func TestGetSettingsHidesAdminCredentials(t *testing.T) {
 	}
 	if !got.Settings.Admin.Initialized {
 		t.Errorf("应保留初始化标志")
+	}
+	if got.Settings.JWTSecret != "" {
+		t.Errorf("读取设置不应泄露 JWT 签名密钥，实际 %q", got.Settings.JWTSecret)
 	}
 	if got.Settings.Sync.Cron != "0 */30 * * * *" {
 		t.Errorf("常规配置应正常返回，实际 cron=%q", got.Settings.Sync.Cron)
@@ -99,7 +103,8 @@ func TestGetSettingsReturnsRuntimeServerConfig(t *testing.T) {
 
 func TestUpdateSettingsValidCron(t *testing.T) {
 	s := &fakeSettings{cfg: config.YAMLConfig{
-		Admin: config.AdminConfig{Username: "admin", PasswordHash: "keep-hash", Initialized: true},
+		Admin:     config.AdminConfig{Username: "admin", PasswordHash: "keep-hash", Initialized: true},
+		JWTSecret: "keep-jwt-secret",
 	}}
 	cronCalled := false
 	validateCron := func(expr string) error { cronCalled = true; return nil }
@@ -113,9 +118,12 @@ func TestUpdateSettingsValidCron(t *testing.T) {
 	if !cronCalled {
 		t.Errorf("应对 cron 表达式做专项校验")
 	}
-	// 管理员凭证须沿用既有值，不被设置写入篡改。
+	// 管理员凭证与 JWT 签名密钥须沿用既有值，不被设置写入篡改。
 	if s.saved.Admin.PasswordHash != "keep-hash" || s.saved.Admin.Username != "admin" {
 		t.Errorf("更新设置不应改动管理员凭证：%+v", s.saved.Admin)
+	}
+	if s.saved.JWTSecret != "keep-jwt-secret" {
+		t.Errorf("更新设置不应改动 JWT 签名密钥，实际 %q", s.saved.JWTSecret)
 	}
 	if s.saved.Sync.Cron != "0 0 * * * *" {
 		t.Errorf("期望写入 cron=0 0 * * * *，实际 %q", s.saved.Sync.Cron)

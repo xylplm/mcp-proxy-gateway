@@ -17,8 +17,9 @@ import (
 // 再交由配置管理器（config.Manager.Save）做字段范围校验与原子落盘（Req 18.4）。
 // 字段范围校验（会话超时、各超时、模式枚举、保留期等）由配置层统一强制，本层仅接线。
 //
-// 安全：常规配置含管理员凭证哈希（Admin.PasswordHash）。读取与写入均不经由本端点暴露
-// 或改动管理员凭证——读取时清空敏感字段，写入时沿用既有管理员配置，避免越权改密或泄露哈希。
+// 安全：常规配置含管理员凭证哈希（Admin.PasswordHash）与 JWT 签名密钥（JWTSecret）。
+// 读取与写入均不经由本端点暴露或改动这些敏感字段——读取时清空敏感字段，写入时沿用
+// 既有管理员配置与 JWTSecret，避免越权改密、泄露哈希或意外轮换登录密钥。
 
 // settingsResponse 为系统设置的对外视图。
 //
@@ -68,8 +69,10 @@ func (r *Router) updateSettings(c *gin.Context) {
 	if !bindJSON(c, &req) {
 		return
 	}
-	// 沿用既有管理员凭证，本端点不参与改密，杜绝凭证经设置写入被篡改（Req 1.8 走专用端点）。
-	req.Admin = r.settings.Config().Admin
+	// 沿用既有管理员凭证与 JWT 签名密钥，本端点不参与改密或密钥轮换，杜绝敏感配置经设置写入被篡改。
+	current := r.settings.Config()
+	req.Admin = current.Admin
+	req.JWTSecret = current.JWTSecret
 
 	// 同步 cron 专项校验：非法表达式返回字段级 VALIDATION 且不持久化（Req 7.3、7.4）。
 	if r.validateCron != nil {
@@ -100,6 +103,7 @@ func (r *Router) updateSettings(c *gin.Context) {
 
 func (r *Router) settingsView(cfg config.YAMLConfig) settingsResponse {
 	cfg.Admin = config.AdminConfig{Initialized: cfg.Admin.Initialized}
+	cfg.JWTSecret = ""
 	runtimeServer := cfg.Server
 	if r.settingsRuntime != nil {
 		runtimeServer = r.settingsRuntime.RuntimeServerConfig()

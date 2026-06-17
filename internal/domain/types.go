@@ -71,8 +71,9 @@ type UpstreamConfig struct {
 	Transport TransportType `json:"transport"`
 	// ConnParams 为传输类型相关的连接参数。
 	ConnParams map[string]any `json:"connParams"`
-	// Credential 为鉴权凭证明文，仅存在于内存中；持久化前由加密服务加密。
-	Credential string `json:"-"`
+	// Credential 为鉴权凭证明文。自部署场景下明文存储，便于在管理台编辑回显与复制；
+	// 仅在内存与持久层流转，连接拨号时直接使用。
+	Credential string `json:"credential"`
 	// Enabled 表示该上游是否启用并参与聚合。
 	Enabled bool `json:"enabled"`
 	// SortOrder 为该上游在列表与聚合中的排序顺序。

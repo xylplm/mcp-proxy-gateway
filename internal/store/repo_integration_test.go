@@ -102,7 +102,8 @@ func TestUpstreamRepoCRUD(t *testing.T) {
 	// Create：持久化配置并回填标识与时间戳。
 	cfg := sampleUpstreamConfig("crud-upstream")
 	cfg.Tags = []string{"生产", "搜索"}
-	created, err := repos.Upstream.Create(ctx, cfg, []byte("enc-credential"))
+	cfg.Credential = "plain-credential"
+	created, err := repos.Upstream.Create(ctx, cfg)
 	if err != nil {
 		t.Fatalf("创建上游失败: %v", err)
 	}
@@ -112,11 +113,11 @@ func TestUpstreamRepoCRUD(t *testing.T) {
 	if created.CreatedAt.IsZero() || created.UpdatedAt.IsZero() {
 		t.Fatal("创建后应回填创建/更新时间戳")
 	}
-	if created.Config.Credential != "" {
-		t.Fatal("响应不应返回明文凭证")
+	if created.Config.Credential != "plain-credential" {
+		t.Fatalf("响应应回显明文凭证，实际 %q", created.Config.Credential)
 	}
 
-	// Get：按标识读回，核对关键字段与密文凭证。
+	// Get：按标识读回，核对关键字段与明文凭证。
 	got, err := repos.Upstream.Get(ctx, created.ID)
 	if err != nil {
 		t.Fatalf("查询上游失败: %v", err)
@@ -130,8 +131,8 @@ func TestUpstreamRepoCRUD(t *testing.T) {
 	if !reflect.DeepEqual(got.Config.Tags, []string{"生产", "搜索"}) {
 		t.Errorf("标签未正确持久化，实际 %v", got.Config.Tags)
 	}
-	if string(got.CredentialEnc) != "enc-credential" {
-		t.Errorf("密文凭证应原样持久化，实际 %q", string(got.CredentialEnc))
+	if got.Config.Credential != "plain-credential" {
+		t.Errorf("明文凭证应原样持久化，实际 %q", got.Config.Credential)
 	}
 	if url, _ := got.Config.ConnParams["url"].(string); url != "https://example.com/mcp" {
 		t.Errorf("连接参数未正确持久化，实际 %v", got.Config.ConnParams)
@@ -146,13 +147,14 @@ func TestUpstreamRepoCRUD(t *testing.T) {
 		t.Fatalf("期望 1 条记录，实际 %d 条", len(list))
 	}
 
-	// Update：更新可变字段并刷新 updated_at。
+	// Update：更新可变字段并刷新 updated_at；凭证随 cfg.Credential 整体覆盖。
 	updatedCfg := got.Config
 	updatedCfg.Name = "crud-upstream-renamed"
 	updatedCfg.Tags = []string{"生产", "向量"}
 	updatedCfg.Enabled = false
 	updatedCfg.SortOrder = 5
-	updated, err := repos.Upstream.Update(ctx, created.ID, updatedCfg, []byte("enc-credential-2"))
+	updatedCfg.Credential = "plain-credential-2"
+	updated, err := repos.Upstream.Update(ctx, created.ID, updatedCfg)
 	if err != nil {
 		t.Fatalf("更新上游失败: %v", err)
 	}
@@ -170,25 +172,23 @@ func TestUpstreamRepoCRUD(t *testing.T) {
 	if !reflect.DeepEqual(reGot.Config.Tags, []string{"生产", "向量"}) {
 		t.Errorf("更新后标签未生效，实际 %v", reGot.Config.Tags)
 	}
-	if string(reGot.CredentialEnc) != "enc-credential-2" {
-		t.Errorf("更新后密文凭证未生效，实际 %q", string(reGot.CredentialEnc))
+	if reGot.Config.Credential != "plain-credential-2" {
+		t.Errorf("更新后明文凭证未生效，实际 %q", reGot.Config.Credential)
 	}
 
-	preserveCfg := reGot.Config
-	preserveCfg.Name = "crud-upstream-preserve"
-	preserved, err := repos.Upstream.Update(ctx, created.ID, preserveCfg, nil)
+	// Update：清空凭证应整体覆盖为空字符串。
+	emptyCredCfg := reGot.Config
+	emptyCredCfg.Name = "crud-upstream-empty-cred"
+	emptyCredCfg.Credential = ""
+	if _, err := repos.Upstream.Update(ctx, created.ID, emptyCredCfg); err != nil {
+		t.Fatalf("清空凭证更新失败: %v", err)
+	}
+	emptyGot, err := repos.Upstream.Get(ctx, created.ID)
 	if err != nil {
-		t.Fatalf("保留凭证更新失败: %v", err)
+		t.Fatalf("清空凭证后查询失败: %v", err)
 	}
-	if string(preserved.CredentialEnc) != "enc-credential-2" {
-		t.Errorf("nil 密文更新应保留原凭证，返回值实际 %q", string(preserved.CredentialEnc))
-	}
-	preservedGot, err := repos.Upstream.Get(ctx, created.ID)
-	if err != nil {
-		t.Fatalf("保留凭证后查询失败: %v", err)
-	}
-	if string(preservedGot.CredentialEnc) != "enc-credential-2" {
-		t.Errorf("nil 密文更新应保留库中凭证，实际 %q", string(preservedGot.CredentialEnc))
+	if emptyGot.Config.Credential != "" {
+		t.Errorf("清空凭证后库中应无凭证，实际 %q", emptyGot.Config.Credential)
 	}
 
 	// Delete：删除后再查应得 NOT_FOUND。
@@ -206,11 +206,11 @@ func TestUpstreamRepoCRUD(t *testing.T) {
 func TestUpstreamRepoNameConflict(t *testing.T) {
 	ctx, _, repos := setupRepos(t)
 
-	if _, err := repos.Upstream.Create(ctx, sampleUpstreamConfig("dup-name"), nil); err != nil {
+	if _, err := repos.Upstream.Create(ctx, sampleUpstreamConfig("dup-name")); err != nil {
 		t.Fatalf("首次创建失败: %v", err)
 	}
 
-	_, err := repos.Upstream.Create(ctx, sampleUpstreamConfig("dup-name"), nil)
+	_, err := repos.Upstream.Create(ctx, sampleUpstreamConfig("dup-name"))
 	if err == nil {
 		t.Fatal("重名创建应返回错误")
 	}
@@ -238,7 +238,7 @@ func TestUpstreamRepoNotFound(t *testing.T) {
 		t.Errorf("Get 期望 NOT_FOUND，实际 %s", got.Code)
 	}
 
-	if _, err := repos.Upstream.Update(ctx, nonexistentUUID, sampleUpstreamConfig("ghost"), nil); err == nil {
+	if _, err := repos.Upstream.Update(ctx, nonexistentUUID, sampleUpstreamConfig("ghost")); err == nil {
 		t.Error("更新不存在记录应返回错误")
 	} else if got := asAPIError(t, err); got.Code != domain.CodeNotFound {
 		t.Errorf("Update 期望 NOT_FOUND，实际 %s", got.Code)
@@ -255,7 +255,7 @@ func TestUpstreamRepoNotFound(t *testing.T) {
 func TestUpstreamCascadeDelete(t *testing.T) {
 	ctx, _, repos := setupRepos(t)
 
-	up, err := repos.Upstream.Create(ctx, sampleUpstreamConfig("cascade-upstream"), nil)
+	up, err := repos.Upstream.Create(ctx, sampleUpstreamConfig("cascade-upstream"))
 	if err != nil {
 		t.Fatalf("创建上游失败: %v", err)
 	}

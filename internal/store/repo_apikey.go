@@ -102,7 +102,7 @@ func (r *APIKeyRepo) GetByHash(ctx context.Context, keyHash []byte) (APIKey, err
 
 // List 返回全部 API Key 元数据，按创建时间倒序排列；无数据返回空切片（Req 12.3、12.9）。
 //
-// 注意：仓储不返回明文密钥（明文从不持久化），仅返回哈希、前缀与元数据。
+// 注意：API Key 明文随 key_plain 存储并返回，便于自部署场景下查看与复制；鉴权仍使用 key_hash。
 func (r *APIKeyRepo) List(ctx context.Context) ([]APIKey, error) {
 	const q = `
 		SELECT id, name, key_hash, key_plain, key_prefix, enabled, expires_at, rate_limit, rate_window_s, created_at

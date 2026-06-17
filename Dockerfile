@@ -20,7 +20,6 @@ RUN chmod +x /mpg /entrypoint.sh
 # 必需（无有效默认值，必须在运行时通过 -e 注入；缺失或无效将导致启动失败）：
 #   MPG_PG_DSN          PostgreSQL 连接串，如 postgres://user:pass@host:5432/db?sslmode=disable
 #   MPG_REDIS_ADDR      Redis 地址，如 host:6379
-#   MPG_ENCRYPTION_KEY  AES-GCM 主密钥，解码后须为 16/24/32 字节（推荐 32 字节）
 # 可选（敏感字段通过 -e 注入，不在此声明）：
 #   MPG_REDIS_PASSWORD  Redis 密码
 #   MPG_DATA_DIR        数据目录（默认 /data）

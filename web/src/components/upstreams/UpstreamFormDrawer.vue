@@ -5,7 +5,6 @@ import {
   updateUpstream,
   TRANSPORT_OPTIONS,
   type ConnParams,
-  type CredentialAction,
   type TransportType,
   type Upstream,
   type UpstreamConfigRequest,
@@ -73,12 +72,6 @@ const stdioAuthOptions: ReadonlyArray<{ value: StdioAuthMode; label: string; des
   { value: 'custom', label: '自定义注入', desc: '在参数或高级环境变量中使用凭证占位。' },
 ]
 
-const credentialActions: ReadonlyArray<{ value: CredentialAction; label: string; desc: string }> = [
-  { value: 'keep', label: '保留当前凭证', desc: '保存其他配置，不改动已保存的 Token。' },
-  { value: 'replace', label: '替换凭证', desc: '输入新的 Token 或 API Key。' },
-  { value: 'clear', label: '清除凭证', desc: '删除已保存的凭证。' },
-]
-
 const isEdit = computed(() => props.upstream !== null)
 const fromTemplate = computed(() => props.prefill !== null && !isEdit.value)
 const currentTransport = computed(() => transportHelp[form.transport])
@@ -108,7 +101,6 @@ const form = reactive<{
   args: string
   url: string
   credential: string
-  credentialAction: CredentialAction
   remoteAuthMode: RemoteAuthMode
   stdioAuthMode: StdioAuthMode
   apiKeyHeader: string
@@ -129,7 +121,6 @@ const form = reactive<{
   args: '',
   url: '',
   credential: '',
-  credentialAction: 'replace',
   remoteAuthMode: 'none',
   stdioAuthMode: 'none',
   apiKeyHeader: 'X-API-Key',
@@ -162,8 +153,7 @@ const selectedAuthMayUseCredential = computed(() => {
 
 const shouldShowCredentialInput = computed(() => {
   if (fromTemplate.value) return false
-  if (!isEdit.value) return selectedAuthMayUseCredential.value
-  return form.credentialAction === 'replace' && selectedAuthMayUseCredential.value
+  return selectedAuthMayUseCredential.value
 })
 
 function clearErrors(): void {
@@ -224,7 +214,6 @@ function resetManualFields(): void {
   form.args = ''
   form.url = ''
   form.credential = ''
-  form.credentialAction = isEdit.value ? 'keep' : 'replace'
   form.remoteAuthMode = 'none'
   form.stdioAuthMode = 'none'
   form.apiKeyHeader = 'X-API-Key'
@@ -379,7 +368,7 @@ function resetForm(): void {
     form.command = typeof cfg.connParams.command === 'string' ? cfg.connParams.command : ''
     form.args = Array.isArray(cfg.connParams.args) ? cfg.connParams.args.join('\n') : ''
     form.url = typeof cfg.connParams.url === 'string' ? cfg.connParams.url : ''
-    form.credentialAction = 'keep'
+    form.credential = cfg.credential ?? ''
     applyDetectedAuth(headers, env)
     form.headersText = formatKeyValues(headers, ':')
     form.envText = formatKeyValues(env, '=')
@@ -617,31 +606,8 @@ function validateCredential(connParams: ConnParams, credential: string): boolean
   const usesCredential = hasCredentialReference(connParams)
   const credentialValue = credential.trim()
 
-  if (!isEdit.value) {
-    if (usesCredential && credentialValue === '') {
-      fieldErrors.credential = '请输入 Token 或 API Key'
-      return false
-    }
-    if (!usesCredential && credentialValue !== '') {
-      fieldErrors.credential = `当前参数未使用 ${credentialPlaceholder}，请选择认证方式或移除凭证`
-      return false
-    }
-    return true
-  }
-
-  if (form.credentialAction === 'replace') {
-    if (credentialValue === '') {
-      fieldErrors.credential = '请输入新凭证，或选择保留当前凭证'
-      return false
-    }
-    if (!usesCredential) {
-      fieldErrors.credentialAction = `当前参数未使用 ${credentialPlaceholder}，无法替换凭证`
-      return false
-    }
-  }
-  if (form.credentialAction === 'clear' && usesCredential) {
-    fieldErrors.credentialAction =
-      '当前配置仍会使用凭证，请先改为无需认证或移除高级参数里的凭证占位'
+  if (usesCredential && credentialValue === '') {
+    fieldErrors.credential = '请输入 Token 或 API Key'
     return false
   }
   return true
@@ -694,10 +660,7 @@ function buildPayload(): UpstreamConfigRequest | null {
     autoSync: form.autoSync,
   }
 
-  if (isEdit.value) {
-    payload.credentialAction = form.credentialAction
-  }
-  if (credential !== '' && hasCredentialReference(connParams)) {
+  if (hasCredentialReference(connParams)) {
     payload.credential = credential
   }
   return payload
@@ -1106,34 +1069,6 @@ const errorClass = 'mt-1.5 text-xs text-error-500'
                   </p>
                 </div>
 
-                <div v-if="isEdit" class="space-y-2">
-                  <span :class="labelClass" class="mb-0">保存时如何处理已保存的凭证</span>
-                  <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                    <label
-                      v-for="item in credentialActions"
-                      :key="item.value"
-                      :class="authOptionClass(form.credentialAction === item.value)"
-                    >
-                      <input
-                        v-model="form.credentialAction"
-                        class="sr-only"
-                        type="radio"
-                        :value="item.value"
-                      />
-                      <span class="min-w-0 flex-1">
-                        <span class="block text-sm font-medium">{{ item.label }}</span>
-                        <span
-                          class="mt-1 block text-xs leading-5 text-gray-500 dark:text-gray-400"
-                          >{{ item.desc }}</span
-                        >
-                      </span>
-                    </label>
-                  </div>
-                  <p v-if="fieldErrors.credentialAction" :class="errorClass">
-                    {{ fieldErrors.credentialAction }}
-                  </p>
-                </div>
-
                 <div v-if="shouldShowCredentialInput" class="max-w-xl">
                   <label for="up-credential" :class="labelClass">
                     Token / API Key（${credential} 的值）
@@ -1141,13 +1076,13 @@ const errorClass = 'mt-1.5 text-xs text-error-500'
                   <input
                     id="up-credential"
                     v-model="form.credential"
-                    type="password"
-                    autocomplete="new-password"
+                    type="text"
+                    autocomplete="off"
                     :class="inputClass"
                     placeholder="粘贴第三方服务提供的凭证"
                   />
                   <p :class="helpClass">
-                    连接参数里的 ${credential} 会在实际连接时替换成这里填写或已保存的凭证。
+                    连接参数里的 ${credential} 会在实际连接时替换成这里填写的凭证。
                   </p>
                   <p v-if="fieldErrors.credential" :class="errorClass">
                     {{ fieldErrors.credential }}

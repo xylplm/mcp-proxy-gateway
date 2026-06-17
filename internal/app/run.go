@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -283,15 +282,6 @@ func (a *App) shutdown() {
 		a.logger.Warn("释放基础设施连接时出错", "error", err)
 	}
 	a.logger.Info("已完成优雅停机")
-}
-
-// signingKey 由加密主密钥材料派生出 JWT 签名密钥（HMAC-SHA256）。
-//
-// 取主密钥字符串的 SHA-256 摘要作为签名密钥，使签名密钥不直接等同于加密密钥，
-// 又无需引入额外的环境变量；进程重启后由相同主密钥派生的签名密钥保持稳定。
-func signingKey(encryptionKey string) []byte {
-	sum := sha256.Sum256([]byte("mpg-jwt:" + encryptionKey))
-	return sum[:]
 }
 
 // probeXiaoZhi 探测小智接入点连通性：尝试建立一次 WebSocket 连接后立即关闭（Req 20.5）。

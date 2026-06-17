@@ -4,7 +4,7 @@
  * 设计要点（对应 design.md「路由分面」与 Req 2.1、3.1、3.4、5.6、6.4、14.x）：
  * - 全部端点挂载于管理前缀 `/api/admin/upstreams`（见 internal/httpapi/upstream.go）；
  * - 复用全局 Axios 实例（`@/api/request`），自动注入 JWT 并处理 401（Req 17.6）；
- * - 凭证（credential）仅作为入参提交，后端响应绝不回显明文（Req 19.3），故响应类型不含该字段。
+ * - 凭证（credential）以明文存储，创建/更新入参与列表/详情响应均携带明文，便于编辑回显。
  *
  * 后端真实路由（已实现）：
  *   GET    /upstreams              列出全部上游及连接状态
@@ -22,7 +22,6 @@ import type { ToolDef } from '@/api/tools'
 
 /** 上游 MCP 传输类型，与后端 domain.TransportType 对齐。 */
 export type TransportType = 'stdio' | 'sse' | 'streamable-http' | 'websocket'
-export type CredentialAction = 'keep' | 'replace' | 'clear'
 
 /** 上游连接状态，与后端 domain.ConnState 对齐。 */
 export type ConnState = 'connecting' | 'available' | 'unavailable' | 'suspended'
@@ -61,7 +60,7 @@ export interface ConnParams {
 
 /**
  * 创建/更新上游的请求体，与后端 upstreamConfigRequest 对齐。
- * credential 为凭证明文，仅入参，后端持久化前加密、响应不回显。
+ * credential 为鉴权凭证明文，明文存储，入参与响应均携带。
  */
 export interface UpstreamConfigRequest {
   /** 服务名称，长度 1-100。 */
@@ -72,10 +71,8 @@ export interface UpstreamConfigRequest {
   transport: TransportType
   /** 传输相关连接参数。 */
   connParams: ConnParams
-  /** 鉴权凭证明文（可选，仅入参不回显）。 */
+  /** 鉴权凭证明文（明文存储；编辑时直接回显并整体覆盖）。 */
   credential?: string
-  /** 更新时如何处理已保存的鉴权凭证；创建时忽略。 */
-  credentialAction?: CredentialAction
   /** 是否启用并参与聚合。 */
   enabled: boolean
   /** 排序顺序。 */
@@ -84,12 +81,14 @@ export interface UpstreamConfigRequest {
   autoSync: boolean
 }
 
-/** 上游配置（响应内嵌，不含凭证明文）。 */
+/** 上游配置（响应内嵌；凭证明文随 credential 字段回显，便于编辑回填）。 */
 export interface UpstreamConfig {
   name: string
   tags?: string[]
   transport: TransportType
   connParams: ConnParams
+  /** 鉴权凭证明文，由后端原样回显，供编辑时回填。 */
+  credential?: string
   enabled: boolean
   sortOrder: number
   autoSync: boolean

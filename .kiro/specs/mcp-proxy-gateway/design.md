@@ -16,7 +16,7 @@ MCP Proxy Gateway 是一个单进程的 MCP 聚合与代理网关：对内通过
 
 ### 关键术语映射
 
-设计中的组件名严格对应需求 Glossary：`Transport_Adapter`（传输适配层）、`MCP_Manager`（连接管理器）、`Sync_Service`（同步服务）、`Tool_Cache`（工具缓存）、`Rule_Engine`（规则引擎）、`Aggregation_Service`（聚合服务）、`MCP_API_Service`（对外 MCP API 服务）、`ApiKey_Manager`、`Statistics_Service`、`XiaoZhi_Connector`、`Auth_Service`、`Config_Manager`、`Static_Server`、`Health_Service`、`Audit_Service`、`Encryption_Service`、`Template_Market`。
+设计中的组件名严格对应需求 Glossary：`Transport_Adapter`（传输适配层）、`MCP_Manager`（连接管理器）、`Sync_Service`（同步服务）、`Tool_Cache`（工具缓存）、`Rule_Engine`（规则引擎）、`Aggregation_Service`（聚合服务）、`MCP_API_Service`（对外 MCP API 服务）、`ApiKey_Manager`、`Statistics_Service`、`XiaoZhi_Connector`、`Auth_Service`、`Config_Manager`、`Static_Server`、`Health_Service`、`Audit_Service`、`Template_Market`。
 
 ## Architecture
 
@@ -52,7 +52,6 @@ graph TB
 
     subgraph Outbound["出站适配层"]
         Trans[Transport_Adapter<br/>stdio/SSE/HTTP/WS]
-        Enc[Encryption_Service]
         PG[(PostgreSQL)]
         Redis[(Redis<br/>Tool_Cache/限流)]
     end
@@ -102,7 +101,7 @@ graph TB
 | 数据库迁移 | `golang-migrate/migrate` | 版本化 schema 迁移，启动时自动执行，保证升级平滑 |
 | Redis 客户端 | `github.com/redis/go-redis/v9` | 工具缓存、限流计数窗口、统计异步缓冲 |
 | JWT | `github.com/golang-jwt/jwt/v5` | 管理员会话令牌签发与校验（Req 1） |
-| 加密 | 标准库 `crypto/aes` + GCM 模式 | 上游凭证加密存储（Req 19）；密钥来自环境变量 |
+| 凭证存储 | PostgreSQL 明文列 | 自部署场景下上游凭证明文存储，便于编辑回显与复制（Req 19） |
 | 配置 | `gopkg.in/yaml.v3` + `caarlos0/env` | YAML 常规配置 + 环境变量读取（Req 18） |
 | 密码哈希 | `golang.org/x/crypto/bcrypt` | 管理员密码加盐哈希（Req 1） |
 | 日志 | 标准库 `log/slog` | 结构化启动连通性日志与审计（Req 20） |
@@ -170,8 +169,6 @@ graph TB
 ### 出站适配组件
 
 - **Transport_Adapter（传输适配层）**：屏蔽 stdio/SSE/Streamable-HTTP/WebSocket 差异，向上提供统一的 MCP 客户端会话（初始化、`tools/list`、`tools/call`、关闭）。负责按传输类型校验必填连接参数、携带鉴权凭证、连接建立超时控制（Req 4）。**边界**：只负责单条连接的协议收发，不负责重试与生命周期（由 MCP_Manager 编排）。**stdio 约束**：stdio 传输以子进程方式启动上游 MCP，要求网关运行环境（含容器镜像）中存在对应可执行文件与运行时；若部署在 distroless/alpine 镜像中需自备依赖，否则 stdio 类型上游不可用——此约束在部署章节再次提示。
-
-- **Encryption_Service（加密服务）**：AES-GCM 对上游鉴权凭证加解密；密钥来源于环境变量，缺失或无效则启动终止（Req 19）。**边界**：纯加解密 + 启动期密钥校验，不感知业务语义。
 
 ### 连接与同步组件
 
@@ -488,7 +485,7 @@ xiaozhi:
   endpoint: ""                  # ws:// 或 wss://（Req 15.6）
 ```
 
-**加密密钥来源**：AES-GCM 主密钥通过环境变量 `MPG_ENCRYPTION_KEY` 注入（非 YAML、非 DB），启动期校验长度与有效性，缺失/无效则终止启动（Req 19.4）。
+**JWT 密钥来源**：管理员登录 JWT 签名密钥在首次启动时随机生成并写入 `config.yaml` 的 `jwt_secret`；上游 MCP 凭证按自部署场景明文存储并在编辑时回显。
 
 ## 关键管线与算法
 
@@ -675,9 +672,9 @@ rateLimit(apiKeyID):
 
 ## 跨切面设计
 
-### 加密存储
+### 凭证存储
 
-上游鉴权凭证写库前经 `Encryption_Service` AES-GCM 加密，使用时解密（Req 19.1/19.2）。管理界面与 API 响应永不返回明文凭证完整内容（Req 19.3）。主密钥来自环境变量，启动期校验（Req 19.4）。
+上游鉴权凭证按自部署场景明文存储，管理界面编辑时直接回显并随配置整体覆盖保存（Req 19）。管理员 JWT 签名密钥在首次启动时随机生成并写入 `config.yaml`，避免所有部署共享固定密钥。
 
 ### 健康检查
 
@@ -751,7 +748,6 @@ Go 侧通过 `//go:embed dist/*` 将前端产物编译进二进制，`Static_Ser
 |----------|------|
 | `MPG_PG_DSN` | PostgreSQL 连接串（Req 18.1） |
 | `MPG_REDIS_ADDR` / `MPG_REDIS_PASSWORD` | Redis 连接（Req 18.1） |
-| `MPG_ENCRYPTION_KEY` | AES-GCM 主密钥（Req 19.4） |
 | `MPG_DATA_DIR` | data 目录路径，默认 `/data`（Req 23.1） |
 
 YAML 配置与本地持久化数据存于 `/data`；容器重建重新挂载同卷即可恢复（Req 23.2）。YAML 不存在时以默认配置创建（Req 18.5）。
@@ -879,9 +875,9 @@ jobs:
 
 **Validates: Requirements 6.1, 6.2**
 
-### Property 17: 凭证加解密往返
+### Property 17: JWT 签名密钥首次生成
 
-*For any* 上游鉴权凭证明文，加密后再解密得到与原文相同的值。
+*For any* 初始配置，当 `jwt_secret` 为空时启动期生成非空随机密钥并写回；当已有密钥时保持不变。
 
 **Validates: Requirements 19.1, 19.2**
 
@@ -1021,9 +1017,9 @@ jobs:
 
 ## 安全考量小结
 
-- **凭证保护**：上游凭证 AES-GCM 加密存储，明文永不出现在 API 响应/界面（Req 19）；API Key 仅存哈希 + 前缀（Req 12.3）；管理员密码 bcrypt 加盐哈希（Req 1）。
+- **凭证存储**：自部署场景下上游凭证明文存储并在管理界面编辑时回显，降低用户维护成本；API Key 保留哈希 + 前缀 + 明文备份列的既有策略；管理员密码 bcrypt 加盐哈希（Req 1）。
 - **两面鉴权隔离**：管理面 JWT 与对外面 API Key 中间件链分离，对外面附加来源白名单与限流，纵深防御（Req 11.9、13.9、21）。
-- **密钥来源**：加密主密钥仅来自环境变量，不落 YAML/DB，降低备份泄露风险。
+- **密钥来源**：JWT 签名密钥首次启动自动生成并写入 `config.yaml`，避免开源二进制内置固定密钥导致跨部署伪造风险。
 - **审计可追溯**：登录、配置变更、被拒访问均记审计（Req 22），便于安全事件溯源。
 - **输入校验前置**：所有外部输入（配置、规则、模板参数、cron、URL）在持久化/生效前校验，正则编译错误受控捕获，避免 ReDoS 需对正则复杂度设上限（模式长度 ≤ 200 已部分约束）。
 - **健康端点最小暴露**：公开探针不泄露依赖拓扑（Req 20.6）。
@@ -1031,7 +1027,7 @@ jobs:
 ## 可测试性策略
 
 - **纯函数核心**：规则引擎与聚合管线无副作用，输入工具列表 + 规则 → 输出工具列表，是属性测试的理想目标。
-- **接口隔离外部依赖**：Transport_Adapter、Tool_Cache、Encryption_Service 等以接口抽象，测试时注入 mock，使聚合/路由逻辑可脱离真实上游与 Redis/PG 验证。
+- **接口隔离外部依赖**：Transport_Adapter、Tool_Cache、仓储等以接口抽象，测试时注入 mock，使聚合/路由逻辑可脱离真实上游与 Redis/PG 验证。
 - **确定性管线**：聚合管线顺序固定、去重后缀规则确定，便于断言不变量与回归。
 - **时间与随机可注入**：退避、限流窗口、统计时间戳通过可注入的时钟与 ID 生成器，消除测试不确定性。
 

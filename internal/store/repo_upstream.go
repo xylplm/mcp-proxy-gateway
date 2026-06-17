@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"time"
 
@@ -14,14 +15,10 @@ import (
 
 // UpstreamRow 是上游 MCP 在持久层的完整行表示。
 //
-// 它在领域类型 domain.Upstream 的基础上额外携带 credential_enc（加密后的鉴权凭证字节）。
-// 仓储层只负责存取密文，加解密由上层加密服务（Encryption_Service）完成；
-// domain.Upstream.Config.Credential（明文）不会被持久化。
-// State 与 LastError 为运行期状态，由连接管理器维护，读取时为零值。
+// 凭证明文直接承载于 domain.Upstream.Config.Credential，仓储层只负责存取明文，
+// 不再做加解密。State 与 LastError 为运行期状态，由连接管理器维护，读取时为零值。
 type UpstreamRow struct {
 	domain.Upstream
-	// CredentialEnc 为加密后的鉴权凭证字节；无凭证时为 nil。
-	CredentialEnc []byte
 }
 
 // UpstreamRepo 提供上游 MCP 服务（upstream_mcp 表）的类型安全增删查改。
@@ -36,8 +33,8 @@ func NewUpstreamRepo(pool *pgxpool.Pool) *UpstreamRepo {
 
 // Create 持久化一条上游 MCP 配置并返回含生成标识与时间戳的记录。
 //   - 名称与其他上游重复（违反 UNIQUE）返回 CodeConflict（Req 2.7）。
-//   - 连接参数以 JSONB 存储；credentialEnc 为加密后的凭证字节（可为 nil）。
-func (r *UpstreamRepo) Create(ctx context.Context, cfg domain.UpstreamConfig, credentialEnc []byte) (*UpstreamRow, error) {
+//   - 连接参数以 JSONB 存储；credential 为凭证明文（可为空字符串）。
+func (r *UpstreamRepo) Create(ctx context.Context, cfg domain.UpstreamConfig) (*UpstreamRow, error) {
 	connParams, err := marshalConnParams(cfg.ConnParams)
 	if err != nil {
 		return nil, err
@@ -46,23 +43,22 @@ func (r *UpstreamRepo) Create(ctx context.Context, cfg domain.UpstreamConfig, cr
 	id := newUUID()
 	const q = `
 		INSERT INTO upstream_mcp
-			(id, name, tags, transport, conn_params, credential_enc, enabled, sort_order, auto_sync)
+			(id, name, tags, transport, conn_params, credential, enabled, sort_order, auto_sync)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		RETURNING created_at, updated_at`
 
 	var createdAt, updatedAt time.Time
 	err = r.pool.QueryRow(ctx, q,
-		id, cfg.Name, storeTags(cfg.Tags), string(cfg.Transport), connParams, credentialEnc,
+		id, cfg.Name, storeTags(cfg.Tags), string(cfg.Transport), connParams, cfg.Credential,
 		cfg.Enabled, cfg.SortOrder, cfg.AutoSync,
 	).Scan(&createdAt, &updatedAt)
 	if err != nil {
 		return nil, classifyWrite(err, "上游 MCP 名称已存在："+cfg.Name, "上游 MCP 不存在")
 	}
 
-	row := &UpstreamRow{CredentialEnc: credentialEnc}
+	row := &UpstreamRow{}
 	row.ID = uuidString(id)
 	row.Config = cfg
-	row.Config.Credential = "" // 明文不随记录返回
 	row.CreatedAt = createdAt
 	row.UpdatedAt = updatedAt
 	return row, nil
@@ -75,7 +71,7 @@ func (r *UpstreamRepo) Get(ctx context.Context, id string) (*UpstreamRow, error)
 		return nil, err
 	}
 	const q = `
-		SELECT id, name, tags, transport, conn_params, credential_enc,
+		SELECT id, name, tags, transport, conn_params, credential,
 		       enabled, sort_order, auto_sync, created_at, updated_at
 		FROM upstream_mcp
 		WHERE id = $1`
@@ -89,7 +85,7 @@ func (r *UpstreamRepo) Get(ctx context.Context, id string) (*UpstreamRow, error)
 // List 返回全部上游 MCP，按 sort_order 升序、创建时间次序排列；无数据返回空切片（Req 2.8、3.4）。
 func (r *UpstreamRepo) List(ctx context.Context) ([]UpstreamRow, error) {
 	const q = `
-		SELECT id, name, tags, transport, conn_params, credential_enc,
+		SELECT id, name, tags, transport, conn_params, credential,
 		       enabled, sort_order, auto_sync, created_at, updated_at
 		FROM upstream_mcp
 		ORDER BY sort_order ASC, created_at ASC`
@@ -113,10 +109,10 @@ func (r *UpstreamRepo) List(ctx context.Context) ([]UpstreamRow, error) {
 	return result, nil
 }
 
-// Update 更新指定上游 MCP 的配置（含 credential_enc）并刷新 updated_at。
+// Update 更新指定上游 MCP 的配置（含 credential 明文）并刷新 updated_at。
 //   - 标识不存在返回 CodeNotFound（Req 2.6）。
 //   - 名称与其他上游重复返回 CodeConflict（Req 2.7）。
-func (r *UpstreamRepo) Update(ctx context.Context, id string, cfg domain.UpstreamConfig, credentialEnc []byte) (*UpstreamRow, error) {
+func (r *UpstreamRepo) Update(ctx context.Context, id string, cfg domain.UpstreamConfig) (*UpstreamRow, error) {
 	uid, err := parseUUID(id)
 	if err != nil {
 		return nil, err
@@ -129,17 +125,15 @@ func (r *UpstreamRepo) Update(ctx context.Context, id string, cfg domain.Upstrea
 	const q = `
 		UPDATE upstream_mcp
 		SET name = $2, tags = $3, transport = $4, conn_params = $5,
-		    credential_enc = CASE WHEN $6::bytea IS NULL THEN credential_enc ELSE $6::bytea END,
-		    enabled = $7, sort_order = $8, auto_sync = $9, updated_at = now()
+		    credential = $6, enabled = $7, sort_order = $8, auto_sync = $9, updated_at = now()
 		WHERE id = $1
-		RETURNING credential_enc, created_at, updated_at`
+		RETURNING created_at, updated_at`
 
-	var savedCredentialEnc []byte
 	var createdAt, updatedAt time.Time
 	err = r.pool.QueryRow(ctx, q,
-		uid, cfg.Name, storeTags(cfg.Tags), string(cfg.Transport), connParams, credentialEnc,
+		uid, cfg.Name, storeTags(cfg.Tags), string(cfg.Transport), connParams, cfg.Credential,
 		cfg.Enabled, cfg.SortOrder, cfg.AutoSync,
-	).Scan(&savedCredentialEnc, &createdAt, &updatedAt)
+	).Scan(&createdAt, &updatedAt)
 	if err != nil {
 		if e := notFoundIfNoRows(err, "上游 MCP 不存在"); e != err {
 			return nil, e
@@ -147,10 +141,9 @@ func (r *UpstreamRepo) Update(ctx context.Context, id string, cfg domain.Upstrea
 		return nil, classifyWrite(err, "上游 MCP 名称已存在："+cfg.Name, "上游 MCP 不存在")
 	}
 
-	row := &UpstreamRow{CredentialEnc: savedCredentialEnc}
+	row := &UpstreamRow{}
 	row.ID = id
 	row.Config = cfg
-	row.Config.Credential = ""
 	row.CreatedAt = createdAt
 	row.UpdatedAt = updatedAt
 	return row, nil
@@ -230,19 +223,19 @@ func storeTags(tags []string) []string {
 // scanUpstream 从单行结果扫描出 UpstreamRow。
 func scanUpstream(row pgx.Row) (*UpstreamRow, error) {
 	var (
-		id            pgtype.UUID
-		name          string
-		tags          []string
-		transport     string
-		connParams    []byte
-		credentialEnc []byte
-		enabled       bool
-		sortOrder     int
-		autoSync      bool
-		createdAt     time.Time
-		updatedAt     time.Time
+		id         pgtype.UUID
+		name       string
+		tags       []string
+		transport  string
+		connParams []byte
+		credential sql.NullString
+		enabled    bool
+		sortOrder  int
+		autoSync   bool
+		createdAt  time.Time
+		updatedAt  time.Time
 	)
-	if err := row.Scan(&id, &name, &tags, &transport, &connParams, &credentialEnc,
+	if err := row.Scan(&id, &name, &tags, &transport, &connParams, &credential,
 		&enabled, &sortOrder, &autoSync, &createdAt, &updatedAt); err != nil {
 		return nil, err
 	}
@@ -254,13 +247,14 @@ func scanUpstream(row pgx.Row) (*UpstreamRow, error) {
 		}
 	}
 
-	out := &UpstreamRow{CredentialEnc: credentialEnc}
+	out := &UpstreamRow{}
 	out.ID = uuidString(id)
 	out.Config = domain.UpstreamConfig{
 		Name:       name,
 		Tags:       tags,
 		Transport:  domain.TransportType(transport),
 		ConnParams: params,
+		Credential: credential.String,
 		Enabled:    enabled,
 		SortOrder:  sortOrder,
 		AutoSync:   autoSync,

@@ -4,7 +4,7 @@
 
 本实现计划将设计文档拆解为一系列循序渐进、可由编码代理执行的编码任务。整体顺序遵循「基础设施 → 数据层 → 纯函数领域核心（规则引擎、聚合管线）→ 出站适配 → 连接与同步 → 认证/对外服务 → 横切服务 → 管理 API → 扩展接入 → 前端 → 内嵌与装配 → 容器与 CI」的依赖链，确保每个任务都建立在前序产物之上，最终在主程序装配处把所有组件接线为可运行系统，不留孤儿代码。
 
-技术栈：后端 Go 1.22+（`gin`、`pgx/v5`、`go-redis/v9`、`robfig/cron/v3`、`golang-jwt/v5`、`golang-migrate`、`crypto/aes-gcm`、`bcrypt`、`log/slog`、MCP Go SDK），前端基于开源模板 TailAdmin Vue（vue-tailwind-admin-dashboard）：Vue3 + Vite + TypeScript + Tailwind CSS + Pinia + Vue Router（全部界面以 Tailwind 工具类构建并遵循 TailAdmin 视觉风格，统计图表用模板内置的 ApexCharts，不依赖任何组件式 UI 库）。属性测试统一使用 `pgregory.net/rapid`，每条属性一个测试、最少运行 100 次迭代，并在测试函数处添加注释：`// Feature: mcp-proxy-gateway, Property {编号}: {属性文本}`。
+技术栈：后端 Go 1.22+（`gin`、`pgx/v5`、`go-redis/v9`、`robfig/cron/v3`、`golang-jwt/v5`、`golang-migrate`、`bcrypt`、`log/slog`、MCP Go SDK），前端基于开源模板 TailAdmin Vue（vue-tailwind-admin-dashboard）：Vue3 + Vite + TypeScript + Tailwind CSS + Pinia + Vue Router（全部界面以 Tailwind 工具类构建并遵循 TailAdmin 视觉风格，统计图表用模板内置的 ApexCharts，不依赖任何组件式 UI 库）。属性测试统一使用 `pgregory.net/rapid`，每条属性一个测试、最少运行 100 次迭代，并在测试函数处添加注释：`// Feature: mcp-proxy-gateway, Property {编号}: {属性文本}`。
 
 约定：
 - 标记 `*` 的子任务为可选测试任务（单元/属性/集成测试），可在追求 MVP 时跳过；顶层任务不带 `*`。
@@ -22,7 +22,7 @@
     - _Requirements: 18.1, 18.2, 25.2, 25.6_
 
   - [x] 1.2 实现 Config_Manager（环境变量 + YAML 读取、默认值生成、启动校验）
-    - 用 `caarlos0/env` 读取 `MPG_PG_DSN`、`MPG_REDIS_ADDR`、`MPG_REDIS_PASSWORD`、`MPG_ENCRYPTION_KEY`、`MPG_DATA_DIR`
+    - 用 `caarlos0/env` 读取 `MPG_PG_DSN`、`MPG_REDIS_ADDR`、`MPG_REDIS_PASSWORD`、`MPG_DATA_DIR`
     - 用 `gopkg.in/yaml.v3` 读取/写回 `data/` 下 YAML 常规配置，定义 admin/auth/sync/connection/aggregation/mcp_api/statistics/audit/xiaozhi 配置结构与取值范围校验
     - YAML 不存在时以默认配置创建；必需环境变量缺失/无效或 YAML 非法时通过 `slog` 记录错误并终止启动
     - _Requirements: 18.1, 18.2, 18.3, 18.4, 18.5, 18.6_
@@ -126,13 +126,13 @@
 - [x] 5. Checkpoint - 确保领域核心测试通过
   - 运行规则引擎与聚合管线的全部属性测试与单元测试，确保通过；如有疑问请询问用户。
 
-- [x] 6. 实现加密服务（Encryption_Service）
-  - [x] 6.1 实现 AES-GCM 加解密与启动期密钥校验
-    - 用 `crypto/aes` + GCM 对上游凭证加解密；密钥取自 `MPG_ENCRYPTION_KEY`，启动期校验长度与有效性，缺失/无效则记录错误并终止启动
+- [x] 6. 实现凭证存储与 JWT 密钥管理
+  - [x] 6.1 实现上游凭证明文存储与编辑回显
+    - 上游 MCP 凭证作为用户自部署配置明文存储，编辑时由管理 API 回显，保存时随配置整体覆盖
     - _Requirements: 19.1, 19.2, 19.4_
 
-  - [x] 6.2 编写凭证加解密往返属性测试
-    - **Property 17: 凭证加解密往返**
+  - [x] 6.2 实现 JWT 签名密钥首次生成并写回配置
+    - 首启时若 `config.yaml` 中 `jwt_secret` 为空，则生成随机密钥并写回，避免所有部署共享写死密钥
     - **Validates: Requirements 19.1, 19.2**
 
 - [x] 7. 实现工具缓存（Tool_Cache，Redis 热路径 + PG 持久层）
@@ -180,7 +180,7 @@
 - [x] 9. 实现连接管理器（MCP_Manager）与重试退避状态机
   - [x] 9.1 实现上游 MCP 的 CRUD、名称唯一与字段校验
     - Create/Update/Delete/List：名称长度 1-100、必填字段与格式校验、名称唯一冲突返回 `CONFLICT`、不存在返回 `NOT_FOUND`；删除时关闭连接并级联清理工具缓存与规则；列表返回各服务及当前连接状态，无数据返回空列表
-    - 写库前对鉴权凭证调用 Encryption_Service 加密；响应不返回明文凭证
+    - 上游 MCP 凭证明文写库并在响应中回显，编辑保存时随配置整体覆盖
     - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 19.1, 19.3_
 
   - [x] 9.2 编写上游 MCP CRUD 校验与冲突单元测试
@@ -465,7 +465,7 @@
     - _Requirements: 17.1, 17.2_
 
   - [x] 27.2 装配主程序与路由分面（cmd/gateway 接线所有组件）
-    - 在 `cmd/gateway` 装配 Config_Manager→DB/Redis/迁移→Encryption→各应用服务→领域核心→入站路由（静态/管理 API/对外 MCP/healthz），分离 JWT 与 API Key 两套中间件链；启动时先连通性探测再对外服务
+    - 在 `cmd/gateway` 装配 Config_Manager→DB/Redis/迁移→各应用服务→领域核心→入站路由（静态/管理 API/对外 MCP/healthz），分离 JWT 与 API Key 两套中间件链；启动时先连通性探测再对外服务
     - _Requirements: 11.8, 17.1, 18.1, 20.1_
 
   - [x] 27.3 编写 SPA fallback 与路由分面集成测试

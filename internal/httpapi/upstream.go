@@ -2,13 +2,11 @@ package httpapi
 
 import (
 	"net/http"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/audit"
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
-	"github.com/myGithub/mcp-proxy-gateway/internal/manager"
 )
 
 // 本文件实现上游 MCP 管理端点（Req 2.1、3.1、3.4、5.6、6.4）：
@@ -23,13 +21,12 @@ import (
 //   POST   /api/admin/upstreams/:id/reconnect 手动重连上游
 //   POST   /api/admin/upstreams/:id/refresh  手动刷新工具列表
 //
-// 凭证（Credential）仅作为创建/更新的入参写入，响应中绝不回显明文（Req 19.3）；
-// 由应用服务层（manager.Manager）保证返回的 domain.Upstream 不含明文凭证。
+// 凭证（Credential）以明文存储，创建/更新入参与列表/详情响应均携带明文，便于前端编辑回显。
 
 // upstreamConfigRequest 为创建/更新上游 MCP 的请求体。
 //
-// 字段与 domain.UpstreamConfig 对齐，但凭证 Credential 仅入参不回显。SortOrder 在创建时
-// 可缺省（由应用层置于末尾或按提交值），在更新时沿用提交值。
+// 字段与 domain.UpstreamConfig 对齐。SortOrder 在创建时可缺省（由应用层置于末尾或按提交值），
+// 在更新时沿用提交值。
 type upstreamConfigRequest struct {
 	// Name 为服务名称，长度需在 1 至 100 个字符之间（Req 2.1、2.2）。
 	Name string `json:"name"`
@@ -39,10 +36,8 @@ type upstreamConfigRequest struct {
 	Transport domain.TransportType `json:"transport"`
 	// ConnParams 为传输类型相关的连接参数。
 	ConnParams map[string]any `json:"connParams"`
-	// Credential 为鉴权凭证明文，仅入参，响应不回显（Req 19.3）。
+	// Credential 为鉴权凭证明文，明文存储，响应原样回显。
 	Credential string `json:"credential"`
-	// CredentialAction 控制更新时凭证处理：keep/replace/clear。创建时忽略，等同 replace。
-	CredentialAction string `json:"credentialAction"`
 	// Enabled 表示该上游是否启用并参与聚合。
 	Enabled bool `json:"enabled"`
 	// SortOrder 为排序顺序。
@@ -130,15 +125,8 @@ func (r *Router) updateUpstream(c *gin.Context) {
 		return
 	}
 	cfg := req.toConfig()
-	action := manager.CredentialAction(strings.TrimSpace(req.CredentialAction))
-	if action == "" {
-		action = manager.CredentialReplace
-		if strings.TrimSpace(req.Credential) == "" {
-			action = manager.CredentialKeep
-		}
-	}
 
-	up, err := r.upstream.UpdateWithCredentialAction(c.Request.Context(), c.Param("id"), cfg, action)
+	up, err := r.upstream.Update(c.Request.Context(), c.Param("id"), cfg)
 	if err != nil {
 		respondError(c, err)
 		return

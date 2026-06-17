@@ -33,9 +33,8 @@ func (a *StoreAdapter) ExportBusiness(ctx context.Context) (BusinessConfig, erro
 	bc.Upstreams = make([]UpstreamEntry, 0, len(upstreams))
 	for _, u := range upstreams {
 		entry := UpstreamEntry{
-			ID:            u.ID,
-			Config:        u.Config,
-			CredentialEnc: u.CredentialEnc,
+			ID:     u.ID,
+			Config: u.Config,
 		}
 		bc.Upstreams = append(bc.Upstreams, entry)
 	}
@@ -128,7 +127,7 @@ func (a *StoreAdapter) ImportBusiness(ctx context.Context, bc BusinessConfig) er
 	// 2. 重建上游并记录旧标识到新标识的映射。
 	upstreamIDMap := make(map[string]string, len(bc.Upstreams))
 	for _, ue := range bc.Upstreams {
-		created, err := a.repos.Upstream.Create(ctx, ue.Config, ue.CredentialEnc)
+		created, err := a.repos.Upstream.Create(ctx, ue.Config)
 		if err != nil {
 			return err
 		}

@@ -2,12 +2,14 @@ package config
 
 // YAMLConfig 表示存放在 data 目录下 YAML 文件中的常规配置（Req 18.2、23.1）。
 //
-// 数据库与 Redis 连接、加密主密钥来自环境变量，不包含在此结构内。
+// 数据库与 Redis 连接来自环境变量，不包含在此结构内。
 type YAMLConfig struct {
 	// Server 为本进程监听地址与端口隔离配置。
 	Server ServerConfig `yaml:"server" json:"server"`
 	// Admin 为管理员凭证配置（Req 1）。
 	Admin AdminConfig `yaml:"admin" json:"admin"`
+	// JWTSecret 为管理员登录 JWT 的 HS256 签名密钥；为空时首启自动生成并写回本文件。
+	JWTSecret string `yaml:"jwt_secret" json:"jwt_secret"`
 	// Auth 为认证会话配置（Req 1.4、1.7）。
 	Auth AuthConfig `yaml:"auth" json:"auth"`
 	// Sync 为工具同步调度配置（Req 7）。
@@ -112,7 +114,7 @@ type XiaoZhiConfig struct {
 	// Endpoint 为小智 MCP 接入点地址，需为 ws:// 或 wss:// 合法 URL（Req 15.6）。
 	Endpoint string `yaml:"endpoint" json:"endpoint"`
 	// Mode 为小智使用的对外 MCP 模式：smart 或 full，默认 full。
-	Mode     string `yaml:"mode" json:"mode"`
+	Mode string `yaml:"mode" json:"mode"`
 }
 
 // 对外模式取值常量（Req 11）。
@@ -166,6 +168,8 @@ func DefaultYAMLConfig() YAMLConfig {
 			PasswordHash: "",
 			Initialized:  false,
 		},
+		// JWTSecret 为空，由首启 EnsureJWTSecret 自动生成并写回。
+		JWTSecret: "",
 		Auth: AuthConfig{
 			SessionTimeoutS: 3600,
 		},

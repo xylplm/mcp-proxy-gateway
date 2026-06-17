@@ -13,7 +13,6 @@ import (
 	"github.com/myGithub/mcp-proxy-gateway/internal/auth"
 	"github.com/myGithub/mcp-proxy-gateway/internal/cache"
 	"github.com/myGithub/mcp-proxy-gateway/internal/config"
-	"github.com/myGithub/mcp-proxy-gateway/internal/crypto"
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
 	"github.com/myGithub/mcp-proxy-gateway/internal/health"
 	"github.com/myGithub/mcp-proxy-gateway/internal/httpapi"
@@ -29,9 +28,9 @@ import (
 
 // build 构造各应用服务、领域核心与入站路由，并把它们接线到 *App。
 //
-// 顺序：仓储 → 加密/缓存/传输/连接管理 → 规则引擎/聚合服务 → 调用路由器接入 →
+// 顺序：仓储 → 缓存/传输/连接管理 → 规则引擎/聚合服务 → 调用路由器接入 →
 // 各横切应用服务（同步、统计、审计、API Key、认证、模板、小智、健康）→ 入站路由分面。
-func (a *App) build(enc *crypto.Service, envCfg config.EnvConfig) error {
+func (a *App) build(envCfg config.EnvConfig) error {
 	yamlCfg := a.cfg.Config()
 	a.adminAddr = yamlCfg.Server.AdminAddr
 	a.publicMCPAddr = yamlCfg.Server.PublicMCPAddr
@@ -50,7 +49,6 @@ func (a *App) build(enc *crypto.Service, envCfg config.EnvConfig) error {
 	retry := retryPolicyFromConfig(yamlCfg.Connection)
 	mgr := manager.New(
 		repos.Upstream,
-		enc,
 		toolCache,
 		transport.ValidateConnParams,
 		a.logger,
@@ -96,10 +94,9 @@ func (a *App) build(enc *crypto.Service, envCfg config.EnvConfig) error {
 
 	// --- 同步服务：工具拉取、周期同步与 cron 调度（Req 6、7）---
 	fetcher := &toolFetcher{
-		dialer:        dialer,
-		factory:       factory,
-		repo:          repos.Upstream,
-		decryptConfig: a.decryptConfigFunc(enc),
+		dialer:  dialer,
+		factory: factory,
+		repo:    repos.Upstream,
 	}
 	syncTimeout := time.Duration(yamlCfg.Sync.TimeoutS) * time.Second
 	a.syncTimeout = syncTimeout
@@ -121,7 +118,13 @@ func (a *App) build(enc *crypto.Service, envCfg config.EnvConfig) error {
 	if err := auth.MaybeResetAdminPassword(a.cfg, envCfg.DataDir, a.logger); err != nil {
 		return err
 	}
-	authSvc, err := auth.New(a.cfg, signingKey(envCfg.EncryptionKey))
+	// 确保 config.yaml 中存在非空 JWT 签名密钥；为空时首启自动生成并写回。
+	// 必须在 auth.New 之前完成，否则空密钥会导致认证服务初始化失败。
+	if err := auth.EnsureJWTSecret(a.cfg, a.logger); err != nil {
+		return err
+	}
+	jwtCfg := a.cfg.Config()
+	authSvc, err := auth.New(a.cfg, []byte(jwtCfg.JWTSecret))
 	if err != nil {
 		return err
 	}
@@ -155,7 +158,7 @@ func (a *App) build(enc *crypto.Service, envCfg config.EnvConfig) error {
 	a.prober = health.NewStartupProber(health.Options{
 		Pinger:        pg,
 		ListUpstreams: mgr.List,
-		ProbeUpstream: a.probeUpstreamFunc(factory, enc),
+		ProbeUpstream: a.probeUpstreamFunc(factory),
 		Config:        a.cfg,
 		ProbeXiaoZhi:  probeXiaoZhi,
 		Logger:        a.logger,
@@ -237,35 +240,15 @@ func resolveAPIKeyID(c *gin.Context) (string, bool) {
 	return m.ID, true
 }
 
-// decryptConfigFunc 返回把持久化行（含加密凭证）还原为带明文凭证配置的函数，供临时拨号/探测复用。
-func (a *App) decryptConfigFunc(enc *crypto.Service) func(row store.UpstreamRow) (domain.UpstreamConfig, error) {
-	return func(row store.UpstreamRow) (domain.UpstreamConfig, error) {
-		cfg := row.Config
-		if len(row.CredentialEnc) > 0 {
-			plain, err := enc.Decrypt(row.CredentialEnc)
-			if err != nil {
-				return domain.UpstreamConfig{}, err
-			}
-			cfg.Credential = string(plain)
-		}
-		return cfg, nil
-	}
-}
-
 // probeUpstreamFunc 返回启动连通性探测使用的单上游探测函数：临时建立会话以验证连通性。
-func (a *App) probeUpstreamFunc(factory transport.TransportFactory, enc *crypto.Service) health.UpstreamProbeFunc {
-	decrypt := a.decryptConfigFunc(enc)
+func (a *App) probeUpstreamFunc(factory transport.TransportFactory) health.UpstreamProbeFunc {
 	return func(ctx context.Context, up domain.Upstream) error {
-		// up 来自 manager.List，不含加密凭证；从仓储取回完整行以解密凭证后再拨号探测。
+		// up 来自 manager.List；从仓储取回完整行（含明文凭证）后再拨号探测。
 		row, err := a.repoUpstreamGet(ctx, up.ID)
 		if err != nil {
 			return err
 		}
-		cfg, err := decrypt(*row)
-		if err != nil {
-			return err
-		}
-		sess, err := factory.NewSession(cfg)
+		sess, err := factory.NewSession(row.Config)
 		if err != nil {
 			return err
 		}
