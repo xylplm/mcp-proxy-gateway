@@ -18,11 +18,11 @@ func asAPIError(t *testing.T, err error) *domain.APIError {
 	return apiErr
 }
 
-// TestNewPGPoolEmptyDSN 验证空 DSN 立即返回校验错误，不发起网络连接。
-func TestNewPGPoolEmptyDSN(t *testing.T) {
-	pool, err := NewPGPool(context.Background(), "")
-	if pool != nil {
-		t.Fatal("空 DSN 不应返回连接池")
+// TestNewDBEmptyDSN 验证空 DSN 立即返回校验错误，不发起网络连接。
+func TestNewDBEmptyDSN(t *testing.T) {
+	db, err := NewDB(context.Background(), "")
+	if db != nil {
+		t.Fatal("空 DSN 不应返回数据库句柄")
 	}
 	if err == nil {
 		t.Fatal("空 DSN 应返回错误")
@@ -32,15 +32,26 @@ func TestNewPGPoolEmptyDSN(t *testing.T) {
 	}
 }
 
-// TestNewPGPoolInvalidDSN 验证非法 DSN 在解析阶段即返回校验错误。
-func TestNewPGPoolInvalidDSN(t *testing.T) {
+// TestNewDBInvalidDSN 验证非法 DSN 在解析阶段即返回校验错误。
+func TestNewDBInvalidDSN(t *testing.T) {
 	// 含非法端口的 URL 形式 DSN，应在 ParseConfig 阶段失败。
-	pool, err := NewPGPool(context.Background(), "postgres://user:pass@host:notaport/db")
-	if pool != nil {
-		t.Fatal("非法 DSN 不应返回连接池")
+	db, err := NewDB(context.Background(), "postgres://user:pass@host:notaport/db")
+	if db != nil {
+		t.Fatal("非法 DSN 不应返回数据库句柄")
 	}
 	if err == nil {
 		t.Fatal("非法 DSN 应返回错误")
+	}
+	if got := asAPIError(t, err); got.Code != domain.CodeValidation {
+		t.Errorf("期望错误码 %s，实际 %s", domain.CodeValidation, got.Code)
+	}
+}
+
+// TestAutoMigrateNilDB 验证 nil 数据库句柄初始化 schema 返回校验错误。
+func TestAutoMigrateNilDB(t *testing.T) {
+	err := AutoMigrate(context.Background(), nil, nil)
+	if err == nil {
+		t.Fatal("nil 数据库句柄应返回错误")
 	}
 	if got := asAPIError(t, err); got.Code != domain.CodeValidation {
 		t.Errorf("期望错误码 %s，实际 %s", domain.CodeValidation, got.Code)
@@ -77,16 +88,5 @@ func TestNewRedisClientConstructs(t *testing.T) {
 func TestPingRedisNilClient(t *testing.T) {
 	if err := PingRedis(context.Background(), nil); err == nil {
 		t.Fatal("nil 客户端应返回错误")
-	}
-}
-
-// TestRunMigrationsEmptyDSN 验证空 DSN 时迁移立即返回校验错误。
-func TestRunMigrationsEmptyDSN(t *testing.T) {
-	err := RunMigrations("", nil)
-	if err == nil {
-		t.Fatal("空 DSN 应返回错误")
-	}
-	if got := asAPIError(t, err); got.Code != domain.CodeValidation {
-		t.Errorf("期望错误码 %s，实际 %s", domain.CodeValidation, got.Code)
 	}
 }

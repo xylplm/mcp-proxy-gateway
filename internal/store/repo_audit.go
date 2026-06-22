@@ -5,8 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"gorm.io/gorm"
 )
 
 // 审计事件类型常量（对应 audit_log.event_type，Req 22.1/22.2/22.3）。
@@ -46,46 +45,43 @@ type AuditQuery struct {
 
 // AuditRepo 提供审计日志的写入、倒序分页查询与保留期清理。
 type AuditRepo struct {
-	pool *pgxpool.Pool
+	db *gorm.DB
 }
 
 // NewAuditRepo 构造审计日志仓储。
-func NewAuditRepo(pool *pgxpool.Pool) *AuditRepo {
-	return &AuditRepo{pool: pool}
+func NewAuditRepo(db *gorm.DB) *AuditRepo {
+	return &AuditRepo{db: db}
 }
 
-// Insert 写入一条审计日志并回填生成标识与发生时间（Req 22.1/22.2/22.3）。
+// Insert 写入一条审计日志并回填生成标识与发生时间（Req 22.1、22.2、22.3）。
 //
 // OccurredAt 为零值时使用数据库默认值 now()，否则使用调用方提供的时间。
 func (r *AuditRepo) Insert(ctx context.Context, rec AuditRecord) (AuditRecord, error) {
-	var detail []byte
+	var detail any
 	if len(rec.Detail) > 0 {
-		detail = rec.Detail
+		detail = JSONB(rec.Detail)
 	}
-
 	if rec.OccurredAt.IsZero() {
 		const q = `
 			INSERT INTO audit_log (event_type, target, detail)
-			VALUES ($1, $2, $3)
-			RETURNING id, occurred_at`
-		err := r.pool.QueryRow(ctx, q, rec.EventType, nullableText(rec.Target), detail).
-			Scan(&rec.ID, &rec.OccurredAt)
-		if err != nil {
+			VALUES (?, ?, ?)
+			RETURNING id, event_type, target, detail, occurred_at`
+		var model auditLogModel
+		if err := r.db.WithContext(ctx).Raw(q, rec.EventType, nullableString(rec.Target), detail).Scan(&model).Error; err != nil {
 			return AuditRecord{}, err
 		}
-		return rec, nil
+		return modelToAuditRecord(model), nil
 	}
 
 	const q = `
 		INSERT INTO audit_log (event_type, target, detail, occurred_at)
-		VALUES ($1, $2, $3, $4)
-		RETURNING id, occurred_at`
-	err := r.pool.QueryRow(ctx, q, rec.EventType, nullableText(rec.Target), detail, rec.OccurredAt).
-		Scan(&rec.ID, &rec.OccurredAt)
-	if err != nil {
+		VALUES (?, ?, ?, ?)
+		RETURNING id, event_type, target, detail, occurred_at`
+	var model auditLogModel
+	if err := r.db.WithContext(ctx).Raw(q, rec.EventType, nullableString(rec.Target), detail, rec.OccurredAt).Scan(&model).Error; err != nil {
 		return AuditRecord{}, err
 	}
-	return rec, nil
+	return modelToAuditRecord(model), nil
 }
 
 // List 按发生时间倒序分页返回审计记录（Req 22.4）。
@@ -101,82 +97,59 @@ func (r *AuditRepo) List(ctx context.Context, page, pageSize int, query AuditQue
 	}
 	offset := (page - 1) * pageSize
 
-	const q = `
-		SELECT id, event_type, target, detail, occurred_at
-		FROM audit_log
-		WHERE ($1 = '' OR event_type = $1)
-			AND ($2::timestamptz IS NULL OR occurred_at >= $2)
-			AND ($3::timestamptz IS NULL OR occurred_at <= $3)
-		ORDER BY occurred_at DESC, id DESC
-		LIMIT $4 OFFSET $5`
-	start, end := auditTimeParams(query)
-	rows, err := r.pool.Query(ctx, q, query.EventType, start, end, pageSize, offset)
-	if err != nil {
+	db := r.applyAuditQuery(r.db.WithContext(ctx).Model(&auditLogModel{}), query)
+	var models []auditLogModel
+	if err := db.Order("occurred_at DESC").Order("id DESC").Limit(pageSize).Offset(offset).Find(&models).Error; err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	result := make([]AuditRecord, 0)
-	for rows.Next() {
-		var (
-			id         int64
-			eventType  string
-			target     pgtype.Text
-			detail     []byte
-			occurredAt time.Time
-		)
-		if err := rows.Scan(&id, &eventType, &target, &detail, &occurredAt); err != nil {
-			return nil, err
-		}
-		rec := AuditRecord{
-			ID:         id,
-			EventType:  eventType,
-			Target:     target.String,
-			OccurredAt: occurredAt,
-		}
-		if len(detail) > 0 {
-			rec.Detail = json.RawMessage(detail)
-		}
-		result = append(result, rec)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
+	result := make([]AuditRecord, 0, len(models))
+	for _, model := range models {
+		result = append(result, modelToAuditRecord(model))
 	}
 	return result, nil
 }
 
 // Count 返回审计记录总数，供分页计算总页数使用。
 func (r *AuditRepo) Count(ctx context.Context, query AuditQuery) (int64, error) {
-	const q = `
-		SELECT count(*)
-		FROM audit_log
-		WHERE ($1 = '' OR event_type = $1)
-			AND ($2::timestamptz IS NULL OR occurred_at >= $2)
-			AND ($3::timestamptz IS NULL OR occurred_at <= $3)`
 	var n int64
-	start, end := auditTimeParams(query)
-	if err := r.pool.QueryRow(ctx, q, query.EventType, start, end).Scan(&n); err != nil {
+	db := r.applyAuditQuery(r.db.WithContext(ctx).Model(&auditLogModel{}), query)
+	if err := db.Count(&n).Error; err != nil {
 		return 0, err
 	}
 	return n, nil
 }
 
-func auditTimeParams(query AuditQuery) (start any, end any) {
+func (r *AuditRepo) applyAuditQuery(db *gorm.DB, query AuditQuery) *gorm.DB {
+	if query.EventType != "" {
+		db = db.Where("event_type = ?", query.EventType)
+	}
 	if !query.Start.IsZero() {
-		start = query.Start
+		db = db.Where("occurred_at >= ?", query.Start)
 	}
 	if !query.End.IsZero() {
-		end = query.End
+		db = db.Where("occurred_at <= ?", query.End)
 	}
-	return start, end
+	return db
 }
 
 // DeleteOlderThan 清理 occurred_at 早于 cutoff 的审计记录，返回删除条数（Req 22.5）。
 func (r *AuditRepo) DeleteOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {
-	const q = `DELETE FROM audit_log WHERE occurred_at < $1`
-	tag, err := r.pool.Exec(ctx, q, cutoff)
-	if err != nil {
-		return 0, err
+	res := r.db.WithContext(ctx).Where("occurred_at < ?", cutoff).Delete(&auditLogModel{})
+	if res.Error != nil {
+		return 0, res.Error
 	}
-	return tag.RowsAffected(), nil
+	return res.RowsAffected, nil
+}
+
+func modelToAuditRecord(model auditLogModel) AuditRecord {
+	rec := AuditRecord{
+		ID:         model.ID,
+		EventType:  model.EventType,
+		Target:     stringValue(model.Target),
+		OccurredAt: model.OccurredAt,
+	}
+	if len(model.Detail) > 0 {
+		rec.Detail = json.RawMessage(model.Detail)
+	}
+	return rec
 }

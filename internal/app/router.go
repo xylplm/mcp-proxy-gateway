@@ -106,5 +106,5 @@ func registerMCPRoutes(engine *gin.Engine, w routerWiring) {
 //
 // 仅供启动探测路径复用。
 func (a *App) repoUpstreamGet(ctx context.Context, id string) (*store.UpstreamRow, error) {
-	return store.NewUpstreamRepo(a.pool).Get(ctx, id)
+	return store.NewUpstreamRepo(a.db).Get(ctx, id)
 }

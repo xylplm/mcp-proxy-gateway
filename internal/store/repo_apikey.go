@@ -4,9 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"gorm.io/gorm"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
 )
@@ -41,33 +39,32 @@ type APIKey struct {
 
 // APIKeyRepo 提供 API Key 元数据的类型安全增删查改。
 type APIKeyRepo struct {
-	pool *pgxpool.Pool
+	db *gorm.DB
 }
 
 // NewAPIKeyRepo 构造 API Key 元数据仓储。
-func NewAPIKeyRepo(pool *pgxpool.Pool) *APIKeyRepo {
-	return &APIKeyRepo{pool: pool}
+func NewAPIKeyRepo(db *gorm.DB) *APIKeyRepo {
+	return &APIKeyRepo{db: db}
 }
 
 // Create 持久化一条 API Key 元数据并回填生成标识与创建时间（Req 12.1）。
 func (r *APIKeyRepo) Create(ctx context.Context, key APIKey) (APIKey, error) {
 	id := newUUID()
-	const q = `
-		INSERT INTO api_key
-			(id, name, key_hash, key_plain, key_prefix, enabled, expires_at, rate_limit, rate_window_s)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-		RETURNING created_at`
-	var createdAt time.Time
-	err := r.pool.QueryRow(ctx, q,
-		id, key.Name, key.KeyHash, key.KeyPlain, key.KeyPrefix, key.Enabled,
-		nullableTime(key.ExpiresAt), nullableInt(key.RateLimit), nullableInt(key.RateWindowS),
-	).Scan(&createdAt)
+	err := r.db.WithContext(ctx).Model(&apiKeyModel{}).Create(map[string]any{
+		"id":            id,
+		"name":          key.Name,
+		"key_hash":      key.KeyHash,
+		"key_plain":     key.KeyPlain,
+		"key_prefix":    key.KeyPrefix,
+		"enabled":       key.Enabled,
+		"expires_at":    key.ExpiresAt,
+		"rate_limit":    key.RateLimit,
+		"rate_window_s": key.RateWindowS,
+	}).Error
 	if err != nil {
 		return APIKey{}, classifyWrite(err, "API Key 名称已存在："+key.Name, "API Key 不存在")
 	}
-	key.ID = uuidString(id)
-	key.CreatedAt = createdAt
-	return key, nil
+	return r.Get(ctx, id)
 }
 
 // Get 按标识查询单条 API Key；不存在返回 CodeNotFound（Req 12.7）。
@@ -76,54 +73,33 @@ func (r *APIKeyRepo) Get(ctx context.Context, id string) (APIKey, error) {
 	if err != nil {
 		return APIKey{}, err
 	}
-	const q = `
-		SELECT id, name, key_hash, key_plain, key_prefix, enabled, expires_at, rate_limit, rate_window_s, created_at
-		FROM api_key
-		WHERE id = $1`
-	key, err := scanAPIKey(r.pool.QueryRow(ctx, q, uid))
-	if err != nil {
+	var model apiKeyModel
+	if err := r.db.WithContext(ctx).Where("id = ?", uid).First(&model).Error; err != nil {
 		return APIKey{}, notFoundIfNoRows(err, "API Key 不存在")
 	}
-	return key, nil
+	return modelToAPIKey(model), nil
 }
 
 // GetByHash 按密钥哈希查询单条 API Key，供鉴权中间件比对使用；不存在返回 CodeNotFound。
 func (r *APIKeyRepo) GetByHash(ctx context.Context, keyHash []byte) (APIKey, error) {
-	const q = `
-		SELECT id, name, key_hash, key_plain, key_prefix, enabled, expires_at, rate_limit, rate_window_s, created_at
-		FROM api_key
-		WHERE key_hash = $1`
-	key, err := scanAPIKey(r.pool.QueryRow(ctx, q, keyHash))
-	if err != nil {
+	var model apiKeyModel
+	if err := r.db.WithContext(ctx).Where("key_hash = ?", keyHash).Take(&model).Error; err != nil {
 		return APIKey{}, notFoundIfNoRows(err, "API Key 不存在")
 	}
-	return key, nil
+	return modelToAPIKey(model), nil
 }
 
 // List 返回全部 API Key 元数据，按创建时间倒序排列；无数据返回空切片（Req 12.3、12.9）。
 //
 // 注意：API Key 明文随 key_plain 存储并返回，便于自部署场景下查看与复制；鉴权仍使用 key_hash。
 func (r *APIKeyRepo) List(ctx context.Context) ([]APIKey, error) {
-	const q = `
-		SELECT id, name, key_hash, key_plain, key_prefix, enabled, expires_at, rate_limit, rate_window_s, created_at
-		FROM api_key
-		ORDER BY created_at DESC`
-	rows, err := r.pool.Query(ctx, q)
-	if err != nil {
+	var models []apiKeyModel
+	if err := r.db.WithContext(ctx).Order("created_at DESC").Find(&models).Error; err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	result := make([]APIKey, 0)
-	for rows.Next() {
-		key, err := scanAPIKey(rows)
-		if err != nil {
-			return nil, err
-		}
-		result = append(result, key)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
+	result := make([]APIKey, 0, len(models))
+	for _, model := range models {
+		result = append(result, modelToAPIKey(model))
 	}
 	return result, nil
 }
@@ -136,32 +112,20 @@ func (r *APIKeyRepo) Update(ctx context.Context, key APIKey) (APIKey, error) {
 	if err != nil {
 		return APIKey{}, err
 	}
-	const q = `
-		UPDATE api_key
-		SET name = $2, enabled = $3, expires_at = $4, rate_limit = $5, rate_window_s = $6
-		WHERE id = $1
-		RETURNING key_hash, key_plain, key_prefix, created_at`
-	var (
-		keyHash   []byte
-		keyPlain  string
-		keyPrefix string
-		createdAt time.Time
-	)
-	err = r.pool.QueryRow(ctx, q,
-		uid, key.Name, key.Enabled,
-		nullableTime(key.ExpiresAt), nullableInt(key.RateLimit), nullableInt(key.RateWindowS),
-	).Scan(&keyHash, &keyPlain, &keyPrefix, &createdAt)
-	if err != nil {
-		if e := notFoundIfNoRows(err, "API Key 不存在"); e != err {
-			return APIKey{}, e
-		}
-		return APIKey{}, classifyWrite(err, "API Key 名称已存在："+key.Name, "API Key 不存在")
+	res := r.db.WithContext(ctx).Model(&apiKeyModel{}).Where("id = ?", uid).Updates(map[string]any{
+		"name":          key.Name,
+		"enabled":       key.Enabled,
+		"expires_at":    key.ExpiresAt,
+		"rate_limit":    key.RateLimit,
+		"rate_window_s": key.RateWindowS,
+	})
+	if res.Error != nil {
+		return APIKey{}, classifyWrite(res.Error, "API Key 名称已存在："+key.Name, "API Key 不存在")
 	}
-	key.KeyHash = keyHash
-	key.KeyPlain = keyPlain
-	key.KeyPrefix = keyPrefix
-	key.CreatedAt = createdAt
-	return key, nil
+	if res.RowsAffected == 0 {
+		return APIKey{}, domain.NewError(domain.CodeNotFound, "API Key 不存在")
+	}
+	return r.Get(ctx, key.ID)
 }
 
 // SetEnabled 仅更新 API Key 的启停状态（Req 12.4）；不存在返回 CodeNotFound。
@@ -170,12 +134,11 @@ func (r *APIKeyRepo) SetEnabled(ctx context.Context, id string, enabled bool) er
 	if err != nil {
 		return err
 	}
-	const q = `UPDATE api_key SET enabled = $2 WHERE id = $1`
-	tag, err := r.pool.Exec(ctx, q, uid, enabled)
-	if err != nil {
-		return err
+	res := r.db.WithContext(ctx).Model(&apiKeyModel{}).Where("id = ?", uid).Update("enabled", enabled)
+	if res.Error != nil {
+		return res.Error
 	}
-	if tag.RowsAffected() == 0 {
+	if res.RowsAffected == 0 {
 		return domain.NewError(domain.CodeNotFound, "API Key 不存在")
 	}
 	return nil
@@ -188,45 +151,27 @@ func (r *APIKeyRepo) Delete(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	const q = `DELETE FROM api_key WHERE id = $1`
-	tag, err := r.pool.Exec(ctx, q, uid)
-	if err != nil {
-		return err
+	res := r.db.WithContext(ctx).Where("id = ?", uid).Delete(&apiKeyModel{})
+	if res.Error != nil {
+		return res.Error
 	}
-	if tag.RowsAffected() == 0 {
+	if res.RowsAffected == 0 {
 		return domain.NewError(domain.CodeNotFound, "API Key 不存在")
 	}
 	return nil
 }
 
-// scanAPIKey 从单行结果扫描出 APIKey。
-func scanAPIKey(row pgx.Row) (APIKey, error) {
-	var (
-		id          pgtype.UUID
-		name        string
-		keyHash     []byte
-		keyPlain    string
-		keyPrefix   string
-		enabled     bool
-		expiresAt   pgtype.Timestamptz
-		rateLimit   pgtype.Int4
-		rateWindowS pgtype.Int4
-		createdAt   time.Time
-	)
-	if err := row.Scan(&id, &name, &keyHash, &keyPlain, &keyPrefix, &enabled,
-		&expiresAt, &rateLimit, &rateWindowS, &createdAt); err != nil {
-		return APIKey{}, err
-	}
+func modelToAPIKey(model apiKeyModel) APIKey {
 	return APIKey{
-		ID:          uuidString(id),
-		Name:        name,
-		KeyHash:     keyHash,
-		KeyPlain:    keyPlain,
-		KeyPrefix:   keyPrefix,
-		Enabled:     enabled,
-		ExpiresAt:   timePtr(expiresAt),
-		RateLimit:   intPtr(rateLimit),
-		RateWindowS: intPtr(rateWindowS),
-		CreatedAt:   createdAt,
-	}, nil
+		ID:          model.ID,
+		Name:        model.Name,
+		KeyHash:     model.KeyHash,
+		KeyPlain:    model.KeyPlain,
+		KeyPrefix:   model.KeyPrefix,
+		Enabled:     model.Enabled,
+		ExpiresAt:   model.ExpiresAt,
+		RateLimit:   model.RateLimit,
+		RateWindowS: model.RateWindowS,
+		CreatedAt:   model.CreatedAt,
+	}
 }

@@ -22,7 +22,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	"gorm.io/gorm"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
 )
@@ -40,31 +40,29 @@ func requirePGDSN(t *testing.T) string {
 	return dsn
 }
 
-// setupRepos 连接临时 PG、执行向上迁移、清空业务表以保证用例间隔离，并返回连接池与聚合仓储。
+// setupRepos 连接临时 PG、初始化 schema、清空业务表以保证用例间隔离，并返回数据库句柄与聚合仓储。
 //
-// 迁移幂等执行（已是最新版本视为成功）；连接池在用例结束时自动关闭。
-func setupRepos(t *testing.T) (context.Context, *pgxpool.Pool, *Repositories) {
+// schema 初始化幂等执行；数据库连接在用例结束时自动关闭。
+func setupRepos(t *testing.T) (context.Context, *gorm.DB, *Repositories) {
 	t.Helper()
 	dsn := requirePGDSN(t)
 	ctx := context.Background()
 
-	// 连接 PG 成功后、对外（此处指执行用例）前执行向上迁移（Req 23.3）。
-	if err := RunMigrations(dsn, nil); err != nil {
-		t.Fatalf("执行数据库迁移失败: %v", err)
-	}
-
-	pool, err := NewPGPool(ctx, dsn)
+	db, err := NewDB(ctx, dsn)
 	if err != nil {
-		t.Fatalf("建立 PostgreSQL 连接池失败: %v", err)
+		t.Fatalf("建立 PostgreSQL 连接失败: %v", err)
 	}
-	t.Cleanup(pool.Close)
+	t.Cleanup(func() { _ = CloseDB(db) })
+	if err := AutoMigrate(ctx, db, nil); err != nil {
+		t.Fatalf("初始化数据库 schema 失败: %v", err)
+	}
 
 	// 清空相关表，保证每个用例从空库开始；CASCADE 会一并清理从属表。
-	if _, err := pool.Exec(ctx,
-		`TRUNCATE upstream_mcp, api_key, audit_log, call_stat RESTART IDENTITY CASCADE`); err != nil {
+	if err := db.WithContext(ctx).
+		Exec(`TRUNCATE upstream_mcp, api_key, audit_log, call_stat RESTART IDENTITY CASCADE`).Error; err != nil {
 		t.Fatalf("清理测试数据失败: %v", err)
 	}
-	return ctx, pool, NewRepositories(pool)
+	return ctx, db, NewRepositories(db)
 }
 
 // sampleUpstreamConfig 构造一份合法的上游 MCP 配置，供创建用例复用。

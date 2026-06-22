@@ -5,7 +5,8 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
 )
@@ -15,12 +16,12 @@ import (
 // Redis 为热路径、PG 为持久兜底。该仓储以「整列表替换」为唯一写语义，
 // 与 domain.Tool_Cache 的 Replace 契约一致，避免增量合并带来的不一致。
 type ToolCacheRepo struct {
-	pool *pgxpool.Pool
+	db *gorm.DB
 }
 
 // NewToolCacheRepo 构造工具缓存持久副本仓储。
-func NewToolCacheRepo(pool *pgxpool.Pool) *ToolCacheRepo {
-	return &ToolCacheRepo{pool: pool}
+func NewToolCacheRepo(db *gorm.DB) *ToolCacheRepo {
+	return &ToolCacheRepo{db: db}
 }
 
 // Replace 以整列表替换语义写入某上游 MCP 的工具列表与更新时间（Req 6.1）。
@@ -40,12 +41,12 @@ func (r *ToolCacheRepo) Replace(ctx context.Context, upstreamID string, tools []
 		return domain.NewError(domain.CodeValidation, "工具列表序列化失败："+err.Error())
 	}
 
-	const q = `
-		INSERT INTO tool_cache (upstream_id, tools, updated_at)
-		VALUES ($1, $2, $3)
-		ON CONFLICT (upstream_id)
-		DO UPDATE SET tools = EXCLUDED.tools, updated_at = EXCLUDED.updated_at`
-	if _, err := r.pool.Exec(ctx, q, uid, payload, updatedAt); err != nil {
+	model := toolCacheModel{UpstreamID: uid, Tools: JSONB(payload), UpdatedAt: updatedAt}
+	err = r.db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "upstream_id"}},
+		DoUpdates: clause.AssignmentColumns([]string{"tools", "updated_at"}),
+	}).Create(&model).Error
+	if err != nil {
 		return classifyWrite(err, "工具缓存冲突", "绑定的上游 MCP 不存在")
 	}
 	return nil
@@ -59,12 +60,8 @@ func (r *ToolCacheRepo) Get(ctx context.Context, upstreamID string) (tools []dom
 	if perr != nil {
 		return nil, time.Time{}, false, perr
 	}
-	const q = `SELECT tools, updated_at FROM tool_cache WHERE upstream_id = $1`
-	var (
-		payload []byte
-		ts      time.Time
-	)
-	scanErr := r.pool.QueryRow(ctx, q, uid).Scan(&payload, &ts)
+	var model toolCacheModel
+	scanErr := r.db.WithContext(ctx).Where("upstream_id = ?", uid).First(&model).Error
 	if scanErr != nil {
 		// 缓存缺失返回 found=false，不视为错误。
 		if e := notFoundIfNoRows(scanErr, "工具缓存不存在"); e != scanErr {
@@ -74,12 +71,12 @@ func (r *ToolCacheRepo) Get(ctx context.Context, upstreamID string) (tools []dom
 	}
 
 	out := make([]domain.ToolDef, 0)
-	if len(payload) > 0 {
-		if e := json.Unmarshal(payload, &out); e != nil {
+	if len(model.Tools) > 0 {
+		if e := json.Unmarshal(model.Tools, &out); e != nil {
 			return nil, time.Time{}, false, domain.NewError(domain.CodeValidation, "工具列表反序列化失败："+e.Error())
 		}
 	}
-	return out, ts, true, nil
+	return out, model.UpdatedAt, true, nil
 }
 
 // Delete 删除某上游 MCP 的持久缓存（Req 6.6）。
@@ -90,10 +87,9 @@ func (r *ToolCacheRepo) Delete(ctx context.Context, upstreamID string) (bool, er
 	if err != nil {
 		return false, err
 	}
-	const q = `DELETE FROM tool_cache WHERE upstream_id = $1`
-	tag, err := r.pool.Exec(ctx, q, uid)
-	if err != nil {
-		return false, err
+	res := r.db.WithContext(ctx).Where("upstream_id = ?", uid).Delete(&toolCacheModel{})
+	if res.Error != nil {
+		return false, res.Error
 	}
-	return tag.RowsAffected() > 0, nil
+	return res.RowsAffected > 0, nil
 }

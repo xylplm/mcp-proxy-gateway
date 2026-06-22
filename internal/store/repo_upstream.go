@@ -3,11 +3,9 @@ package store
 import (
 	"context"
 	"encoding/json"
-	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/lib/pq"
+	"gorm.io/gorm"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
 )
@@ -22,12 +20,12 @@ type UpstreamRow struct {
 
 // UpstreamRepo 提供上游 MCP 服务（upstream_mcp 表）的类型安全增删查改。
 type UpstreamRepo struct {
-	pool *pgxpool.Pool
+	db *gorm.DB
 }
 
 // NewUpstreamRepo 构造上游 MCP 仓储。
-func NewUpstreamRepo(pool *pgxpool.Pool) *UpstreamRepo {
-	return &UpstreamRepo{pool: pool}
+func NewUpstreamRepo(db *gorm.DB) *UpstreamRepo {
+	return &UpstreamRepo{db: db}
 }
 
 // Create 持久化一条上游 MCP 配置并返回含生成标识与时间戳的记录。
@@ -40,27 +38,21 @@ func (r *UpstreamRepo) Create(ctx context.Context, cfg domain.UpstreamConfig) (*
 	}
 
 	id := newUUID()
-	const q = `
-		INSERT INTO upstream_mcp
-			(id, name, tags, transport, conn_params, credential, enabled, sort_order, auto_sync)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-		RETURNING created_at, updated_at`
-
-	var createdAt, updatedAt time.Time
-	err = r.pool.QueryRow(ctx, q,
-		id, cfg.Name, storeTags(cfg.Tags), string(cfg.Transport), connParams, cfg.Credential,
-		cfg.Enabled, cfg.SortOrder, cfg.AutoSync,
-	).Scan(&createdAt, &updatedAt)
-	if err != nil {
+	values := map[string]any{
+		"id":          id,
+		"name":        cfg.Name,
+		"tags":        pq.StringArray(storeTags(cfg.Tags)),
+		"transport":   string(cfg.Transport),
+		"conn_params": JSONB(connParams),
+		"credential":  cfg.Credential,
+		"enabled":     cfg.Enabled,
+		"sort_order":  cfg.SortOrder,
+		"auto_sync":   cfg.AutoSync,
+	}
+	if err := r.db.WithContext(ctx).Model(&upstreamMCPModel{}).Create(values).Error; err != nil {
 		return nil, classifyWrite(err, "上游 MCP 名称已存在："+cfg.Name, "上游 MCP 不存在")
 	}
-
-	row := &UpstreamRow{}
-	row.ID = uuidString(id)
-	row.Config = cfg
-	row.CreatedAt = createdAt
-	row.UpdatedAt = updatedAt
-	return row, nil
+	return r.Get(ctx, id)
 }
 
 // Get 按标识查询单条上游 MCP；不存在返回 CodeNotFound（Req 2.6）。
@@ -69,41 +61,26 @@ func (r *UpstreamRepo) Get(ctx context.Context, id string) (*UpstreamRow, error)
 	if err != nil {
 		return nil, err
 	}
-	const q = `
-		SELECT id, name, tags, transport, conn_params, credential,
-		       enabled, sort_order, auto_sync, created_at, updated_at
-		FROM upstream_mcp
-		WHERE id = $1`
-	row, err := scanUpstream(r.pool.QueryRow(ctx, q, uid))
-	if err != nil {
+	var model upstreamMCPModel
+	if err := r.db.WithContext(ctx).Where("id = ?", uid).First(&model).Error; err != nil {
 		return nil, notFoundIfNoRows(err, "上游 MCP 不存在")
 	}
-	return row, nil
+	return modelToUpstream(model)
 }
 
 // List 返回全部上游 MCP，按 sort_order 升序、创建时间次序排列；无数据返回空切片（Req 2.8、3.4）。
 func (r *UpstreamRepo) List(ctx context.Context) ([]UpstreamRow, error) {
-	const q = `
-		SELECT id, name, tags, transport, conn_params, credential,
-		       enabled, sort_order, auto_sync, created_at, updated_at
-		FROM upstream_mcp
-		ORDER BY sort_order ASC, created_at ASC`
-	rows, err := r.pool.Query(ctx, q)
-	if err != nil {
+	var models []upstreamMCPModel
+	if err := r.db.WithContext(ctx).Order("sort_order ASC").Order("created_at ASC").Find(&models).Error; err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	result := make([]UpstreamRow, 0)
-	for rows.Next() {
-		row, err := scanUpstream(rows)
+	result := make([]UpstreamRow, 0, len(models))
+	for _, model := range models {
+		row, err := modelToUpstream(model)
 		if err != nil {
 			return nil, err
 		}
 		result = append(result, *row)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
 	}
 	return result, nil
 }
@@ -121,31 +98,25 @@ func (r *UpstreamRepo) Update(ctx context.Context, id string, cfg domain.Upstrea
 		return nil, err
 	}
 
-	const q = `
-		UPDATE upstream_mcp
-		SET name = $2, tags = $3, transport = $4, conn_params = $5,
-		    credential = $6, enabled = $7, sort_order = $8, auto_sync = $9, updated_at = now()
-		WHERE id = $1
-		RETURNING created_at, updated_at`
-
-	var createdAt, updatedAt time.Time
-	err = r.pool.QueryRow(ctx, q,
-		uid, cfg.Name, storeTags(cfg.Tags), string(cfg.Transport), connParams, cfg.Credential,
-		cfg.Enabled, cfg.SortOrder, cfg.AutoSync,
-	).Scan(&createdAt, &updatedAt)
-	if err != nil {
-		if e := notFoundIfNoRows(err, "上游 MCP 不存在"); e != err {
-			return nil, e
-		}
-		return nil, classifyWrite(err, "上游 MCP 名称已存在："+cfg.Name, "上游 MCP 不存在")
+	updates := map[string]any{
+		"name":        cfg.Name,
+		"tags":        pq.StringArray(storeTags(cfg.Tags)),
+		"transport":   string(cfg.Transport),
+		"conn_params": JSONB(connParams),
+		"credential":  cfg.Credential,
+		"enabled":     cfg.Enabled,
+		"sort_order":  cfg.SortOrder,
+		"auto_sync":   cfg.AutoSync,
+		"updated_at":  gorm.Expr("now()"),
 	}
-
-	row := &UpstreamRow{}
-	row.ID = id
-	row.Config = cfg
-	row.CreatedAt = createdAt
-	row.UpdatedAt = updatedAt
-	return row, nil
+	res := r.db.WithContext(ctx).Model(&upstreamMCPModel{}).Where("id = ?", uid).Updates(updates)
+	if res.Error != nil {
+		return nil, classifyWrite(res.Error, "上游 MCP 名称已存在："+cfg.Name, "上游 MCP 不存在")
+	}
+	if res.RowsAffected == 0 {
+		return nil, domain.NewError(domain.CodeNotFound, "上游 MCP 不存在")
+	}
+	return r.Get(ctx, id)
 }
 
 // SetEnabled 仅更新启停状态（Req 3.1、3.2）；标识不存在返回 CodeNotFound。
@@ -154,12 +125,13 @@ func (r *UpstreamRepo) SetEnabled(ctx context.Context, id string, enabled bool) 
 	if err != nil {
 		return err
 	}
-	const q = `UPDATE upstream_mcp SET enabled = $2, updated_at = now() WHERE id = $1`
-	tag, err := r.pool.Exec(ctx, q, uid, enabled)
-	if err != nil {
-		return err
+	res := r.db.WithContext(ctx).Model(&upstreamMCPModel{}).
+		Where("id = ?", uid).
+		Updates(map[string]any{"enabled": enabled, "updated_at": gorm.Expr("now()")})
+	if res.Error != nil {
+		return res.Error
 	}
-	if tag.RowsAffected() == 0 {
+	if res.RowsAffected == 0 {
 		return domain.NewError(domain.CodeNotFound, "上游 MCP 不存在")
 	}
 	return nil
@@ -171,12 +143,13 @@ func (r *UpstreamRepo) SetSortOrder(ctx context.Context, id string, sortOrder in
 	if err != nil {
 		return err
 	}
-	const q = `UPDATE upstream_mcp SET sort_order = $2, updated_at = now() WHERE id = $1`
-	tag, err := r.pool.Exec(ctx, q, uid, sortOrder)
-	if err != nil {
-		return err
+	res := r.db.WithContext(ctx).Model(&upstreamMCPModel{}).
+		Where("id = ?", uid).
+		Updates(map[string]any{"sort_order": sortOrder, "updated_at": gorm.Expr("now()")})
+	if res.Error != nil {
+		return res.Error
 	}
-	if tag.RowsAffected() == 0 {
+	if res.RowsAffected == 0 {
 		return domain.NewError(domain.CodeNotFound, "上游 MCP 不存在")
 	}
 	return nil
@@ -189,12 +162,11 @@ func (r *UpstreamRepo) Delete(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	const q = `DELETE FROM upstream_mcp WHERE id = $1`
-	tag, err := r.pool.Exec(ctx, q, uid)
-	if err != nil {
-		return err
+	res := r.db.WithContext(ctx).Where("id = ?", uid).Delete(&upstreamMCPModel{})
+	if res.Error != nil {
+		return res.Error
 	}
-	if tag.RowsAffected() == 0 {
+	if res.RowsAffected == 0 {
 		return domain.NewError(domain.CodeNotFound, "上游 MCP 不存在")
 	}
 	return nil
@@ -219,46 +191,27 @@ func storeTags(tags []string) []string {
 	return tags
 }
 
-// scanUpstream 从单行结果扫描出 UpstreamRow。
-func scanUpstream(row pgx.Row) (*UpstreamRow, error) {
-	var (
-		id         pgtype.UUID
-		name       string
-		tags       []string
-		transport  string
-		connParams []byte
-		credential string
-		enabled    bool
-		sortOrder  int
-		autoSync   bool
-		createdAt  time.Time
-		updatedAt  time.Time
-	)
-	if err := row.Scan(&id, &name, &tags, &transport, &connParams, &credential,
-		&enabled, &sortOrder, &autoSync, &createdAt, &updatedAt); err != nil {
-		return nil, err
-	}
-
-	var params map[string]any
-	if len(connParams) > 0 {
-		if err := json.Unmarshal(connParams, &params); err != nil {
+func modelToUpstream(model upstreamMCPModel) (*UpstreamRow, error) {
+	params := map[string]any{}
+	if len(model.ConnParams) > 0 {
+		if err := json.Unmarshal(model.ConnParams, &params); err != nil {
 			return nil, domain.NewError(domain.CodeValidation, "连接参数反序列化失败："+err.Error())
 		}
 	}
 
 	out := &UpstreamRow{}
-	out.ID = uuidString(id)
+	out.ID = model.ID
 	out.Config = domain.UpstreamConfig{
-		Name:       name,
-		Tags:       tags,
-		Transport:  domain.TransportType(transport),
+		Name:       model.Name,
+		Tags:       []string(model.Tags),
+		Transport:  domain.TransportType(model.Transport),
 		ConnParams: params,
-		Credential: credential,
-		Enabled:    enabled,
-		SortOrder:  sortOrder,
-		AutoSync:   autoSync,
+		Credential: model.Credential,
+		Enabled:    model.Enabled,
+		SortOrder:  model.SortOrder,
+		AutoSync:   model.AutoSync,
 	}
-	out.CreatedAt = createdAt
-	out.UpdatedAt = updatedAt
+	out.CreatedAt = model.CreatedAt
+	out.UpdatedAt = model.UpdatedAt
 	return out, nil
 }

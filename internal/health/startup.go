@@ -45,7 +45,7 @@ const (
 
 // Pinger 是依赖连通性探测的窄接口，提供 PostgreSQL 与 Redis 的探测能力（Req 20.1、20.2）。
 //
-// 装配层（任务 27.2）通常以基于 *pgxpool.Pool 与 *redis.Client 的实现满足该接口；
+// 装配层（任务 27.2）通常以基于 PostgreSQL 客户端与 *redis.Client 的实现满足该接口；
 // 单元测试可注入 mock，无需真实连接。
 type Pinger interface {
 	// PingPG 探测 PostgreSQL 连通性，连通失败返回包含原因的错误。

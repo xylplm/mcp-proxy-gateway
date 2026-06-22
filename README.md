@@ -63,7 +63,7 @@ The whole system ships as a **single Docker image** — the frontend assets are 
 
 | Layer | Choice |
 |-------|--------|
-| Backend | Go 1.25, gin, pgx/v5, go-redis/v9, robfig/cron/v3, golang-jwt/v5, golang-migrate, MCP Go SDK |
+| Backend | Go 1.25, gin, GORM + PostgreSQL driver, go-redis/v9, robfig/cron/v3, golang-jwt/v5, MCP Go SDK |
 | Frontend | Vue 3 + Vite + TypeScript + Tailwind CSS (based on the TailAdmin template) + Pinia + Vue Router + ApexCharts |
 | Storage | PostgreSQL (business data, time-partitioned stats table), Redis (tool cache / rate-limit counter / async stats buffer) |
 | Deployment | Multi-stage Docker build (frontend → embed → distroless runtime image), GitHub Actions |
@@ -191,7 +191,7 @@ The default single-port mode exposes these route facets:
 
 - **YAML config** and local persistent data live in the mounted `/data` directory; remounting the same volume after a container rebuild restores them.
 - **Business data** (upstream MCPs, rules, API Key metadata, call statistics) is persisted to PostgreSQL; the stats table is time-partitioned and cleaned up by retention.
-- Database migrations run **automatically after connecting to PostgreSQL and before serving**; migration failure aborts startup.
+- Database schema initialization runs **automatically after connecting to PostgreSQL and before serving** via GORM AutoMigrate plus PostgreSQL-specific bootstrap for the partitioned stats table; initialization failure aborts startup.
 - The admin UI supports configuration **export / import** backup.
 
 ## 🛠 Development
@@ -268,7 +268,7 @@ mcp-proxy-gateway/
 ├── internal/
 │   ├── app/                # Main assembly: component wiring, route facets, startup/shutdown
 │   ├── config/             # Configuration (env vars + YAML)
-│   ├── store/              # Repositories, connection pools, DB migrations
+│   ├── store/              # Repositories, GORM models, DB schema initialization
 │   ├── domain/             # Domain core: types, rule engine, unified error model
 │   ├── aggregation/        # Aggregation service (deterministic pipeline + call routing)
 │   ├── transport/          # Transport adapters (stdio/SSE/HTTP/WebSocket)

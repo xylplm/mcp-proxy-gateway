@@ -4,8 +4,7 @@ import (
 	"context"
 	"net/netip"
 
-	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"gorm.io/gorm"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
 )
@@ -22,12 +21,12 @@ type ACLEntry struct {
 
 // ACLRepo 提供 API Key 来源白名单的按 API Key 增删查。
 type ACLRepo struct {
-	pool *pgxpool.Pool
+	db *gorm.DB
 }
 
 // NewACLRepo 构造来源白名单仓储。
-func NewACLRepo(pool *pgxpool.Pool) *ACLRepo {
-	return &ACLRepo{pool: pool}
+func NewACLRepo(db *gorm.DB) *ACLRepo {
+	return &ACLRepo{db: db}
 }
 
 // Create 为某 API Key 新增一条来源白名单记录（Req 13.9）。
@@ -43,11 +42,14 @@ func (r *ACLRepo) Create(ctx context.Context, entry ACLEntry) (ACLEntry, error) 
 		return ACLEntry{}, err
 	}
 	id := newUUID()
-	const q = `INSERT INTO api_key_acl (id, api_key_id, cidr) VALUES ($1, $2, $3)`
-	if _, err := r.pool.Exec(ctx, q, id, apiKeyID, cidr); err != nil {
+	if err := r.db.WithContext(ctx).Model(&apiKeyACLModel{}).Create(map[string]any{
+		"id":         id,
+		"api_key_id": apiKeyID,
+		"cidr":       cidr,
+	}).Error; err != nil {
 		return ACLEntry{}, classifyWrite(err, "来源白名单冲突", "绑定的 API Key 不存在")
 	}
-	entry.ID = uuidString(id)
+	entry.ID = id
 	entry.CIDR = cidr
 	return entry, nil
 }
@@ -58,35 +60,23 @@ func (r *ACLRepo) ListByAPIKey(ctx context.Context, apiKeyID string) ([]ACLEntry
 	if err != nil {
 		return nil, err
 	}
-	const q = `
-		SELECT id, api_key_id, host(cidr) || '/' || masklen(cidr)
-		FROM api_key_acl
-		WHERE api_key_id = $1
-		ORDER BY cidr ASC`
-	rows, err := r.pool.Query(ctx, q, uid)
+	type aclRow struct {
+		ID       string
+		APIKeyID string
+		CIDR     string
+	}
+	var rows []aclRow
+	err = r.db.WithContext(ctx).Table("api_key_acl").
+		Select("id, api_key_id, host(cidr) || '/' || masklen(cidr) AS cidr").
+		Where("api_key_id = ?", uid).
+		Order("api_key_acl.cidr ASC").
+		Scan(&rows).Error
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	result := make([]ACLEntry, 0)
-	for rows.Next() {
-		var (
-			id       pgtype.UUID
-			keyID    pgtype.UUID
-			cidrText string
-		)
-		if err := rows.Scan(&id, &keyID, &cidrText); err != nil {
-			return nil, err
-		}
-		result = append(result, ACLEntry{
-			ID:       uuidString(id),
-			APIKeyID: uuidString(keyID),
-			CIDR:     cidrText,
-		})
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
+	result := make([]ACLEntry, 0, len(rows))
+	for _, row := range rows {
+		result = append(result, ACLEntry{ID: row.ID, APIKeyID: row.APIKeyID, CIDR: row.CIDR})
 	}
 	return result, nil
 }
@@ -97,12 +87,11 @@ func (r *ACLRepo) Delete(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	const q = `DELETE FROM api_key_acl WHERE id = $1`
-	tag, err := r.pool.Exec(ctx, q, uid)
-	if err != nil {
-		return err
+	res := r.db.WithContext(ctx).Where("id = ?", uid).Delete(&apiKeyACLModel{})
+	if res.Error != nil {
+		return res.Error
 	}
-	if tag.RowsAffected() == 0 {
+	if res.RowsAffected == 0 {
 		return domain.NewError(domain.CodeNotFound, "来源白名单记录不存在")
 	}
 	return nil
@@ -116,12 +105,11 @@ func (r *ACLRepo) DeleteByAPIKey(ctx context.Context, apiKeyID string) (int, err
 	if err != nil {
 		return 0, err
 	}
-	const q = `DELETE FROM api_key_acl WHERE api_key_id = $1`
-	tag, err := r.pool.Exec(ctx, q, uid)
-	if err != nil {
-		return 0, err
+	res := r.db.WithContext(ctx).Where("api_key_id = ?", uid).Delete(&apiKeyACLModel{})
+	if res.Error != nil {
+		return 0, res.Error
 	}
-	return int(tag.RowsAffected()), nil
+	return int(res.RowsAffected), nil
 }
 
 // normalizeCIDR 校验并规范化 CIDR 文本。

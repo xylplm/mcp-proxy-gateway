@@ -4,8 +4,8 @@ import (
 	"context"
 	"sync"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
+	"gorm.io/gorm"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/aggregation"
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
@@ -83,16 +83,16 @@ func (a apiKeyFilterListerAdapter) ListAPIKeyFiltersByAPIKey(ctx context.Context
 	return rules, nil
 }
 
-// --- 连通性探测适配器（pgxpool/redis → health.Pinger）---
+// --- 连通性探测适配器（GORM/redis → health.Pinger）---
 
-// pinger 把 PG 连接池与 Redis 客户端适配为 health.Pinger，供启动连通性探测与详细健康端点复用。
+// pinger 把 GORM PG 连接与 Redis 客户端适配为 health.Pinger，供启动连通性探测与详细健康端点复用。
 type pinger struct {
-	pool *pgxpool.Pool
-	rdb  *redis.Client
+	db  *gorm.DB
+	rdb *redis.Client
 }
 
 func (p pinger) PingPG(ctx context.Context) error {
-	return p.pool.Ping(ctx)
+	return store.PingDB(ctx, p.db)
 }
 
 func (p pinger) PingRedis(ctx context.Context) error {

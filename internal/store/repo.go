@@ -4,12 +4,9 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
-	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"gorm.io/gorm"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
 )
@@ -24,7 +21,7 @@ const (
 
 // Repositories 聚合所有业务实体的仓储，便于在主程序装配时统一构造与注入。
 //
-// 各仓储均持有同一个 pgxpool.Pool，连接由调用方在程序退出前关闭。
+// 各仓储均持有同一个 GORM 数据库句柄，底层连接由调用方在程序退出前关闭。
 type Repositories struct {
 	// Upstream 为上游 MCP 服务仓储。
 	Upstream *UpstreamRepo
@@ -46,102 +43,79 @@ type Repositories struct {
 	Audit *AuditRepo
 }
 
-// NewRepositories 基于连接池构造所有仓储。
-func NewRepositories(pool *pgxpool.Pool) *Repositories {
+// NewRepositories 基于 GORM 数据库句柄构造所有仓储。
+func NewRepositories(db *gorm.DB) *Repositories {
 	return &Repositories{
-		Upstream:     NewUpstreamRepo(pool),
-		Alias:        NewAliasRepo(pool),
-		FilterMCP:    NewFilterMCPRepo(pool),
-		FilterAPIKey: NewFilterAPIKeyRepo(pool),
-		APIKey:       NewAPIKeyRepo(pool),
-		ACL:          NewACLRepo(pool),
-		ToolCache:    NewToolCacheRepo(pool),
-		CallStat:     NewCallStatRepo(pool),
-		Audit:        NewAuditRepo(pool),
+		Upstream:     NewUpstreamRepo(db),
+		Alias:        NewAliasRepo(db),
+		FilterMCP:    NewFilterMCPRepo(db),
+		FilterAPIKey: NewFilterAPIKeyRepo(db),
+		APIKey:       NewAPIKeyRepo(db),
+		ACL:          NewACLRepo(db),
+		ToolCache:    NewToolCacheRepo(db),
+		CallStat:     NewCallStatRepo(db),
+		Audit:        NewAuditRepo(db),
 	}
 }
 
-// newUUID 生成一个版本 4 的随机 UUID，返回可直接用于 pgx 参数的 pgtype.UUID。
+// newUUID 生成一个版本 4 的随机 UUID 字符串。
 //
 // 主键由应用侧生成，便于在持久化前即获得标识并返回给调用方，避免依赖数据库默认值。
-func newUUID() pgtype.UUID {
+func newUUID() string {
 	var b [16]byte
 	// crypto/rand.Read 在常规平台上不会失败；即便失败也只会得到全零字节，
 	// 仍是合法的 UUID 值，不影响主键唯一性以外的正确性。
 	_, _ = rand.Read(b[:])
 	b[6] = (b[6] & 0x0f) | 0x40 // 版本号 4
 	b[8] = (b[8] & 0x3f) | 0x80 // variant 10xx
-	return pgtype.UUID{Bytes: b, Valid: true}
-}
-
-// parseUUID 将字符串解析为 pgtype.UUID；空串视为 SQL NULL（Valid=false）。
-//
-// 解析失败（格式非法）返回校验类错误，避免把非法标识透传到数据库层。
-func parseUUID(s string) (pgtype.UUID, error) {
-	var u pgtype.UUID
-	if s == "" {
-		return u, nil
-	}
-	if err := u.Scan(s); err != nil {
-		return u, domain.NewError(domain.CodeValidation, "标识格式非法："+err.Error())
-	}
-	return u, nil
-}
-
-// uuidString 将 pgtype.UUID 转为标准 8-4-4-4-12 字符串；NULL 返回空串。
-func uuidString(u pgtype.UUID) string {
-	if !u.Valid {
-		return ""
-	}
-	b := u.Bytes
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
-// nullableText 将字符串转为可空文本参数：空串编码为 SQL NULL。
-func nullableText(s string) pgtype.Text {
-	return pgtype.Text{String: s, Valid: s != ""}
+// parseUUID 校验 UUID 字符串；空串视为 SQL NULL 场景，原样返回空串。
+//
+// 解析失败（格式非法）返回校验类错误，避免把非法标识透传到数据库层。
+func parseUUID(s string) (string, error) {
+	if s == "" {
+		return "", nil
+	}
+	if !isUUID(s) {
+		return "", domain.NewError(domain.CodeValidation, "标识格式非法："+s)
+	}
+	return s, nil
 }
 
-// nullableJSON 将 JSON 原始字节转为可空 JSONB 参数：空切片编码为 SQL NULL。
-func nullableJSON(raw []byte) any {
-	if len(raw) == 0 {
-		return nil
+func nullableUUID(s string) (*string, error) {
+	uid, err := parseUUID(s)
+	if err != nil {
+		return nil, err
 	}
-	return raw
+	if uid == "" {
+		return nil, nil
+	}
+	return &uid, nil
 }
 
-// nullableInt 将 *int 转为可空整型参数：nil 编码为 SQL NULL。
-func nullableInt(p *int) pgtype.Int4 {
-	if p == nil {
-		return pgtype.Int4{}
+func isUUID(s string) bool {
+	if len(s) != 36 {
+		return false
 	}
-	return pgtype.Int4{Int32: int32(*p), Valid: true}
+	for i, ch := range s {
+		switch i {
+		case 8, 13, 18, 23:
+			if ch != '-' {
+				return false
+			}
+		default:
+			if !isHex(ch) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
-// intPtr 将可空整型读取结果转为 *int：NULL 返回 nil。
-func intPtr(v pgtype.Int4) *int {
-	if !v.Valid {
-		return nil
-	}
-	n := int(v.Int32)
-	return &n
-}
-
-// nullableTime 将 *time.Time 转为可空时间戳参数：nil 编码为 SQL NULL。
-func nullableTime(p *time.Time) pgtype.Timestamptz {
-	if p == nil {
-		return pgtype.Timestamptz{}
-	}
-	return pgtype.Timestamptz{Time: *p, Valid: true}
-}
-
-// timePtr 将可空时间戳读取结果转为 *time.Time：NULL 返回 nil。
-func timePtr(v pgtype.Timestamptz) *time.Time {
-	if !v.Valid {
-		return nil
-	}
-	t := v.Time
-	return &t
+func isHex(ch rune) bool {
+	return ch >= '0' && ch <= '9' || ch >= 'a' && ch <= 'f' || ch >= 'A' && ch <= 'F'
 }
 
 // classifyWrite 将写操作（INSERT/UPDATE）的驱动错误映射为统一领域错误。
@@ -149,6 +123,15 @@ func timePtr(v pgtype.Timestamptz) *time.Time {
 //   - 外键约束冲突 → NOT_FOUND（引用的父记录不存在）。
 //   - 其余错误原样返回。
 func classifyWrite(err error, conflictMsg, notFoundMsg string) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, gorm.ErrDuplicatedKey) {
+		return domain.NewError(domain.CodeConflict, conflictMsg)
+	}
+	if errors.Is(err, gorm.ErrForeignKeyViolated) {
+		return domain.NewError(domain.CodeNotFound, notFoundMsg)
+	}
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
 		switch pgErr.Code {
@@ -161,9 +144,9 @@ func classifyWrite(err error, conflictMsg, notFoundMsg string) error {
 	return err
 }
 
-// notFoundIfNoRows 将 pgx.ErrNoRows 映射为 NOT_FOUND，其余错误原样返回。
+// notFoundIfNoRows 将 GORM 未找到错误映射为 NOT_FOUND，其余错误原样返回。
 func notFoundIfNoRows(err error, notFoundMsg string) error {
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return domain.NewError(domain.CodeNotFound, notFoundMsg)
 	}
 	return err

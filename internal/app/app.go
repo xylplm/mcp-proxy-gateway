@@ -1,6 +1,6 @@
 // Package app 负责把 MCP Proxy Gateway 的全部组件装配为一个可运行系统（任务 27.2）。
 //
-// 装配遵循依赖链：Config_Manager → DB/Redis/迁移 → 各应用服务 →
+// 装配遵循依赖链：Config_Manager → DB/Redis/schema 初始化 → 各应用服务 →
 // 领域核心 → 入站路由（静态 SPA / 管理 REST API / 对外 MCP API / healthz）。管理面
 // （JWT）与服务面（API Key + 限流 + 来源白名单）在路由前缀与中间件链上完全分离
 // （设计「路由分面」，Req 11.8、17.1）。启动时先做连通性探测再对外提供服务（Req 20.1）。
@@ -17,8 +17,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
+	"gorm.io/gorm"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/audit"
 	"github.com/myGithub/mcp-proxy-gateway/internal/config"
@@ -66,9 +66,9 @@ type App struct {
 	publicMCPAddr        string
 	exposeMCPOnAdminAddr bool
 
-	cfg  *config.Manager
-	pool *pgxpool.Pool
-	rdb  *redis.Client
+	cfg *config.Manager
+	db  *gorm.DB
+	rdb *redis.Client
 
 	adminEngine     *gin.Engine
 	publicMCPEngine *gin.Engine
@@ -97,9 +97,9 @@ type App struct {
 	syncTimeout time.Duration
 }
 
-// New 按依赖顺序装配整个系统：加载配置 → 连接 DB/Redis 并执行迁移 → 校验加密密钥 →
+// New 按依赖顺序装配整个系统：加载配置 → 连接 DB/Redis 并初始化 schema → 校验加密密钥 →
 // 构造各应用服务、领域核心与入站路由。任一前置步骤失败（缺失/非法环境变量、YAML 非法、
-// 加密密钥无效、迁移失败、连接失败）都会返回错误，调用方据此记录日志并以非零码退出
+// 加密密钥无效、schema 初始化失败、连接失败）都会返回错误，调用方据此记录日志并以非零码退出
 // （Req 18.3/18.6、19.4、20.1）。
 //
 // 注意：New 完成「构造与接线」，但不启动后台服务，也不开始对外服务；启动连通性探测与
@@ -119,18 +119,18 @@ func New(ctx context.Context, logger *slog.Logger, opts ...Option) (*App, error)
 		return nil, err
 	}
 
-	// 2) 数据层：PG 连接池 + Redis 客户端 + 执行向上迁移（迁移在连接成功后、对外服务前，Req 23.3）。
-	pool, err := store.NewPGPool(ctx, envCfg.PGDSN)
+	// 2) 数据层：GORM PG 连接 + schema 初始化 + Redis 客户端（初始化在连接成功后、对外服务前，Req 23.3）。
+	db, err := store.NewDB(ctx, envCfg.PGDSN)
 	if err != nil {
 		return nil, err
 	}
-	if err := store.RunMigrations(envCfg.PGDSN, logger); err != nil {
-		pool.Close()
+	if err := store.AutoMigrate(ctx, db, logger); err != nil {
+		_ = store.CloseDB(db)
 		return nil, err
 	}
 	rdb, err := store.NewRedisClient(envCfg.RedisAddr, envCfg.RedisPassword)
 	if err != nil {
-		pool.Close()
+		_ = store.CloseDB(db)
 		return nil, err
 	}
 
@@ -139,7 +139,7 @@ func New(ctx context.Context, logger *slog.Logger, opts ...Option) (*App, error)
 		adminAddr:            defaultAdminAddr,
 		exposeMCPOnAdminAddr: true,
 		cfg:                  cfgMgr,
-		pool:                 pool,
+		db:                   db,
 		rdb:                  rdb,
 		restartCh:            make(chan struct{}, 1),
 	}
@@ -159,8 +159,8 @@ func New(ctx context.Context, logger *slog.Logger, opts ...Option) (*App, error)
 
 // closeInfra 释放基础设施连接（用于构造失败时回滚或停机时清理）。
 func (a *App) closeInfra() error {
-	if a.pool != nil {
-		a.pool.Close()
+	if a.db != nil {
+		_ = store.CloseDB(a.db)
 	}
 	if a.rdb != nil {
 		return a.rdb.Close()

@@ -37,7 +37,7 @@ func (a *App) build(envCfg config.EnvConfig) error {
 	a.exposeMCPOnAdminAddr = yamlCfg.Server.ExposeMCPOnAdminAddr
 
 	// --- 仓储层 ---
-	repos := store.NewRepositories(a.pool)
+	repos := store.NewRepositories(a.db)
 
 	// --- 出站适配：工具缓存、传输工厂、连接拨号/会话注册 ---
 	toolCache := cache.New(a.rdb, repos.ToolCache, a.logger)
@@ -154,7 +154,7 @@ func (a *App) build(envCfg config.EnvConfig) error {
 	)
 
 	// --- 健康检查：启动连通性探测器 + 详细健康汇总器（Req 20）---
-	pg := pinger{pool: a.pool, rdb: a.rdb}
+	pg := pinger{db: a.db, rdb: a.rdb}
 	a.prober = health.NewStartupProber(health.Options{
 		Pinger:        pg,
 		ListUpstreams: mgr.List,

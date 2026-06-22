@@ -1,111 +1,87 @@
 package store
 
 import (
-	"io/fs"
 	"strings"
 	"testing"
 )
 
-// TestMigrationsFSContainsScripts 验证内嵌文件系统能读取到迁移脚本，
-// 且每个 *.up.sql 都有成对的 *.down.sql（golang-migrate 版本化迁移要求成对存在）。
-func TestMigrationsFSContainsScripts(t *testing.T) {
-	entries, err := fs.ReadDir(MigrationsFS(), "migrations")
-	if err != nil {
-		t.Fatalf("读取内嵌 migrations 目录失败: %v", err)
+// TestGormModelsKeepCoreTableNames 验证 GORM model 显式绑定当前 schema 的核心表名。
+func TestGormModelsKeepCoreTableNames(t *testing.T) {
+	tables := map[string]string{
+		"upstream":                    upstreamMCPModel{}.TableName(),
+		"alias":                       aliasRuleModel{}.TableName(),
+		"alias upstream binding":      aliasRuleUpstreamModel{}.TableName(),
+		"mcp filter":                  filterRuleMCPModel{}.TableName(),
+		"mcp filter upstream binding": filterRuleMCPUpstreamModel{}.TableName(),
+		"api key":                     apiKeyModel{}.TableName(),
+		"api key filter":              filterRuleAPIKeyModel{}.TableName(),
+		"api key acl":                 apiKeyACLModel{}.TableName(),
+		"tool cache":                  toolCacheModel{}.TableName(),
+		"call stat":                   callStatModel{}.TableName(),
+		"audit log":                   auditLogModel{}.TableName(),
 	}
-
-	ups := map[string]bool{}
-	downs := map[string]bool{}
-	for _, e := range entries {
-		name := e.Name()
-		switch {
-		case strings.HasSuffix(name, ".up.sql"):
-			ups[strings.TrimSuffix(name, ".up.sql")] = true
-		case strings.HasSuffix(name, ".down.sql"):
-			downs[strings.TrimSuffix(name, ".down.sql")] = true
-		}
+	want := map[string]string{
+		"upstream":                    "upstream_mcp",
+		"alias":                       "alias_rule",
+		"alias upstream binding":      "alias_rule_upstream",
+		"mcp filter":                  "filter_rule_mcp",
+		"mcp filter upstream binding": "filter_rule_mcp_upstream",
+		"api key":                     "api_key",
+		"api key filter":              "filter_rule_apikey",
+		"api key acl":                 "api_key_acl",
+		"tool cache":                  "tool_cache",
+		"call stat":                   "call_stat",
+		"audit log":                   "audit_log",
 	}
-
-	if len(ups) == 0 {
-		t.Fatal("未发现任何 *.up.sql 迁移脚本")
-	}
-
-	for version := range ups {
-		if !downs[version] {
-			t.Errorf("迁移 %q 缺少对应的 .down.sql 脚本", version)
-		}
-	}
-	for version := range downs {
-		if !ups[version] {
-			t.Errorf("迁移 %q 缺少对应的 .up.sql 脚本", version)
+	for name, got := range tables {
+		if got != want[name] {
+			t.Errorf("%s 表名不一致，期望 %s，实际 %s", name, want[name], got)
 		}
 	}
 }
 
-// TestInitMigrationDefinesCoreTables 验证初始向上迁移包含设计文档要求的全部核心表、
-// call_stat 的时间分区声明以及关键索引（Req 23.3、16.10）。
-func TestInitMigrationDefinesCoreTables(t *testing.T) {
-	data, err := fs.ReadFile(MigrationsFS(), "migrations/000001_init_schema.up.sql")
-	if err != nil {
-		t.Fatalf("读取初始迁移脚本失败: %v", err)
-	}
-	sql := string(data)
-
-	tables := []string{
-		"upstream_mcp", "alias_rule", "filter_rule_mcp", "api_key",
-		"filter_rule_apikey", "api_key_acl", "tool_cache", "call_stat", "audit_log",
-	}
-	for _, tbl := range tables {
-		if !strings.Contains(sql, "CREATE TABLE "+tbl) {
-			t.Errorf("初始迁移缺少表定义: %s", tbl)
-		}
-	}
-
-	// call_stat 必须按 called_at 时间范围分区，且建有默认分区以保证迁移后即可写入。
-	if !strings.Contains(sql, "PARTITION BY RANGE (called_at)") {
-		t.Error("call_stat 缺少按 called_at 的范围分区声明")
-	}
-	if !strings.Contains(sql, "PARTITION OF call_stat DEFAULT") {
-		t.Error("call_stat 缺少默认分区，迁移后可能无法写入统计记录")
-	}
-
-	// 初始化脚本应直接包含正式上线前折叠后的最终 schema。
-	currentColumns := []string{
-		"tags           TEXT[]       NOT NULL DEFAULT '{}'",
-		"key_plain     TEXT NOT NULL DEFAULT ''",
-		"status          VARCHAR(32) NOT NULL DEFAULT 'success'",
+// TestCallStatSchemaDDLKeepsPartitioning 验证 Go 代码内维护的 call_stat DDL 保留时间分区和关键字段。
+func TestCallStatSchemaDDLKeepsPartitioning(t *testing.T) {
+	checks := []string{
+		"CREATE TABLE IF NOT EXISTS call_stat",
+		"PARTITION BY RANGE (called_at)",
+		"id              BIGSERIAL",
+		"upstream_id     UUID",
 		"request_args    JSONB",
 		"response_result JSONB",
-		"error_message   TEXT",
 		"failure_detail  JSONB",
 		"mode            VARCHAR(16) NOT NULL DEFAULT 'full'",
 		"source          VARCHAR(16) NOT NULL DEFAULT 'api'",
+		"PRIMARY KEY (id, called_at)",
 	}
-	for _, col := range currentColumns {
-		if !strings.Contains(sql, col) {
-			t.Errorf("初始迁移缺少当前 schema 字段: %s", col)
+	for _, check := range checks {
+		if !strings.Contains(createCallStatTableSQL, check) {
+			t.Errorf("call_stat DDL 缺少关键片段: %s", check)
 		}
 	}
+}
 
-	// design.md 标注的 call_stat 关键索引。
-	indexCols := []string{
-		"(called_at)",
-		"(upstream_id, called_at)",
-		"(api_key_id, called_at)",
-		"(upstream_id, original_name)",
-		"(called_at DESC, id DESC)",
-		"(status, called_at DESC)",
-		"(mode)",
-		"(source)",
+// TestSchemaExtrasKeepCascadeConstraints 验证额外 schema 初始化仍包含级联删除外键约束。
+func TestSchemaExtrasKeepCascadeConstraints(t *testing.T) {
+	constraints := []string{
+		"alias_rule_upstream_rule_id_fkey",
+		"alias_rule_upstream_upstream_id_fkey",
+		"filter_rule_mcp_upstream_rule_id_fkey",
+		"filter_rule_mcp_upstream_upstream_id_fkey",
+		"filter_rule_apikey_api_key_id_fkey",
+		"api_key_acl_api_key_id_fkey",
+		"tool_cache_upstream_id_fkey",
 	}
-	for _, cols := range indexCols {
-		if !strings.Contains(sql, cols) {
-			t.Errorf("call_stat 缺少关键索引列组合: %s", cols)
+	for _, name := range constraints {
+		found := false
+		for _, constraint := range cascadeConstraintDefinitions() {
+			if constraint.Name == name && strings.Contains(constraint.SQL, "ON DELETE CASCADE") {
+				found = true
+				break
+			}
 		}
-	}
-
-	// 级联删除外键约束。
-	if !strings.Contains(sql, "ON DELETE CASCADE") {
-		t.Error("缺少 ON DELETE CASCADE 外键约束")
+		if !found {
+			t.Errorf("缺少级联删除约束定义: %s", name)
+		}
 	}
 }

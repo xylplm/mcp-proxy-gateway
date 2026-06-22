@@ -18,9 +18,9 @@ import (
 //
 // 实现策略（方案 A，进程内内存替身）：
 //
-// 真实的 ToolCache 同时耦合 *redis.Client 与具体类型 *store.ToolCacheRepo
-// （后者内含 *pgxpool.Pool 且非接口），无法在不连真实 Redis/PG 的情况下注入
-// 可控替身。因此本测试在包内实现一个内存版 inMemoryToolCache，它满足
+// 真实的 ToolCache 同时耦合 *redis.Client 与具体类型 *store.ToolCacheRepo，
+// 无法在不连真实 Redis/PG 的情况下注入可控替身。因此本测试在包内实现
+// 一个内存版 inMemoryToolCache，它满足
 // domain.Tool_Cache 接口并精确遵循「整列表替换」语义：每次 Replace 直接以新列表
 // 覆盖整个缓存条目（而非合并/追加），Get 原样读回。下面的编译期断言确保该替身
 // 与真实实现实现的是同一份契约接口，从而属性所验证的 Get/Replace 行为即为

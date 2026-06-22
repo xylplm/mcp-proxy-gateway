@@ -8,9 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"gorm.io/gorm"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
 )
@@ -142,61 +140,49 @@ type ToolErrorRank struct {
 
 // CallStatRepo 提供调用统计（call_stat 表）的批量写入与多维度查询。
 type CallStatRepo struct {
-	pool *pgxpool.Pool
+	db *gorm.DB
 }
 
 // NewCallStatRepo 构造调用统计仓储。
-func NewCallStatRepo(pool *pgxpool.Pool) *CallStatRepo {
-	return &CallStatRepo{pool: pool}
+func NewCallStatRepo(db *gorm.DB) *CallStatRepo {
+	return &CallStatRepo{db: db}
 }
 
 // Insert 批量写入调用统计记录，供后台 worker 将异步缓冲批量落库使用（Req 16.1、16.8）。
 //
-// 采用 pgx CopyFrom 高效批量插入；空切片为无操作。id 由 BIGSERIAL 自增生成。
+// 使用 GORM 分批插入；空切片为无操作。id 由 BIGSERIAL 自增生成。
 func (r *CallStatRepo) Insert(ctx context.Context, records []CallStatRecord) error {
 	if len(records) == 0 {
 		return nil
 	}
-	columns := []string{
-		"upstream_id", "original_name", "exposed_name",
-		"api_key_id", "called_at", "latency_ms", "success",
-		"status", "request_args", "response_result", "error_message", "failure_detail",
-		"mode", "source",
-	}
-	rows := make([][]any, 0, len(records))
+	models := make([]callStatModel, 0, len(records))
 	for _, rec := range records {
-		upstreamID, err := parseUUID(rec.UpstreamID)
+		upstreamID, err := nullableUUID(rec.UpstreamID)
 		if err != nil {
 			return err
 		}
-		apiKeyID, err := parseUUID(rec.APIKeyID)
+		apiKeyID, err := nullableUUID(rec.APIKeyID)
 		if err != nil {
 			return err
 		}
-		status := normalizeCallStatus(rec.Status, rec.Success)
-		rows = append(rows, []any{
-			upstreamID,
-			rec.OriginalName,
-			nullableText(rec.ExposedName),
-			apiKeyID,
-			rec.CalledAt,
-			int32(rec.LatencyMS),
-			rec.Success,
-			status,
-			nullableJSON(rec.RequestArgs),
-			nullableJSON(rec.ResponseResult),
-			nullableText(rec.ErrorMessage),
-			nullableJSON(rec.FailureDetail),
-			normalizeMode(rec.Mode),
-			normalizeSource(rec.Source),
+		models = append(models, callStatModel{
+			UpstreamID:     upstreamID,
+			OriginalName:   rec.OriginalName,
+			ExposedName:    nullableString(rec.ExposedName),
+			APIKeyID:       apiKeyID,
+			CalledAt:       rec.CalledAt,
+			LatencyMS:      rec.LatencyMS,
+			Success:        rec.Success,
+			Status:         normalizeCallStatus(rec.Status, rec.Success),
+			RequestArgs:    JSONB(rec.RequestArgs),
+			ResponseResult: JSONB(rec.ResponseResult),
+			ErrorMessage:   nullableString(rec.ErrorMessage),
+			FailureDetail:  JSONB(rec.FailureDetail),
+			Mode:           normalizeMode(rec.Mode),
+			Source:         normalizeSource(rec.Source),
 		})
 	}
-
-	_, err := r.pool.CopyFrom(ctx, pgx.Identifier{"call_stat"}, columns, pgx.CopyFromRows(rows))
-	if err != nil {
-		return err
-	}
-	return nil
+	return r.db.WithContext(ctx).CreateInBatches(models, 1000).Error
 }
 
 // ListRecords 按调用时间倒序分页返回调用记录。afterAt/afterID 用于前端停留页面时增量追加最新调用。
@@ -211,41 +197,41 @@ func (r *CallStatRepo) ListRecords(ctx context.Context, limit int, afterID int64
 		SELECT
 			cs.id,
 			cs.upstream_id,
-			coalesce(up.name, ''),
+			coalesce(up.name, '') AS upstream_name,
 			cs.original_name,
-			coalesce(cs.exposed_name, ''),
+			coalesce(cs.exposed_name, '') AS exposed_name,
 			cs.api_key_id,
-			coalesce(ak.name, ''),
+			coalesce(ak.name, '') AS api_key_name,
 			cs.called_at,
 			cs.latency_ms,
 			cs.success,
 			cs.status,
-			coalesce(cs.request_args, 'null'::jsonb),
-			coalesce(cs.response_result, 'null'::jsonb),
-			coalesce(cs.error_message, ''),
-			coalesce(cs.failure_detail, 'null'::jsonb),
+			coalesce(cs.request_args, 'null'::jsonb) AS request_args,
+			coalesce(cs.response_result, 'null'::jsonb) AS response_result,
+			coalesce(cs.error_message, '') AS error_message,
+			coalesce(cs.failure_detail, 'null'::jsonb) AS failure_detail,
 			cs.mode,
 			cs.source
 		FROM call_stat cs
 		LEFT JOIN upstream_mcp up ON up.id = cs.upstream_id
 		LEFT JOIN api_key ak ON ak.id = cs.api_key_id
 		WHERE (
-			($1::bigint = 0 AND $2::timestamptz IS NULL)
-			OR cs.id > $1
-			OR ($2::timestamptz IS NOT NULL AND (cs.called_at > $2 OR (cs.called_at = $2 AND cs.id > $1)))
+			(?::bigint = 0 AND ?::timestamptz IS NULL)
+			OR cs.id > ?
+			OR (?::timestamptz IS NOT NULL AND (cs.called_at > ? OR (cs.called_at = ? AND cs.id > ?)))
 		)
 		ORDER BY cs.called_at DESC, cs.id DESC
-		LIMIT $3`
+		LIMIT ?`
 	var afterAtParam any
 	if !afterAt.IsZero() {
 		afterAtParam = afterAt
 	}
-	rows, err := r.pool.Query(ctx, q, afterID, afterAtParam, limit)
+	var rows []callRecordRow
+	err := r.db.WithContext(ctx).Raw(q, afterID, afterAtParam, afterID, afterAtParam, afterAtParam, afterAtParam, afterID, limit).Scan(&rows).Error
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	return scanCallRecordViews(rows)
+	return callRecordRowsToViews(rows), nil
 }
 
 // GetRecord 按 ID 读取单条调用记录详情。
@@ -254,36 +240,32 @@ func (r *CallStatRepo) GetRecord(ctx context.Context, id int64) (CallRecordView,
 		SELECT
 			cs.id,
 			cs.upstream_id,
-			coalesce(up.name, ''),
+			coalesce(up.name, '') AS upstream_name,
 			cs.original_name,
-			coalesce(cs.exposed_name, ''),
+			coalesce(cs.exposed_name, '') AS exposed_name,
 			cs.api_key_id,
-			coalesce(ak.name, ''),
+			coalesce(ak.name, '') AS api_key_name,
 			cs.called_at,
 			cs.latency_ms,
 			cs.success,
 			cs.status,
-			coalesce(cs.request_args, 'null'::jsonb),
-			coalesce(cs.response_result, 'null'::jsonb),
-			coalesce(cs.error_message, ''),
-			coalesce(cs.failure_detail, 'null'::jsonb),
+			coalesce(cs.request_args, 'null'::jsonb) AS request_args,
+			coalesce(cs.response_result, 'null'::jsonb) AS response_result,
+			coalesce(cs.error_message, '') AS error_message,
+			coalesce(cs.failure_detail, 'null'::jsonb) AS failure_detail,
 			cs.mode,
 			cs.source
 		FROM call_stat cs
 		LEFT JOIN upstream_mcp up ON up.id = cs.upstream_id
 		LEFT JOIN api_key ak ON ak.id = cs.api_key_id
-		WHERE cs.id = $1
+		WHERE cs.id = ?
 		ORDER BY cs.called_at DESC
 		LIMIT 1`
-	rows, err := r.pool.Query(ctx, q, id)
-	if err != nil {
+	var rows []callRecordRow
+	if err := r.db.WithContext(ctx).Raw(q, id).Scan(&rows).Error; err != nil {
 		return CallRecordView{}, err
 	}
-	defer rows.Close()
-	records, err := scanCallRecordViews(rows)
-	if err != nil {
-		return CallRecordView{}, err
-	}
+	records := callRecordRowsToViews(rows)
 	if len(records) == 0 {
 		return CallRecordView{}, domain.NewError(domain.CodeNotFound, "调用记录不存在")
 	}
@@ -292,12 +274,11 @@ func (r *CallStatRepo) GetRecord(ctx context.Context, id int64) (CallRecordView,
 
 // ClearRecordsBefore removes call records not newer than cutoff.
 func (r *CallStatRepo) ClearRecordsBefore(ctx context.Context, cutoff time.Time) (int64, error) {
-	const q = `DELETE FROM call_stat WHERE called_at <= $1`
-	tag, err := r.pool.Exec(ctx, q, cutoff)
-	if err != nil {
-		return 0, err
+	res := r.db.WithContext(ctx).Where("called_at <= ?", cutoff).Delete(&callStatModel{})
+	if res.Error != nil {
+		return 0, res.Error
 	}
-	return tag.RowsAffected(), nil
+	return res.RowsAffected, nil
 }
 
 // CountByUpstream 统计 [start, end] 闭区间内各上游 MCP 的调用条数（含成功失败）（Req 16.2、16.5）。
@@ -311,9 +292,9 @@ func (r *CallStatRepo) CountByUpstream(ctx context.Context, start, end time.Time
 		return nil, err
 	}
 	const q = `
-			SELECT upstream_id, count(*), max(source)
-			FROM call_stat
-		WHERE called_at >= $1 AND called_at <= $2
+		SELECT upstream_id AS id, count(*) AS count, max(source) AS source
+		FROM call_stat
+		WHERE called_at >= ? AND called_at <= ?
 		GROUP BY upstream_id
 		ORDER BY count(*) DESC`
 	return r.queryDimensionCounts(ctx, q, start, end)
@@ -331,12 +312,12 @@ func (r *CallStatRepo) CountByAPIKey(ctx context.Context, start, end time.Time) 
 		return nil, err
 	}
 	const q = `
-			SELECT api_key_id, count(*),
-			       CASE WHEN bool_and(api_key_id IS NULL)
-			            THEN max(source)
-			            ELSE 'api' END
+		SELECT api_key_id AS id, count(*) AS count,
+		       CASE WHEN bool_and(api_key_id IS NULL)
+		            THEN max(source)
+		            ELSE 'api' END AS source
 		FROM call_stat
-		WHERE called_at >= $1 AND called_at <= $2
+		WHERE called_at >= ? AND called_at <= ?
 		GROUP BY api_key_id,
 		         CASE WHEN api_key_id IS NULL THEN source END
 		ORDER BY count(*) DESC`
@@ -357,36 +338,24 @@ func (r *CallStatRepo) TopTools(ctx context.Context, start, end time.Time, limit
 		limit = 1
 	}
 	const q = `
-		SELECT upstream_id, original_name, count(*) AS c
+		SELECT upstream_id, original_name, count(*) AS count
 		FROM call_stat
-		WHERE called_at >= $1 AND called_at <= $2
+		WHERE called_at >= ? AND called_at <= ?
 		GROUP BY upstream_id, original_name
-		ORDER BY c DESC, original_name ASC
-		LIMIT $3`
-	rows, err := r.pool.Query(ctx, q, start, end, limit)
-	if err != nil {
+		ORDER BY count DESC, original_name ASC
+		LIMIT ?`
+	type row struct {
+		UpstreamID   *string
+		OriginalName string
+		Count        int64
+	}
+	var rows []row
+	if err := r.db.WithContext(ctx).Raw(q, start, end, limit).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	result := make([]ToolRank, 0)
-	for rows.Next() {
-		var (
-			upstreamID pgtype.UUID
-			original   string
-			count      int64
-		)
-		if err := rows.Scan(&upstreamID, &original, &count); err != nil {
-			return nil, err
-		}
-		result = append(result, ToolRank{
-			UpstreamID:   uuidString(upstreamID),
-			OriginalName: original,
-			Count:        count,
-		})
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
+	result := make([]ToolRank, 0, len(rows))
+	for _, row := range rows {
+		result = append(result, ToolRank{UpstreamID: stringValue(row.UpstreamID), OriginalName: row.OriginalName, Count: row.Count})
 	}
 	return result, nil
 }
@@ -407,20 +376,9 @@ func (r *CallStatRepo) Summary(ctx context.Context, start, end time.Time) (Stats
 			coalesce(avg(latency_ms), 0)::float8 AS avg_latency_ms,
 			coalesce(percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms), 0)::float8 AS p95_latency_ms
 		FROM call_stat
-		WHERE called_at >= $1 AND called_at <= $2`
-
+		WHERE called_at >= ? AND called_at <= ?`
 	var out StatsSummary
-	err := r.pool.QueryRow(ctx, q, start, end).Scan(
-		&out.TotalCalls,
-		&out.SuccessCalls,
-		&out.FailureCalls,
-		&out.ActiveUpstreams,
-		&out.ActiveAPIKeys,
-		&out.UniqueTools,
-		&out.AvgLatencyMS,
-		&out.P95LatencyMS,
-	)
-	if err != nil {
+	if err := r.db.WithContext(ctx).Raw(q, start, end).Scan(&out).Error; err != nil {
 		return StatsSummary{}, err
 	}
 	return out, nil
@@ -441,31 +399,21 @@ func (r *CallStatRepo) Daily(ctx context.Context, start, end time.Time, tz strin
 	}
 	const q = `
 		SELECT
-			(date_trunc('day', called_at AT TIME ZONE $3))::date AS day,
+			(date_trunc('day', called_at AT TIME ZONE ?))::date AS day,
 			count(*) AS total_calls,
 			count(*) FILTER (WHERE success) AS success_calls,
 			count(*) FILTER (WHERE NOT success) AS failure_calls,
 			coalesce(avg(latency_ms), 0)::float8 AS avg_latency_ms
 		FROM call_stat
-		WHERE called_at >= $1 AND called_at <= $2
+		WHERE called_at >= ? AND called_at <= ?
 		GROUP BY day
 		ORDER BY day ASC`
-	rows, err := r.pool.Query(ctx, q, start, end, zoneName)
-	if err != nil {
+	var result []DailyCount
+	if err := r.db.WithContext(ctx).Raw(q, zoneName, start, end).Scan(&result).Error; err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	result := make([]DailyCount, 0)
-	for rows.Next() {
-		var item DailyCount
-		if err := rows.Scan(&item.Day, &item.TotalCalls, &item.SuccessCalls, &item.FailureCalls, &item.AvgLatencyMS); err != nil {
-			return nil, err
-		}
-		result = append(result, item)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
+	if result == nil {
+		return []DailyCount{}, nil
 	}
 	return result, nil
 }
@@ -487,31 +435,33 @@ func (r *CallStatRepo) TopToolErrors(ctx context.Context, start, end time.Time, 
 			max(called_at) FILTER (WHERE NOT success) AS last_failed_at,
 			coalesce(avg(latency_ms) FILTER (WHERE NOT success), 0)::float8 AS avg_latency_ms
 		FROM call_stat
-		WHERE called_at >= $1 AND called_at <= $2
+		WHERE called_at >= ? AND called_at <= ?
 		GROUP BY upstream_id, original_name
 		HAVING count(*) FILTER (WHERE NOT success) > 0
 		ORDER BY failure_calls DESC, total_calls DESC, original_name ASC
-		LIMIT $3`
-	rows, err := r.pool.Query(ctx, q, start, end, limit)
-	if err != nil {
+		LIMIT ?`
+	type row struct {
+		UpstreamID   *string
+		OriginalName string
+		TotalCalls   int64
+		FailureCalls int64
+		LastFailedAt time.Time
+		AvgLatencyMS float64
+	}
+	var rows []row
+	if err := r.db.WithContext(ctx).Raw(q, start, end, limit).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	result := make([]ToolErrorRank, 0)
-	for rows.Next() {
-		var (
-			upstreamID pgtype.UUID
-			item       ToolErrorRank
-		)
-		if err := rows.Scan(&upstreamID, &item.OriginalName, &item.TotalCalls, &item.FailureCalls, &item.LastFailedAt, &item.AvgLatencyMS); err != nil {
-			return nil, err
-		}
-		item.UpstreamID = uuidString(upstreamID)
-		result = append(result, item)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
+	result := make([]ToolErrorRank, 0, len(rows))
+	for _, row := range rows {
+		result = append(result, ToolErrorRank{
+			UpstreamID:   stringValue(row.UpstreamID),
+			OriginalName: row.OriginalName,
+			TotalCalls:   row.TotalCalls,
+			FailureCalls: row.FailureCalls,
+			LastFailedAt: row.LastFailedAt,
+			AvgLatencyMS: row.AvgLatencyMS,
+		})
 	}
 	return result, nil
 }
@@ -566,8 +516,8 @@ func (r *CallStatRepo) DropPartitionsOlderThan(ctx context.Context, cutoff time.
 		upper := monthBegin.AddDate(0, 1, 0)
 		if !upper.After(cutoffUTC) {
 			// 分区名来自系统目录（catalog）枚举，非外部输入；仍以受控前缀+月份格式构造，避免注入。
-			stmt := fmt.Sprintf(`DROP TABLE IF EXISTS %s`, pgx.Identifier{name}.Sanitize())
-			if _, derr := r.pool.Exec(ctx, stmt); derr != nil {
+			stmt := fmt.Sprintf(`DROP TABLE IF EXISTS %s`, quoteIdentifier(name))
+			if derr := r.db.WithContext(ctx).Exec(stmt).Error; derr != nil {
 				return dropped, derr
 			}
 			dropped++
@@ -581,12 +531,11 @@ func (r *CallStatRepo) DropPartitionsOlderThan(ctx context.Context, cutoff time.
 // 作为分区 DROP 的兜底：整分区删除只能清掉「整段超期」的月分区，而跨越 cutoff 的边界
 // 分区与默认分区中仍可能残留超期记录，本方法按时间逐行删除以保证清理边界精确。
 func (r *CallStatRepo) DeleteOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {
-	const q = `DELETE FROM call_stat WHERE called_at < $1`
-	tag, err := r.pool.Exec(ctx, q, cutoff)
-	if err != nil {
-		return 0, err
+	res := r.db.WithContext(ctx).Where("called_at < ?", cutoff).Delete(&callStatModel{})
+	if res.Error != nil {
+		return 0, res.Error
 	}
-	return tag.RowsAffected(), nil
+	return res.RowsAffected, nil
 }
 
 // createMonthlyPartition 为 monthBegin 所在自然月创建一个范围分区（已存在则跳过）。
@@ -600,14 +549,11 @@ func (r *CallStatRepo) createMonthlyPartition(ctx context.Context, monthBegin ti
 	// 表名与边界字面量均由受控的时间值格式化而来，非外部输入，无注入风险。
 	stmt := fmt.Sprintf(
 		`CREATE TABLE IF NOT EXISTS %s PARTITION OF call_stat FOR VALUES FROM ('%s') TO ('%s')`,
-		pgx.Identifier{name}.Sanitize(),
+		quoteIdentifier(name),
 		begin.Format("2006-01-02 15:04:05-07"),
 		end.Format("2006-01-02 15:04:05-07"),
 	)
-	if _, err := r.pool.Exec(ctx, stmt); err != nil {
-		return err
-	}
-	return nil
+	return r.db.WithContext(ctx).Exec(stmt).Error
 }
 
 // listTimePartitions 枚举 call_stat 下所有「时间分区」的表名（不含默认分区与父表）。
@@ -621,24 +567,16 @@ func (r *CallStatRepo) listTimePartitions(ctx context.Context) ([]string, error)
 		JOIN pg_class c   ON c.oid = i.inhrelid
 		JOIN pg_class p   ON p.oid = i.inhparent
 		WHERE p.relname = 'call_stat'`
-	rows, err := r.pool.Query(ctx, q)
-	if err != nil {
+	type row struct{ Relname string }
+	var rows []row
+	if err := r.db.WithContext(ctx).Raw(q).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	names := make([]string, 0)
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return nil, err
+	names := make([]string, 0, len(rows))
+	for _, row := range rows {
+		if _, ok := parsePartitionMonth(row.Relname); ok {
+			names = append(names, row.Relname)
 		}
-		if _, ok := parsePartitionMonth(name); ok {
-			names = append(names, name)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
 	}
 	return names, nil
 }
@@ -676,74 +614,67 @@ func parsePartitionMonth(name string) (time.Time, bool) {
 
 // queryDimensionCounts 执行按单一维度分组计数的查询并扫描结果。
 func (r *CallStatRepo) queryDimensionCounts(ctx context.Context, q string, start, end time.Time) ([]DimensionCount, error) {
-	rows, err := r.pool.Query(ctx, q, start, end)
-	if err != nil {
+	type row struct {
+		ID     *string
+		Count  int64
+		Source string
+	}
+	var rows []row
+	if err := r.db.WithContext(ctx).Raw(q, start, end).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	result := make([]DimensionCount, 0)
-	for rows.Next() {
-		var (
-			id     pgtype.UUID
-			count  int64
-			source string
-		)
-		if err := rows.Scan(&id, &count, &source); err != nil {
-			return nil, err
-		}
-		result = append(result, DimensionCount{ID: uuidString(id), Count: count, Source: source})
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
+	result := make([]DimensionCount, 0, len(rows))
+	for _, row := range rows {
+		result = append(result, DimensionCount{ID: stringValue(row.ID), Count: row.Count, Source: row.Source})
 	}
 	return result, nil
 }
 
-func scanCallRecordViews(rows pgx.Rows) ([]CallRecordView, error) {
-	result := make([]CallRecordView, 0)
-	for rows.Next() {
-		var (
-			upstreamID pgtype.UUID
-			apiKeyID   pgtype.UUID
-			request    []byte
-			response   []byte
-			failure    []byte
-			item       CallRecordView
-		)
-		if err := rows.Scan(
-			&item.ID,
-			&upstreamID,
-			&item.UpstreamName,
-			&item.OriginalName,
-			&item.ExposedName,
-			&apiKeyID,
-			&item.APIKeyName,
-			&item.CalledAt,
-			&item.LatencyMS,
-			&item.Success,
-			&item.Status,
-			&request,
-			&response,
-			&item.ErrorMessage,
-			&failure,
-			&item.Mode,
-			&item.Source,
-		); err != nil {
-			return nil, err
+type callRecordRow struct {
+	ID             int64
+	UpstreamID     *string
+	UpstreamName   string
+	OriginalName   string
+	ExposedName    string
+	APIKeyID       *string
+	APIKeyName     string
+	CalledAt       time.Time
+	LatencyMS      int
+	Success        bool
+	Status         string
+	RequestArgs    JSONB
+	ResponseResult JSONB
+	ErrorMessage   string
+	FailureDetail  JSONB
+	Mode           string
+	Source         string
+}
+
+func callRecordRowsToViews(rows []callRecordRow) []CallRecordView {
+	result := make([]CallRecordView, 0, len(rows))
+	for _, row := range rows {
+		item := CallRecordView{
+			ID:             row.ID,
+			UpstreamID:     stringValue(row.UpstreamID),
+			UpstreamName:   row.UpstreamName,
+			OriginalName:   row.OriginalName,
+			ExposedName:    row.ExposedName,
+			APIKeyID:       stringValue(row.APIKeyID),
+			APIKeyName:     row.APIKeyName,
+			CalledAt:       row.CalledAt,
+			LatencyMS:      row.LatencyMS,
+			Success:        row.Success,
+			Status:         normalizeCallStatus(row.Status, row.Success),
+			RequestArgs:    json.RawMessage(row.RequestArgs),
+			ResponseResult: json.RawMessage(row.ResponseResult),
+			ErrorMessage:   row.ErrorMessage,
+			FailureDetail:  json.RawMessage(row.FailureDetail),
+			Mode:           row.Mode,
+			Source:         row.Source,
 		}
-		item.UpstreamID = uuidString(upstreamID)
-		item.APIKeyID = uuidString(apiKeyID)
-		item.Status = normalizeCallStatus(item.Status, item.Success)
-		item.RequestArgs = json.RawMessage(request)
-		item.ResponseResult = json.RawMessage(response)
-		item.FailureDetail = json.RawMessage(failure)
 		result = append(result, item)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return result, nil
+	return result
 }
 
 func normalizeCallStatus(status string, success bool) string {
@@ -796,4 +727,8 @@ func normalizeTimezoneName(tz string) (string, error) {
 	return "", domain.NewValidationError("时区参数非法", map[string]string{
 		"tz": "需为有效的 IANA 时区名，如 Asia/Shanghai",
 	})
+}
+
+func quoteIdentifier(name string) string {
+	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 }

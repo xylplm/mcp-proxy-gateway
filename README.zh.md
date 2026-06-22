@@ -63,7 +63,7 @@
 
 | 层 | 选型 |
 |----|------|
-| 后端 | Go 1.25、gin、pgx/v5、go-redis/v9、robfig/cron/v3、golang-jwt/v5、golang-migrate、MCP Go SDK |
+| 后端 | Go 1.25、gin、GORM + PostgreSQL 驱动、go-redis/v9、robfig/cron/v3、golang-jwt/v5、MCP Go SDK |
 | 前端 | Vue 3 + Vite + TypeScript + Tailwind CSS（基于 TailAdmin 模板）+ Pinia + Vue Router + ApexCharts |
 | 存储 | PostgreSQL（业务数据，按时间分区统计表）、Redis（工具缓存 / 限流计数 / 统计异步缓冲） |
 | 部署 | 多阶段 Docker 构建（前端 → 内嵌 → distroless 运行镜像）、GitHub Actions |
@@ -191,7 +191,7 @@ docker pull xylplm/mcp-proxy-gateway:1.0.202606071302
 
 - **YAML 常规配置**与本地持久化数据存于挂载的 `/data` 目录；容器重建并重新挂载同卷即可恢复。
 - **业务数据**（上游 MCP、规则、API Key 元数据、调用统计）持久化到 PostgreSQL；统计表按时间分区，按保留期清理。
-- 启动时在连接 PostgreSQL 成功后、对外服务前**自动执行数据库迁移**，迁移失败则终止启动。
+- 启动时在连接 PostgreSQL 成功后、对外服务前通过 GORM AutoMigrate 与统计分区表专用初始化**自动初始化数据库 schema**，初始化失败则终止启动。
 - 管理界面支持**配置导出 / 导入**备份。
 
 ## 🛠 开发环境
@@ -270,7 +270,7 @@ mcp-proxy-gateway/
 ├── internal/
 │   ├── app/                # 主程序装配：组件接线、路由分面、启停
 │   ├── config/             # 配置管理（环境变量 + YAML）
-│   ├── store/              # 仓储层、连接池、数据库迁移
+│   ├── store/              # 仓储层、GORM 模型、数据库 schema 初始化
 │   ├── domain/             # 领域核心：类型、规则引擎、统一错误模型
 │   ├── aggregation/        # 聚合服务（确定性管线 + 调用路由）
 │   ├── transport/          # 传输适配层（stdio/SSE/HTTP/WebSocket）
