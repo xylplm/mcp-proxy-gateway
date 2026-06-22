@@ -137,6 +137,9 @@ func p2GenBundles() *rapid.Generator[[]upstreamBundle] {
 type p2Pair struct {
 	upstreamID   string
 	originalName string
+	name         string
+	order        int
+	sourceCount  int
 }
 
 // p2Reconstruct 独立复刻管线在「排序合并 + 先屏蔽后重写」之后、按合并顺序排列的
@@ -158,7 +161,7 @@ func p2Reconstruct(e domain.Rule_Engine, bundles []upstreamBundle) []p2Pair {
 		return sorted[i].sortOrder < sorted[j].sortOrder
 	})
 
-	pairs := make([]p2Pair, 0)
+	merged := make([]domain.ToolDef, 0)
 	for _, b := range sorted {
 		// 与管线一致：先按所属上游规范化归属信息，再依次屏蔽、重写。
 		tools := make([]domain.ToolDef, len(b.tools))
@@ -169,11 +172,29 @@ func p2Reconstruct(e domain.Rule_Engine, bundles []upstreamBundle) []p2Pair {
 		}
 		tools = e.ApplyFilters(tools, b.mcpFilters)
 		tools = e.ApplyAliases(tools, b.aliases)
-		for _, tl := range tools {
-			pairs = append(pairs, p2Pair{upstreamID: tl.UpstreamID, originalName: tl.OriginalName})
-		}
+		merged = append(merged, tools...)
 	}
-	return pairs
+
+	out := make([]p2Pair, 0)
+	indexByName := make(map[string]int)
+	for _, tl := range merged {
+		if tl.Name == "" {
+			continue
+		}
+		if idx, ok := indexByName[tl.Name]; ok {
+			out[idx].sourceCount++
+			continue
+		}
+		indexByName[tl.Name] = len(out)
+		out = append(out, p2Pair{
+			upstreamID:   tl.UpstreamID,
+			originalName: tl.OriginalName,
+			name:         tl.Name,
+			order:        tl.Order,
+			sourceCount:  1,
+		})
+	}
+	return out
 }
 
 // Feature: mcp-proxy-gateway, Property 2: 上游排序在聚合中保持
@@ -202,14 +223,19 @@ func TestProperty2UpstreamOrderPreserved(t *testing.T) {
 		// 期望基准：按排序合并、先屏蔽后重写后的 (UpstreamID, OriginalName) 序列。
 		expected := p2Reconstruct(e, bundles)
 
-		// 断言一：长度与逐位 (UpstreamID, OriginalName) 一致。
+		// 断言一：长度与逐位展示工具一致；同名来源只展示第一次出现的工具。
 		if len(got) != len(expected) {
 			t.Fatalf("输出工具数与期望序列长度不一致：got=%d expected=%d", len(got), len(expected))
 		}
 		for i := range got {
-			if got[i].UpstreamID != expected[i].upstreamID || got[i].OriginalName != expected[i].originalName {
-				t.Fatalf("第 %d 个工具的上游/原始名与期望不一致：got=(%q,%q) expected=(%q,%q)",
-					i, got[i].UpstreamID, got[i].OriginalName, expected[i].upstreamID, expected[i].originalName)
+			if got[i].UpstreamID != expected[i].upstreamID ||
+				got[i].OriginalName != expected[i].originalName ||
+				got[i].Name != expected[i].name ||
+				got[i].Order != expected[i].order ||
+				got[i].SourceCount != expected[i].sourceCount {
+				t.Fatalf("第 %d 个展示工具与期望不一致：got=(%q,%q,%q,order=%d,sources=%d) expected=(%q,%q,%q,order=%d,sources=%d)",
+					i, got[i].UpstreamID, got[i].OriginalName, got[i].Name, got[i].Order, got[i].SourceCount,
+					expected[i].upstreamID, expected[i].originalName, expected[i].name, expected[i].order, expected[i].sourceCount)
 			}
 		}
 
@@ -290,19 +316,24 @@ func TestProperty2UpstreamOrderPreservedDirected(t *testing.T) {
 
 	// 期望严格按 sort_order 升序：u-first(f1,f2) → u-mid(m1,m2) → u-last(l1)。
 	want := []p2Pair{
-		{"u-first", "f1"},
-		{"u-first", "f2"},
-		{"u-mid", "m1"},
-		{"u-mid", "m2"},
-		{"u-last", "l1"},
+		{upstreamID: "u-first", originalName: "f1", name: "f1", order: 0, sourceCount: 1},
+		{upstreamID: "u-first", originalName: "f2", name: "f2", order: 0, sourceCount: 1},
+		{upstreamID: "u-mid", originalName: "m1", name: "m1", order: 1, sourceCount: 1},
+		{upstreamID: "u-mid", originalName: "m2", name: "m2", order: 1, sourceCount: 1},
+		{upstreamID: "u-last", originalName: "l1", name: "l1", order: 2, sourceCount: 1},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("输出工具数与期望不一致：got=%d want=%d", len(got), len(want))
 	}
 	for i := range got {
-		if got[i].UpstreamID != want[i].upstreamID || got[i].OriginalName != want[i].originalName {
-			t.Fatalf("第 %d 个工具与期望不一致：got=(%q,%q) want=(%q,%q)",
-				i, got[i].UpstreamID, got[i].OriginalName, want[i].upstreamID, want[i].originalName)
+		if got[i].UpstreamID != want[i].upstreamID ||
+			got[i].OriginalName != want[i].originalName ||
+			got[i].Name != want[i].name ||
+			got[i].Order != want[i].order ||
+			got[i].SourceCount != want[i].sourceCount {
+			t.Fatalf("第 %d 个工具与期望不一致：got=(%q,%q,%q,order=%d,sources=%d) want=(%q,%q,%q,order=%d,sources=%d)",
+				i, got[i].UpstreamID, got[i].OriginalName, got[i].Name, got[i].Order, got[i].SourceCount,
+				want[i].upstreamID, want[i].originalName, want[i].name, want[i].order, want[i].sourceCount)
 		}
 	}
 }

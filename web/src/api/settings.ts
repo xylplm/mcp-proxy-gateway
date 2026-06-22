@@ -22,6 +22,8 @@ import request, { ApiError } from '@/api/request'
 /** 对外服务模式取值，与后端 config.ModeSmart / ModeFull 对齐。 */
 export type MCPMode = 'smart' | 'full'
 
+export type ToolRoutingStrategy = 'priority_fill' | 'round_robin'
+
 /** 日志级别取值，与后端 config.LogLevel* 对齐。 */
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error'
 
@@ -84,6 +86,8 @@ export interface ConnectionConfig {
 export interface AggregationConfig {
   /** 上游调用超时秒数，范围 1-600，默认 30。 */
   upstream_call_timeout_s: number
+  /** 同名工具有多个来源上游时的调用选择策略。 */
+  tool_routing_strategy: ToolRoutingStrategy
 }
 
 /** 对外 MCP API 配置（对应后端 MCPAPIConfig）。 */

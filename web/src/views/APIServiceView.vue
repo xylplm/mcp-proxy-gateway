@@ -21,7 +21,8 @@ import {
   type ServerConfig,
   type YAMLConfig,
 } from '@/api/settings'
-import { getAggregatedTools, type GatewayTool, type ToolDef } from '@/api/tools'
+import { getAggregatedTools, type GatewayTool, type ToolDef, type ToolDetail, type ToolSource } from '@/api/tools'
+import type { UpstreamRateLimits } from '@/api/rateLimits'
 import { useClipboard } from '@/composables/useClipboard'
 import { useToast } from '@/composables/useToast'
 
@@ -73,7 +74,9 @@ const health = ref<DetailHealthReport | null>(null)
 const apiKeyTotal = ref(0)
 const apiKeyEnabled = ref(0)
 const aggregatedTools = ref<ToolDef[]>([])
+const aggregatedToolDetails = ref<ToolDetail[]>([])
 const gatewayTools = ref<GatewayTool[]>([])
+const selectedAggregatedToolName = ref('')
 
 const xiaozhiEnabled = ref(false)
 const xiaozhiEndpoint = ref('')
@@ -221,6 +224,20 @@ const dependencyOK = computed(
   () => health.value?.dependencies.filter((item) => item.status === 'ok').length ?? 0,
 )
 const aggregatedToolCount = computed(() => aggregatedTools.value.length)
+const toolDetailsByName = computed(() => {
+  const map = new Map<string, ToolDetail>()
+  for (const item of aggregatedToolDetails.value) {
+    if (item.tool?.name) map.set(item.tool.name, item)
+  }
+  return map
+})
+const selectedToolDetail = computed<ToolDetail | null>(() => {
+  if (selectedAggregatedToolName.value !== '') {
+    const detail = toolDetailsByName.value.get(selectedAggregatedToolName.value)
+    if (detail) return detail
+  }
+  return aggregatedToolDetails.value[0] ?? null
+})
 const activeEndpoints = computed(() => endpointTab.value === 'smart' ? smartEndpoints.value : endpoints.value)
 const guideEndpoints = computed(() => guideMode.value === 'smart' ? smartEndpoints.value : endpoints.value)
 const selectedEndpoint = computed<EndpointItem>(
@@ -479,7 +496,9 @@ async function loadAPIService(): Promise<void> {
     apiKeyTotal.value = keys.length
     apiKeyEnabled.value = keys.filter((item) => item.enabled).length
     aggregatedTools.value = tools.tools
+    aggregatedToolDetails.value = tools.toolDetails
     gatewayTools.value = tools.gatewayTools
+    ensureSelectedAggregatedTool()
     syncForm(cfg)
   } catch (err) {
     loadError.value = errorMessage(err)
@@ -497,7 +516,9 @@ async function refreshStatus(): Promise<void> {
     apiKeyTotal.value = keys.length
     apiKeyEnabled.value = keys.filter((item) => item.enabled).length
     aggregatedTools.value = tools.tools
+    aggregatedToolDetails.value = tools.toolDetails
     gatewayTools.value = tools.gatewayTools
+    ensureSelectedAggregatedTool()
   } catch (err) {
     toast.error(errorMessage(err))
   } finally {
@@ -553,9 +574,56 @@ function toolDescription(tool: ToolDef): string {
   return '上游未提供有效描述'
 }
 
-function originalNameText(tool: ToolDef): string {
-  if (tool.originalName === '' || tool.originalName === tool.name) return ''
-  return `原始名：${tool.originalName}`
+function ensureSelectedAggregatedTool(): void {
+  if (aggregatedTools.value.length === 0) {
+    selectedAggregatedToolName.value = ''
+    return
+  }
+  if (selectedAggregatedToolName.value === '') {
+    selectedAggregatedToolName.value = aggregatedTools.value[0]?.name ?? ''
+    return
+  }
+  if (!aggregatedTools.value.some((tool) => tool.name === selectedAggregatedToolName.value)) {
+    selectedAggregatedToolName.value = aggregatedTools.value[0]?.name ?? ''
+  }
+}
+
+function selectAggregatedTool(tool: ToolDef): void {
+  selectedAggregatedToolName.value = tool.name
+}
+
+function sourceCountText(tool: ToolDef): string {
+  const count = tool.sourceCount ?? 1
+  return count > 1 ? `${count} 个来源上游` : '1 个来源上游'
+}
+
+function formatRateLimits(limits?: UpstreamRateLimits): string {
+  if (!limits?.enabled) return '未配置'
+  const parts: string[] = []
+  if (limits.perSecond && limits.perSecond > 0) parts.push(`每秒 ${limits.perSecond}`)
+  if (limits.perMinute && limits.perMinute > 0) parts.push(`每分钟 ${limits.perMinute}`)
+  if (limits.perHour && limits.perHour > 0) parts.push(`每小时 ${limits.perHour}`)
+  if (limits.perDay && limits.perDay > 0) parts.push(`每日 ${limits.perDay}`)
+  if (limits.perWeek && limits.perWeek > 0) parts.push(`每周 ${limits.perWeek}`)
+  if (limits.perMonth && limits.perMonth > 0) parts.push(`每月 ${limits.perMonth}`)
+  return parts.length > 0 ? parts.join(' / ') : '已启用，未设置上限'
+}
+
+function schemaPreview(value: unknown): string {
+  if (value === null || value === undefined || value === '') return '{}'
+  if (typeof value === 'string') return value
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch {
+    return String(value)
+  }
+}
+
+function sourceStatusClass(source: ToolSource): string {
+  if (!source.compatible) {
+    return 'bg-warning-50 text-warning-700 dark:bg-warning-500/10 dark:text-warning-400'
+  }
+  return 'bg-success-50 text-success-700 dark:bg-success-500/10 dark:text-success-400'
 }
 
 onMounted(loadAPIService)
@@ -829,25 +897,105 @@ const errClass = 'mt-1 text-xs text-error-500'
                 {{ aggregatedToolCount }} 个
               </span>
             </div>
-            <div class="custom-scrollbar mt-4 grid max-h-80 grid-cols-1 gap-2 overflow-y-auto pr-1">
-              <div
-                v-for="tool in aggregatedTools"
-                :key="`${tool.upstreamId}:${tool.originalName}:${tool.name}`"
-                class="rounded-lg bg-white p-3 dark:bg-gray-900/60"
-              >
-                <p class="truncate font-mono text-xs font-medium text-gray-800 dark:text-white/90">
-                  {{ tool.name }}
-                </p>
-                <p class="mt-1 line-clamp-2 text-xs leading-5 text-gray-500 dark:text-gray-400">
-                  {{ toolDescription(tool) }}
-                </p>
-                <p v-if="originalNameText(tool) !== ''" class="mt-1 truncate text-[11px] text-gray-400 dark:text-gray-500">
-                  {{ originalNameText(tool) }}
+            <div class="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+              <div class="custom-scrollbar grid max-h-96 grid-cols-1 gap-2 overflow-y-auto pr-1">
+                <button
+                  v-for="tool in aggregatedTools"
+                  :key="tool.name"
+                  type="button"
+                  class="rounded-lg border p-3 text-left transition"
+                  :class="
+                    selectedAggregatedToolName === tool.name
+                      ? 'border-brand-300 bg-brand-50/80 dark:border-brand-500/50 dark:bg-brand-500/[0.08]'
+                      : 'border-transparent bg-white hover:border-brand-200 hover:bg-brand-50/50 dark:bg-gray-900/60 dark:hover:border-brand-500/30 dark:hover:bg-brand-500/[0.06]'
+                  "
+                  @click="selectAggregatedTool(tool)"
+                >
+                  <span class="flex items-center justify-between gap-3">
+                    <span class="min-w-0 truncate font-mono text-xs font-medium text-gray-800 dark:text-white/90">
+                      {{ tool.name }}
+                    </span>
+                    <span class="shrink-0 rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-600 dark:bg-white/5 dark:text-gray-300">
+                      {{ sourceCountText(tool) }}
+                    </span>
+                  </span>
+                  <span class="mt-1 line-clamp-2 text-xs leading-5 text-gray-500 dark:text-gray-400">
+                    {{ toolDescription(tool) }}
+                  </span>
+                  <span
+                    v-if="tool.schemaConflict"
+                    class="mt-2 inline-flex rounded-full bg-warning-50 px-2 py-0.5 text-[11px] font-medium text-warning-700 dark:bg-warning-500/10 dark:text-warning-400"
+                  >
+                    Schema 不一致
+                  </span>
+                </button>
+                <p v-if="aggregatedTools.length === 0" class="py-8 text-center text-sm text-gray-400">
+                  暂无可用工具
                 </p>
               </div>
-              <p v-if="aggregatedTools.length === 0" class="py-8 text-center text-sm text-gray-400">
-                暂无可用工具
-              </p>
+
+              <div class="min-w-0 rounded-lg bg-white p-4 dark:bg-gray-900/60">
+                <template v-if="selectedToolDetail">
+                  <div class="flex flex-wrap items-start justify-between gap-3">
+                    <div class="min-w-0">
+                      <p class="truncate font-mono text-sm font-semibold text-gray-800 dark:text-white/90">
+                        {{ selectedToolDetail.tool.name }}
+                      </p>
+                      <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
+                        {{ toolDescription(selectedToolDetail.tool) }}
+                      </p>
+                    </div>
+                    <span class="rounded-full bg-success-50 px-2.5 py-1 text-xs font-medium text-success-700 dark:bg-success-500/10 dark:text-success-400">
+                      {{ selectedToolDetail.sources?.length ?? 0 }} 个来源上游
+                    </span>
+                  </div>
+
+                  <div
+                    v-if="selectedToolDetail.tool.schemaConflict"
+                    class="mt-4 rounded-lg border border-warning-200 bg-warning-50 px-3 py-2 text-xs leading-5 text-warning-700 dark:border-warning-500/30 dark:bg-warning-500/10 dark:text-warning-300"
+                  >
+                    同名来源的入参 Schema 不完全一致，调用时只会选择与当前展示 Schema 一致的来源。
+                  </div>
+
+                  <div class="custom-scrollbar mt-4 grid max-h-72 grid-cols-1 gap-3 overflow-y-auto pr-1">
+                    <div
+                      v-for="source in selectedToolDetail.sources ?? []"
+                      :key="`${source.upstreamId}:${source.originalName}`"
+                      class="rounded-lg border border-gray-100 p-3 dark:border-gray-800"
+                    >
+                      <div class="flex flex-wrap items-start justify-between gap-2">
+                        <div class="min-w-0">
+                          <p class="truncate text-sm font-medium text-gray-800 dark:text-white/90">
+                            {{ source.upstreamName || source.upstreamId }}
+                          </p>
+                          <p class="mt-1 truncate font-mono text-[11px] text-gray-400 dark:text-gray-500">
+                            {{ source.originalName }}
+                          </p>
+                        </div>
+                        <span class="rounded-full px-2 py-0.5 text-[11px] font-medium" :class="sourceStatusClass(source)">
+                          {{ source.compatible ? '可调用' : 'Schema 不一致' }}
+                        </span>
+                      </div>
+                      <p class="mt-2 line-clamp-2 text-xs leading-5 text-gray-500 dark:text-gray-400">
+                        {{ source.description || '上游未提供有效描述' }}
+                      </p>
+                      <p class="mt-2 text-[11px] leading-5 text-gray-400 dark:text-gray-500">
+                        限流额度：{{ formatRateLimits(source.rateLimits) }}
+                      </p>
+                    </div>
+                  </div>
+
+                  <details class="mt-4 rounded-lg bg-gray-50 p-3 dark:bg-white/[0.03]">
+                    <summary class="cursor-pointer text-xs font-medium text-gray-700 dark:text-gray-300">
+                      查看入参 Schema
+                    </summary>
+                    <pre class="custom-scrollbar mt-3 max-h-48 overflow-auto text-xs leading-5 text-gray-600 dark:text-gray-300">{{ schemaPreview(selectedToolDetail.tool.inputSchema) }}</pre>
+                  </details>
+                </template>
+                <p v-else class="py-10 text-center text-sm text-gray-400">
+                  选择左侧工具查看来源上游
+                </p>
+              </div>
             </div>
           </div>
         </div>

@@ -87,6 +87,9 @@ func TestLoadReadsExistingConfigAndAppliesDefaults(t *testing.T) {
 	if got.Connection.FailureThreshold != 10 {
 		t.Errorf("connection.failure_threshold 期望默认值 10，实际 %d", got.Connection.FailureThreshold)
 	}
+	if got.Aggregation.ToolRoutingStrategy != domain.ToolRoutingPriorityFill {
+		t.Errorf("aggregation.tool_routing_strategy 期望默认值 %q，实际 %q", domain.ToolRoutingPriorityFill, got.Aggregation.ToolRoutingStrategy)
+	}
 }
 
 // TestLoadEnvConfigFailsWhenRequiredMissing 验证必需环境变量缺失（为空）时
@@ -198,6 +201,37 @@ func TestSaveRejectsInvalidConfig(t *testing.T) {
 	// 内存快照应保持不变。
 	if got := mgr.Config(); got != original {
 		t.Errorf("非法 Save 不应更改内存快照：\n期望 %+v\n实际 %+v", original, got)
+	}
+}
+
+// TestSaveNormalizesDefaultableFields 验证保存旧前端或手写配置缺省的新字段时，
+// 管理器会先归一化再落盘，避免运行态与管理台出现空枚举值。
+func TestSaveNormalizesDefaultableFields(t *testing.T) {
+	setRequiredEnv(t)
+	dataDir := t.TempDir()
+
+	mgr, err := Load(nil, dataDir)
+	if err != nil {
+		t.Fatalf("Load 失败：%v", err)
+	}
+
+	cfg := mgr.Config()
+	cfg.Aggregation.ToolRoutingStrategy = ""
+	if err := mgr.Save(cfg); err != nil {
+		t.Fatalf("Save 不应返回错误：%v", err)
+	}
+
+	got := mgr.Config()
+	if got.Aggregation.ToolRoutingStrategy != domain.ToolRoutingPriorityFill {
+		t.Fatalf("保存后工具调用策略未归一化：got=%q want=%q", got.Aggregation.ToolRoutingStrategy, domain.ToolRoutingPriorityFill)
+	}
+
+	reloaded, err := Load(nil, dataDir)
+	if err != nil {
+		t.Fatalf("重新加载失败：%v", err)
+	}
+	if reloaded.Config().Aggregation.ToolRoutingStrategy != domain.ToolRoutingPriorityFill {
+		t.Fatalf("落盘后的工具调用策略未归一化：got=%q", reloaded.Config().Aggregation.ToolRoutingStrategy)
 	}
 }
 

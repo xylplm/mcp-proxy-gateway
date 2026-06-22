@@ -77,6 +77,7 @@ type ToolCacheEnsurer interface {
 // AggregationToolService 是管理台读取聚合后工具列表的窄接口。
 type AggregationToolService interface {
 	BuildToolSet(ctx context.Context, apiKeyID string) ([]domain.ToolDef, error)
+	BuildToolDetails(ctx context.Context, apiKeyID string) ([]domain.ToolDetail, error)
 }
 
 // RuleValidator 是保存前校验别名/屏蔽规则的窄接口（Req 8.9、9.7、9.8、13.4）。

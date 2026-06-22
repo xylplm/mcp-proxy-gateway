@@ -1,5 +1,7 @@
 package config
 
+import "github.com/myGithub/mcp-proxy-gateway/internal/domain"
+
 // YAMLConfig 表示存放在 data 目录下 YAML 文件中的常规配置（Req 18.2、23.1）。
 //
 // 数据库与 Redis 连接来自环境变量，不包含在此结构内。
@@ -83,6 +85,8 @@ type ConnectionConfig struct {
 type AggregationConfig struct {
 	// UpstreamCallTimeoutS 为上游调用超时秒数，范围 1 至 600，默认 30（Req 10.8）。
 	UpstreamCallTimeoutS int `yaml:"upstream_call_timeout_s" json:"upstream_call_timeout_s"`
+	// ToolRoutingStrategy 为同名工具多来源时的调用选择策略。
+	ToolRoutingStrategy domain.ToolRoutingStrategy `yaml:"tool_routing_strategy" json:"tool_routing_strategy"`
 }
 
 // MCPAPIConfig 为对外 MCP API 配置（Req 11）。
@@ -186,6 +190,7 @@ func DefaultYAMLConfig() YAMLConfig {
 		},
 		Aggregation: AggregationConfig{
 			UpstreamCallTimeoutS: 30,
+			ToolRoutingStrategy:  domain.ToolRoutingPriorityFill,
 		},
 		MCPAPI: MCPAPIConfig{
 			SmartDiscoveryLimit: 50,
@@ -204,4 +209,12 @@ func DefaultYAMLConfig() YAMLConfig {
 			Mode:     ModeFull,
 		},
 	}
+}
+
+// NormalizeYAMLConfig 补齐旧配置文件中可能缺省的枚举类字段，同时保留显式合法取值。
+func NormalizeYAMLConfig(cfg YAMLConfig) YAMLConfig {
+	if cfg.Aggregation.ToolRoutingStrategy == "" {
+		cfg.Aggregation.ToolRoutingStrategy = domain.ToolRoutingPriorityFill
+	}
+	return cfg
 }

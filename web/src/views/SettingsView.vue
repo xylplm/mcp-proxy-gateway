@@ -23,6 +23,7 @@ import {
   getSettings,
   updateSettings,
   extractAPIError,
+  type ToolRoutingStrategy,
   type YAMLConfig,
 } from '@/api/settings'
 
@@ -64,6 +65,19 @@ const loadError = ref('')
 /** 保存表单（设置）的整体错误与字段级错误（键为后端字段路径，如 sync.cron）。 */
 const formError = ref('')
 const fieldErrors = reactive<Record<string, string>>({})
+
+const routingStrategies: ReadonlyArray<{ value: ToolRoutingStrategy; label: string; desc: string }> = [
+  {
+    value: 'priority_fill',
+    label: '优先可用上游',
+    desc: '按上游排序优先调用第一个可用且未超额的来源，适合主备或优先级明确的场景。',
+  },
+  {
+    value: 'round_robin',
+    label: '均衡分配',
+    desc: '在同名工具的多个来源之间轮询调用，适合多个账号或渠道共同分摊额度。',
+  },
+]
 
 /** 清空所有字段级错误与整体错误。 */
 function clearErrors(): void {
@@ -292,6 +306,33 @@ const errClass = 'mt-1 text-xs text-error-500'
               <p :class="hintClass">范围 1 – 600，默认 30。</p>
               <p v-if="fieldErrors['aggregation.upstream_call_timeout_s']" :class="errClass">
                 {{ fieldErrors['aggregation.upstream_call_timeout_s'] }}
+              </p>
+            </div>
+            <div class="sm:col-span-2">
+              <FieldLabel label="工具调用策略" required tooltip="当同名工具来自多个上游时，网关实际调用某个来源上游的选择方式。" />
+              <div class="mt-1 grid grid-cols-1 gap-3 lg:grid-cols-2">
+                <label
+                  v-for="item in routingStrategies"
+                  :key="item.value"
+                  class="cursor-pointer rounded-lg border p-3 transition"
+                  :class="
+                    config.aggregation.tool_routing_strategy === item.value
+                      ? 'border-brand-300 bg-brand-50/70 dark:border-brand-500/50 dark:bg-brand-500/[0.08]'
+                      : 'border-gray-200 hover:border-brand-200 hover:bg-brand-50/40 dark:border-gray-800 dark:hover:border-brand-500/30 dark:hover:bg-brand-500/[0.06]'
+                  "
+                >
+                  <input
+                    v-model="config.aggregation.tool_routing_strategy"
+                    class="sr-only"
+                    type="radio"
+                    :value="item.value"
+                  />
+                  <span class="block text-sm font-medium text-gray-800 dark:text-white/90">{{ item.label }}</span>
+                  <span class="mt-1 block text-xs leading-5 text-gray-500 dark:text-gray-400">{{ item.desc }}</span>
+                </label>
+              </div>
+              <p v-if="fieldErrors['aggregation.tool_routing_strategy']" :class="errClass">
+                {{ fieldErrors['aggregation.tool_routing_strategy'] }}
               </p>
             </div>
           </div>

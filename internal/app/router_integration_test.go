@@ -72,6 +72,9 @@ type stubAggregation struct{}
 func (stubAggregation) BuildToolSet(context.Context, string) ([]domain.ToolDef, error) {
 	return nil, nil
 }
+func (stubAggregation) BuildToolDetails(context.Context, string) ([]domain.ToolDetail, error) {
+	return nil, nil
+}
 func (stubAggregation) InvokeTool(context.Context, string, string, json.RawMessage) (domain.ToolResult, error) {
 	return domain.ToolResult{}, nil
 }

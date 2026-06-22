@@ -55,6 +55,7 @@ type upstreamMCPModel struct {
 	Enabled    bool           `gorm:"column:enabled;type:boolean;not null;default:true"`
 	SortOrder  int            `gorm:"column:sort_order;type:integer;not null"`
 	AutoSync   bool           `gorm:"column:auto_sync;type:boolean;not null;default:false"`
+	RateLimits JSONB          `gorm:"column:rate_limits;type:jsonb;not null;default:'{}'"`
 	CreatedAt  time.Time      `gorm:"column:created_at;type:timestamptz;not null;default:now();autoCreateTime:false"`
 	UpdatedAt  time.Time      `gorm:"column:updated_at;type:timestamptz;not null;default:now();autoUpdateTime:false"`
 }

@@ -19,6 +19,7 @@
  */
 import request from '@/api/request'
 import type { ToolDef } from '@/api/tools'
+import type { UpstreamRateLimits } from '@/api/rateLimits'
 
 /** 上游 MCP 传输类型，与后端 domain.TransportType 对齐。 */
 export type TransportType = 'stdio' | 'sse' | 'streamable-http' | 'websocket'
@@ -79,6 +80,8 @@ export interface UpstreamConfigRequest {
   sortOrder: number
   /** 是否开启工具列表自动同步。 */
   autoSync: boolean
+  /** 本地按上游维度执行的调用频率与周期额度。 */
+  rateLimits?: UpstreamRateLimits
 }
 
 /** 上游配置（响应内嵌；凭证明文随 credential 字段回显，便于编辑回填）。 */
@@ -92,6 +95,7 @@ export interface UpstreamConfig {
   enabled: boolean
   sortOrder: number
   autoSync: boolean
+  rateLimits?: UpstreamRateLimits
 }
 
 /** 已持久化的上游 MCP 实例及运行期状态，与后端 domain.Upstream 对齐。 */

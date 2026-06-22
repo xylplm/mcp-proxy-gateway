@@ -3,6 +3,7 @@ package httpapi
 import (
 	"github.com/gin-gonic/gin"
 
+	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
 	"github.com/myGithub/mcp-proxy-gateway/internal/mcpapi"
 )
 
@@ -23,13 +24,18 @@ func (r *Router) listAggregatedTools(c *gin.Context) {
 		respondServiceUnavailable(c, "聚合工具服务未就绪")
 		return
 	}
-	tools, err := r.aggregation.BuildToolSet(c.Request.Context(), "")
+	details, err := r.aggregation.BuildToolDetails(c.Request.Context(), "")
 	if err != nil {
 		respondError(c, err)
 		return
 	}
+	tools := make([]domain.ToolDef, 0, len(details))
+	for _, detail := range details {
+		tools = append(tools, detail.Tool)
+	}
 	respondOK(c, gin.H{
 		"tools":        tools,
+		"toolDetails":  details,
 		"count":        len(tools),
 		"gatewayTools": gatewayTools(),
 	})

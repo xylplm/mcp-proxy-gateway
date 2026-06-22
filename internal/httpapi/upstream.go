@@ -44,6 +44,8 @@ type upstreamConfigRequest struct {
 	SortOrder int `json:"sortOrder"`
 	// AutoSync 表示是否对该上游开启工具列表自动同步。
 	AutoSync bool `json:"autoSync"`
+	// RateLimits 表示该上游的调用限流与额度配置。
+	RateLimits domain.UpstreamRateLimits `json:"rateLimits"`
 }
 
 // toConfig 将请求体转换为领域配置。
@@ -57,6 +59,7 @@ func (req upstreamConfigRequest) toConfig() domain.UpstreamConfig {
 		Enabled:    req.Enabled,
 		SortOrder:  req.SortOrder,
 		AutoSync:   req.AutoSync,
+		RateLimits: req.RateLimits,
 	}
 }
 

@@ -28,3 +28,12 @@ type UpstreamInvoker interface {
 	// 连接不可用、调用超时等错误语义由实现方（任务 11.1）负责。
 	CallUpstream(ctx context.Context, upstreamID, originalName string, args json.RawMessage) (domain.ToolResult, error)
 }
+
+// UpstreamAvailability 是 UpstreamInvoker 可选实现的候选可用性探测能力。
+//
+// 聚合路由在同名工具有多个来源时用它跳过当前不可用来源，从而让优先可用上游、
+// 轮询等策略可以自然溢出到其他健康来源。未实现该接口时，聚合层仍按候选顺序调用，
+// 由 UpstreamInvoker 自身返回不可用错误。
+type UpstreamAvailability interface {
+	UpstreamAvailable(upstreamID string) bool
+}

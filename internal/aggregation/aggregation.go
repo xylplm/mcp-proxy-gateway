@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
@@ -106,6 +107,15 @@ type Service struct {
 	aliases       AliasLister
 	mcpFilters    MCPFilterLister
 	apiKeyFilters APIKeyFilterLister
+	// upstreamConfigs 保存最近一次构建管线读取到的上游配置，供路由选择读取限流配置。
+	upstreamConfigs   map[string]domain.UpstreamConfig
+	upstreamConfigsMu sync.RWMutex
+	// routingStrategy 为同名工具多来源时的调用选择策略。
+	routingStrategy domain.ToolRoutingStrategy
+	routingMu       sync.RWMutex
+	roundRobin      map[string]uint64
+	roundRobinMu    sync.Mutex
+	quota           *QuotaManager
 	// invoker 为上游调用转发器（窄接口），可选注入（生产装配见 app/build.go）。
 	// 为 nil 时（仅未接线装配或单元测试）InvokeTool 在通过可见性校验后返回防御性
 	// 占位错误；可见性校验逻辑始终完整执行（Req 10.4、11.7）。
@@ -132,13 +142,16 @@ func NewService(
 	apiKeyFilters APIKeyFilterLister,
 ) *Service {
 	return &Service{
-		cache:         cache,
-		engine:        engine,
-		upstreams:     upstreams,
-		aliases:       aliases,
-		mcpFilters:    mcpFilters,
-		apiKeyFilters: apiKeyFilters,
-		log:           slog.Default(),
+		cache:           cache,
+		engine:          engine,
+		upstreams:       upstreams,
+		aliases:         aliases,
+		mcpFilters:      mcpFilters,
+		apiKeyFilters:   apiKeyFilters,
+		upstreamConfigs: make(map[string]domain.UpstreamConfig),
+		routingStrategy: domain.ToolRoutingPriorityFill,
+		roundRobin:      make(map[string]uint64),
+		log:             slog.Default(),
 	}
 }
 
@@ -176,6 +189,32 @@ func (s *Service) SetLogger(l *slog.Logger) *Service {
 	return s
 }
 
+// SetRoutingStrategy 更新同名工具多来源时的内部调用选择策略。
+func (s *Service) SetRoutingStrategy(strategy domain.ToolRoutingStrategy) *Service {
+	if !domain.ValidToolRoutingStrategy(strategy) {
+		strategy = domain.ToolRoutingPriorityFill
+	}
+	s.routingMu.Lock()
+	s.routingStrategy = strategy
+	s.routingMu.Unlock()
+	return s
+}
+
+// SetQuotaManager 注入上游调用额度管理器。
+func (s *Service) SetQuotaManager(q *QuotaManager) *Service {
+	s.quota = q
+	return s
+}
+
+func (s *Service) currentRoutingStrategy() domain.ToolRoutingStrategy {
+	s.routingMu.RLock()
+	defer s.routingMu.RUnlock()
+	if domain.ValidToolRoutingStrategy(s.routingStrategy) {
+		return s.routingStrategy
+	}
+	return domain.ToolRoutingPriorityFill
+}
+
 // logger 返回已注入的日志器（保证非 nil）。
 func (s *Service) logger() *slog.Logger {
 	if s.log != nil {
@@ -193,6 +232,34 @@ func (s *Service) logger() *slog.Logger {
 func (s *Service) BuildToolSet(ctx context.Context, apiKeyID string) ([]domain.ToolDef, error) {
 	tools, _, err := s.buildToolSetWithReverseMap(ctx, apiKeyID)
 	return tools, err
+}
+
+// BuildToolDetails 构建管理台可读的聚合工具详情，包含每个工具的来源上游列表。
+func (s *Service) BuildToolDetails(ctx context.Context, apiKeyID string) ([]domain.ToolDetail, error) {
+	tools, reverse, err := s.buildToolSetWithReverseMap(ctx, apiKeyID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]domain.ToolDetail, 0, len(tools))
+	for _, tool := range tools {
+		entry := reverse[tool.Name]
+		sources := make([]domain.ToolSourceView, 0, len(entry.Candidates))
+		for _, c := range entry.Candidates {
+			cfg, _ := s.upstreamConfig(c.UpstreamID)
+			sources = append(sources, domain.ToolSourceView{
+				UpstreamID:     c.UpstreamID,
+				UpstreamName:   c.UpstreamName,
+				OriginalName:   c.OriginalName,
+				Description:    c.Tool.Description,
+				InputSchema:    c.Tool.InputSchema,
+				Compatible:     c.Compatible,
+				SchemaConflict: c.SchemaConflict,
+				RateLimits:     cfg.RateLimits,
+			})
+		}
+		out = append(out, domain.ToolDetail{Tool: tool, Sources: sources})
+	}
+	return out, nil
 }
 
 // InvokeTool 调用聚合工具：可见性校验 → 别名反向映射 → 路由到上游 → 原样返回结果。
@@ -235,26 +302,99 @@ func (s *Service) InvokeTool(ctx context.Context, apiKeyID, exposedName string, 
 	// 步骤 3-4：命中——反向映射已还原 (UpstreamID, OriginalName)，经窄接口透传转发。
 	// invoker 未注入时（仅未接线装配或单元测试）返回防御性占位错误；可见性校验在此之前已完整执行。
 	if s.invoker == nil {
-		log.Warn("上游调用转发器未注入，调用未执行", "exposedName", exposedName, "upstreamID", entry.UpstreamID)
+		log.Warn("上游调用转发器未注入，调用未执行", "exposedName", exposedName)
 		return domain.ToolResult{}, domain.ErrNotImplemented
 	}
 
+	candidate, err := s.selectCandidate(ctx, entry)
+	if err != nil {
+		log.Warn("工具来源选择失败，调用未转发", "exposedName", exposedName, "apiKeyID", apiKeyID, "error", err)
+		return domain.ToolResult{}, err
+	}
+
 	// 调用前记录起点，用于计算响应耗时（毫秒，Req 16.1）。统计写入绝不影响调用结果。
-	log.Debug("工具调用转发上游", "exposedName", exposedName, "upstreamID", entry.UpstreamID, "originalName", entry.OriginalName, "apiKeyID", apiKeyID, "mode", mode)
+	log.Debug("工具调用转发上游", "exposedName", exposedName, "upstreamID", candidate.UpstreamID, "originalName", candidate.OriginalName, "apiKeyID", apiKeyID, "mode", mode)
 	startedAt := time.Now()
-	result, callErr := s.invoker.CallUpstream(ctx, entry.UpstreamID, entry.OriginalName, args)
+	result, callErr := s.invoker.CallUpstream(ctx, candidate.UpstreamID, candidate.OriginalName, args)
 
 	// 步骤 5：异步采集调用统计（Req 16.1、16.8、16.9）。
 	// 以非阻塞方式提交，主流程附加耗时极小且永不阻塞；记录器未注入时跳过。
-	s.recordCall(ctx, apiKeyID, exposedName, entry, startedAt, args, result, callErr)
+	s.recordCall(ctx, apiKeyID, exposedName, candidate, startedAt, args, result, callErr)
 
 	if callErr != nil {
-		log.Warn("工具调用上游失败", "exposedName", exposedName, "upstreamID", entry.UpstreamID, "latencyMS", int(time.Since(startedAt).Milliseconds()), "error", callErr)
+		log.Warn("工具调用上游失败", "exposedName", exposedName, "upstreamID", candidate.UpstreamID, "latencyMS", int(time.Since(startedAt).Milliseconds()), "error", callErr)
 	} else {
-		log.Debug("工具调用完成", "exposedName", exposedName, "upstreamID", entry.UpstreamID, "latencyMS", int(time.Since(startedAt).Milliseconds()), "isError", result.IsError, "mode", mode)
+		log.Debug("工具调用完成", "exposedName", exposedName, "upstreamID", candidate.UpstreamID, "latencyMS", int(time.Since(startedAt).Milliseconds()), "isError", result.IsError, "mode", mode)
 	}
 
 	return result, callErr
+}
+
+func (s *Service) selectCandidate(ctx context.Context, entry ReverseEntry) (ToolCandidate, error) {
+	candidates := make([]ToolCandidate, 0, len(entry.Candidates))
+	for _, c := range entry.Candidates {
+		if c.Compatible {
+			candidates = append(candidates, c)
+		}
+	}
+	if len(candidates) == 0 {
+		return ToolCandidate{}, domain.NewError(domain.CodeToolNotFound, "工具没有可兼容调用的上游来源")
+	}
+	strategy := s.currentRoutingStrategy()
+	start := 0
+	if strategy == domain.ToolRoutingRoundRobin && len(candidates) > 1 {
+		s.roundRobinMu.Lock()
+		n := s.roundRobin[entry.Name]
+		s.roundRobin[entry.Name] = n + 1
+		s.roundRobinMu.Unlock()
+		start = int(n % uint64(len(candidates)))
+	}
+	var lastReason string
+	availability, hasAvailability := s.invoker.(UpstreamAvailability)
+	sawAvailable := false
+	sawQuotaLimited := false
+	for i := 0; i < len(candidates); i++ {
+		idx := i
+		if strategy == domain.ToolRoutingRoundRobin {
+			idx = (start + i) % len(candidates)
+		}
+		c := candidates[idx]
+		if hasAvailability && !availability.UpstreamAvailable(c.UpstreamID) {
+			lastReason = "所有上游来源当前均不可用"
+			continue
+		}
+		sawAvailable = true
+		cfg, ok := s.upstreamConfig(c.UpstreamID)
+		if !ok {
+			return c, nil
+		}
+		if s.quota == nil {
+			return c, nil
+		}
+		allowed, reason := s.quota.Allow(ctx, c.UpstreamID, cfg.RateLimits)
+		if allowed {
+			return c, nil
+		}
+		sawQuotaLimited = true
+		lastReason = reason
+	}
+	if lastReason == "" {
+		lastReason = "所有上游来源均已达到限流或额度上限"
+	}
+	if hasAvailability && !sawAvailable {
+		return ToolCandidate{}, domain.NewError(domain.CodeUpstreamUnavailable, lastReason)
+	}
+	if sawQuotaLimited {
+		return ToolCandidate{}, domain.NewError(domain.CodeRateLimited, lastReason)
+	}
+	return ToolCandidate{}, domain.NewError(domain.CodeRateLimited, lastReason)
+}
+
+func (s *Service) upstreamConfig(id string) (domain.UpstreamConfig, bool) {
+	s.upstreamConfigsMu.RLock()
+	defer s.upstreamConfigsMu.RUnlock()
+	cfg, ok := s.upstreamConfigs[id]
+	return cfg, ok
 }
 
 // recordCall 在工具调用完成后以非阻塞方式提交一条调用统计记录（Req 16.1、16.8、16.9）。
@@ -263,7 +403,7 @@ func (s *Service) InvokeTool(ctx context.Context, apiKeyID, exposedName string, 
 // 对外名、所用 API Key、毫秒精度时间戳与响应耗时（毫秒）。成败判定：转发返回 error 或
 // 上游报告的错误结果（result.IsError）均记为失败，其余记为成功——与「原样透传上游结果」
 // 的语义一致（Req 10.3）。recorder 未注入时为无操作。
-func (s *Service) recordCall(ctx context.Context, apiKeyID, exposedName string, entry ReverseEntry, startedAt time.Time, args json.RawMessage, result domain.ToolResult, callErr error) {
+func (s *Service) recordCall(ctx context.Context, apiKeyID, exposedName string, entry ToolCandidate, startedAt time.Time, args json.RawMessage, result domain.ToolResult, callErr error) {
 	if s.recorder == nil {
 		s.logger().Debug("统计记录器未注入，跳过调用统计", "exposedName", exposedName)
 		return
@@ -444,6 +584,13 @@ func (s *Service) buildToolSetWithReverseMap(ctx context.Context, apiKeyID strin
 			mcpFilters:   mcpFilters,
 		})
 	}
+	configs := make(map[string]domain.UpstreamConfig, len(upstreams))
+	for _, up := range upstreams {
+		configs[up.ID] = up.Config
+	}
+	s.upstreamConfigsMu.Lock()
+	s.upstreamConfigs = configs
+	s.upstreamConfigsMu.Unlock()
 
 	// 阶段 6 所需的 API Key 级屏蔽规则：apiKeyID 为空表示无 API Key 级过滤。
 	var apiKeyFilters []domain.FilterRule

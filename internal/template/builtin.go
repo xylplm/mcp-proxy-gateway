@@ -202,16 +202,24 @@ func builtinTemplates() []Template {
 			ID:        "context7-mcp",
 			Name:      "Context7 最新文档",
 			Category:  CategoryDevTools,
-			Summary:   "接入 Context7 MCP，为代码生成和配置问题提供最新库文档与示例，无需凭证即可基础使用。",
-			DocURL:    "https://github.com/upstash/context7",
-			Transport: domain.TransportStdio,
+			Summary:   "接入 Context7 远程 MCP，为代码生成和配置问题提供最新库文档与示例；可为不同账号创建多个上游并配置额度。",
+			DocURL:    "https://context7.com/docs/overview",
+			Transport: domain.TransportStreamableHTTP,
 			PresetParams: map[string]any{
-				"command": "npx",
-				"args": []any{
-					"-y", "@upstash/context7-mcp",
+				"url": "https://mcp.context7.com/mcp",
+				"headers": map[string]any{
+					"CONTEXT7_API_KEY": "${apiKey}",
 				},
 			},
-			Placeholders: []Placeholder{},
+			Placeholders: []Placeholder{
+				{
+					Name:        "apiKey",
+					Label:       "API Key",
+					Required:    true,
+					Rule:        ParamRule{Kind: ParamSecret, MinLen: 1, MaxLen: 512},
+					Description: "在 Context7 控制台生成，用于远程 MCP 鉴权。",
+				},
+			},
 		},
 		{
 			ID:        "postgres-mcp",

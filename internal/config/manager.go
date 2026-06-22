@@ -81,6 +81,7 @@ func Load(logger *slog.Logger, dataDir string) (*Manager, error) {
 		return nil, err
 	}
 
+	cfg = NormalizeYAMLConfig(cfg)
 	if err := ValidateYAMLConfig(cfg); err != nil {
 		logger.Error("YAML 配置校验失败", "path", yamlPath, "error", err)
 		return nil, err
@@ -133,6 +134,7 @@ func loadOrCreateYAML(logger *slog.Logger, dataDir, yamlPath string) (YAMLConfig
 //
 // 校验失败时不写盘、不更新内存快照，返回校验错误。
 func (m *Manager) Save(cfg YAMLConfig) error {
+	cfg = NormalizeYAMLConfig(cfg)
 	if err := ValidateYAMLConfig(cfg); err != nil {
 		return err
 	}

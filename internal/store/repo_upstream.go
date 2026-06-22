@@ -36,6 +36,10 @@ func (r *UpstreamRepo) Create(ctx context.Context, cfg domain.UpstreamConfig) (*
 	if err != nil {
 		return nil, err
 	}
+	rateLimits, err := marshalRateLimits(cfg.RateLimits)
+	if err != nil {
+		return nil, err
+	}
 
 	id := newUUID()
 	values := map[string]any{
@@ -48,6 +52,7 @@ func (r *UpstreamRepo) Create(ctx context.Context, cfg domain.UpstreamConfig) (*
 		"enabled":     cfg.Enabled,
 		"sort_order":  cfg.SortOrder,
 		"auto_sync":   cfg.AutoSync,
+		"rate_limits": JSONB(rateLimits),
 	}
 	if err := r.db.WithContext(ctx).Model(&upstreamMCPModel{}).Create(values).Error; err != nil {
 		return nil, classifyWrite(err, "上游 MCP 名称已存在："+cfg.Name, "上游 MCP 不存在")
@@ -97,6 +102,10 @@ func (r *UpstreamRepo) Update(ctx context.Context, id string, cfg domain.Upstrea
 	if err != nil {
 		return nil, err
 	}
+	rateLimits, err := marshalRateLimits(cfg.RateLimits)
+	if err != nil {
+		return nil, err
+	}
 
 	updates := map[string]any{
 		"name":        cfg.Name,
@@ -107,6 +116,7 @@ func (r *UpstreamRepo) Update(ctx context.Context, id string, cfg domain.Upstrea
 		"enabled":     cfg.Enabled,
 		"sort_order":  cfg.SortOrder,
 		"auto_sync":   cfg.AutoSync,
+		"rate_limits": JSONB(rateLimits),
 		"updated_at":  gorm.Expr("now()"),
 	}
 	res := r.db.WithContext(ctx).Model(&upstreamMCPModel{}).Where("id = ?", uid).Updates(updates)
@@ -184,6 +194,14 @@ func marshalConnParams(params map[string]any) ([]byte, error) {
 	return b, nil
 }
 
+func marshalRateLimits(limits domain.UpstreamRateLimits) ([]byte, error) {
+	b, err := json.Marshal(limits)
+	if err != nil {
+		return nil, domain.NewError(domain.CodeValidation, "限流配置序列化失败："+err.Error())
+	}
+	return b, nil
+}
+
 func storeTags(tags []string) []string {
 	if tags == nil {
 		return []string{}
@@ -198,6 +216,12 @@ func modelToUpstream(model upstreamMCPModel) (*UpstreamRow, error) {
 			return nil, domain.NewError(domain.CodeValidation, "连接参数反序列化失败："+err.Error())
 		}
 	}
+	var rateLimits domain.UpstreamRateLimits
+	if len(model.RateLimits) > 0 {
+		if err := json.Unmarshal(model.RateLimits, &rateLimits); err != nil {
+			return nil, domain.NewError(domain.CodeValidation, "限流配置反序列化失败："+err.Error())
+		}
+	}
 
 	out := &UpstreamRow{}
 	out.ID = model.ID
@@ -210,6 +234,7 @@ func modelToUpstream(model upstreamMCPModel) (*UpstreamRow, error) {
 		Enabled:    model.Enabled,
 		SortOrder:  model.SortOrder,
 		AutoSync:   model.AutoSync,
+		RateLimits: rateLimits,
 	}
 	out.CreatedAt = model.CreatedAt
 	out.UpdatedAt = model.UpdatedAt

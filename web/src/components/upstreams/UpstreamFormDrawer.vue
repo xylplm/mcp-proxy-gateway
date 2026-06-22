@@ -9,6 +9,7 @@ import {
   type Upstream,
   type UpstreamConfigRequest,
 } from '@/api/upstreams'
+import { emptyRateLimits, type UpstreamRateLimits } from '@/api/rateLimits'
 import type { PrefillForm, Placeholder } from '@/api/templates'
 import { ApiError } from '@/api/request'
 import { CheckIcon, ChevronDownIcon, InfoCircleIcon } from '@/icons'
@@ -112,6 +113,14 @@ const form = reactive<{
   advancedOpen: boolean
   enabled: boolean
   autoSync: boolean
+  rateLimitEnabled: boolean
+  rateLimitTimezone: string
+  perSecond: number | null
+  perMinute: number | null
+  perHour: number | null
+  perDay: number | null
+  perWeek: number | null
+  perMonth: number | null
 }>({
   name: '',
   tagDraft: '',
@@ -132,6 +141,14 @@ const form = reactive<{
   advancedOpen: false,
   enabled: true,
   autoSync: true,
+  rateLimitEnabled: false,
+  rateLimitTimezone: 'UTC',
+  perSecond: null,
+  perMinute: null,
+  perHour: null,
+  perDay: null,
+  perWeek: null,
+  perMonth: null,
 })
 
 const placeholderValues = reactive<Record<string, string>>({})
@@ -223,6 +240,35 @@ function resetManualFields(): void {
   form.cwd = ''
   form.customParamsJson = ''
   form.advancedOpen = false
+}
+
+function applyRateLimits(limits?: UpstreamRateLimits): void {
+  const value = limits ?? emptyRateLimits()
+  form.rateLimitEnabled = value.enabled
+  form.rateLimitTimezone = value.timezone || 'UTC'
+  form.perSecond = value.perSecond && value.perSecond > 0 ? value.perSecond : null
+  form.perMinute = value.perMinute && value.perMinute > 0 ? value.perMinute : null
+  form.perHour = value.perHour && value.perHour > 0 ? value.perHour : null
+  form.perDay = value.perDay && value.perDay > 0 ? value.perDay : null
+  form.perWeek = value.perWeek && value.perWeek > 0 ? value.perWeek : null
+  form.perMonth = value.perMonth && value.perMonth > 0 ? value.perMonth : null
+}
+
+function limitValue(value: number | null): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0
+}
+
+function buildRateLimits(): UpstreamRateLimits {
+  return {
+    enabled: form.rateLimitEnabled,
+    perSecond: form.rateLimitEnabled ? limitValue(form.perSecond) : 0,
+    perMinute: form.rateLimitEnabled ? limitValue(form.perMinute) : 0,
+    perHour: form.rateLimitEnabled ? limitValue(form.perHour) : 0,
+    perDay: form.rateLimitEnabled ? limitValue(form.perDay) : 0,
+    perWeek: form.rateLimitEnabled ? limitValue(form.perWeek) : 0,
+    perMonth: form.rateLimitEnabled ? limitValue(form.perMonth) : 0,
+    timezone: form.rateLimitTimezone.trim() || 'UTC',
+  }
 }
 
 function parseArgs(raw: string): string[] {
@@ -381,6 +427,7 @@ function resetForm(): void {
       form.customParamsJson !== ''
     form.enabled = cfg.enabled
     form.autoSync = cfg.autoSync
+    applyRateLimits(cfg.rateLimits)
     placeholders.value = []
     presetParams.value = {}
     return
@@ -393,6 +440,7 @@ function resetForm(): void {
   resetManualFields()
   form.enabled = true
   form.autoSync = true
+  applyRateLimits()
   placeholders.value = props.prefill?.placeholders ?? []
   presetParams.value = props.prefill?.presetParams ?? {}
   for (const ph of placeholders.value) placeholderValues[ph.name] = ''
@@ -658,6 +706,7 @@ function buildPayload(): UpstreamConfigRequest | null {
         ? props.upstream.config.sortOrder
         : (props.nextSortOrder ?? 0),
     autoSync: form.autoSync,
+    rateLimits: buildRateLimits(),
   }
 
   if (hasCredentialReference(connParams)) {
@@ -675,6 +724,14 @@ function mapServerField(field: string): string {
     env: 'envText',
     cwd: 'cwd',
     headers: 'headersText',
+    rateLimits: 'rateLimits',
+    'rateLimits.timezone': 'rateLimitTimezone',
+    'rateLimits.perSecond': 'perSecond',
+    'rateLimits.perMinute': 'perMinute',
+    'rateLimits.perHour': 'perHour',
+    'rateLimits.perDay': 'perDay',
+    'rateLimits.perWeek': 'perWeek',
+    'rateLimits.perMonth': 'perMonth',
   }
   return map[local] ?? local
 }
@@ -1090,44 +1147,6 @@ const errorClass = 'mt-1.5 text-xs text-error-500'
                 </div>
               </section>
 
-              <section class="space-y-4 rounded-lg border border-gray-200 p-4 dark:border-gray-800">
-                <div>
-                  <h4 class="text-sm font-semibold text-gray-800 dark:text-white/90">运行设置</h4>
-                </div>
-                <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  <label
-                    class="flex cursor-pointer items-start gap-3 rounded-lg border border-gray-200 p-3 text-sm text-gray-700 dark:border-gray-800 dark:text-gray-300"
-                  >
-                    <input
-                      v-model="form.enabled"
-                      type="checkbox"
-                      class="text-brand-500 focus:ring-brand-500/20 mt-0.5 h-4 w-4 rounded border-gray-300"
-                    />
-                    <span>
-                      <span class="block font-medium">启用并参与聚合</span>
-                      <span class="mt-1 block text-xs text-gray-500 dark:text-gray-400"
-                        >关闭后保留配置，但不会进入对外工具集合。</span
-                      >
-                    </span>
-                  </label>
-                  <label
-                    class="flex cursor-pointer items-start gap-3 rounded-lg border border-gray-200 p-3 text-sm text-gray-700 dark:border-gray-800 dark:text-gray-300"
-                  >
-                    <input
-                      v-model="form.autoSync"
-                      type="checkbox"
-                      class="text-brand-500 focus:ring-brand-500/20 mt-0.5 h-4 w-4 rounded border-gray-300"
-                    />
-                    <span>
-                      <span class="block font-medium">自动同步工具列表</span>
-                      <span class="mt-1 block text-xs text-gray-500 dark:text-gray-400"
-                        >按系统同步计划刷新该上游工具。</span
-                      >
-                    </span>
-                  </label>
-                </div>
-              </section>
-
               <section class="rounded-lg border border-gray-200 dark:border-gray-800">
                 <button
                   type="button"
@@ -1215,6 +1234,99 @@ const errorClass = 'mt-1.5 text-xs text-error-500'
                 </div>
               </section>
             </template>
+
+            <section class="space-y-4 rounded-lg border border-gray-200 p-4 dark:border-gray-800">
+              <div>
+                <h4 class="text-sm font-semibold text-gray-800 dark:text-white/90">运行设置</h4>
+              </div>
+              <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <label
+                  class="flex cursor-pointer items-start gap-3 rounded-lg border border-gray-200 p-3 text-sm text-gray-700 dark:border-gray-800 dark:text-gray-300"
+                >
+                  <input
+                    v-model="form.enabled"
+                    type="checkbox"
+                    class="text-brand-500 focus:ring-brand-500/20 mt-0.5 h-4 w-4 rounded border-gray-300"
+                  />
+                  <span>
+                    <span class="block font-medium">启用并参与聚合</span>
+                    <span class="mt-1 block text-xs text-gray-500 dark:text-gray-400"
+                      >关闭后保留配置，但不会进入对外工具集合。</span
+                    >
+                  </span>
+                </label>
+                <label
+                  class="flex cursor-pointer items-start gap-3 rounded-lg border border-gray-200 p-3 text-sm text-gray-700 dark:border-gray-800 dark:text-gray-300"
+                >
+                  <input
+                    v-model="form.autoSync"
+                    type="checkbox"
+                    class="text-brand-500 focus:ring-brand-500/20 mt-0.5 h-4 w-4 rounded border-gray-300"
+                  />
+                  <span>
+                    <span class="block font-medium">自动同步工具列表</span>
+                    <span class="mt-1 block text-xs text-gray-500 dark:text-gray-400"
+                      >按系统同步计划刷新该上游工具。</span
+                    >
+                  </span>
+                </label>
+              </div>
+              <div class="rounded-lg border border-gray-200 p-3 dark:border-gray-800">
+                <label class="flex cursor-pointer items-start justify-between gap-4">
+                  <span>
+                    <span class="block text-sm font-medium text-gray-800 dark:text-white/90">限流与额度</span>
+                    <span class="mt-1 block text-xs leading-5 text-gray-500 dark:text-gray-400">
+                      按该上游维度统计调用次数，用于避开第三方频率限制和周期额度。
+                    </span>
+                  </span>
+                  <input
+                    v-model="form.rateLimitEnabled"
+                    type="checkbox"
+                    class="text-brand-500 focus:ring-brand-500/20 mt-1 h-4 w-4 rounded border-gray-300"
+                  />
+                </label>
+
+                <div v-if="form.rateLimitEnabled" class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <div>
+                    <label for="up-rate-second" :class="labelClass">每秒上限</label>
+                    <input id="up-rate-second" v-model.number="form.perSecond" type="number" min="0" :class="inputClass" placeholder="不填表示不限" />
+                    <p v-if="fieldErrors.perSecond" :class="errorClass">{{ fieldErrors.perSecond }}</p>
+                  </div>
+                  <div>
+                    <label for="up-rate-minute" :class="labelClass">每分钟上限</label>
+                    <input id="up-rate-minute" v-model.number="form.perMinute" type="number" min="0" :class="inputClass" placeholder="不填表示不限" />
+                    <p v-if="fieldErrors.perMinute" :class="errorClass">{{ fieldErrors.perMinute }}</p>
+                  </div>
+                  <div>
+                    <label for="up-rate-hour" :class="labelClass">每小时上限</label>
+                    <input id="up-rate-hour" v-model.number="form.perHour" type="number" min="0" :class="inputClass" placeholder="不填表示不限" />
+                    <p v-if="fieldErrors.perHour" :class="errorClass">{{ fieldErrors.perHour }}</p>
+                  </div>
+                  <div>
+                    <label for="up-rate-day" :class="labelClass">每日额度</label>
+                    <input id="up-rate-day" v-model.number="form.perDay" type="number" min="0" :class="inputClass" placeholder="不填表示不限" />
+                    <p v-if="fieldErrors.perDay" :class="errorClass">{{ fieldErrors.perDay }}</p>
+                  </div>
+                  <div>
+                    <label for="up-rate-week" :class="labelClass">每周额度</label>
+                    <input id="up-rate-week" v-model.number="form.perWeek" type="number" min="0" :class="inputClass" placeholder="不填表示不限" />
+                    <p v-if="fieldErrors.perWeek" :class="errorClass">{{ fieldErrors.perWeek }}</p>
+                  </div>
+                  <div>
+                    <label for="up-rate-month" :class="labelClass">每月额度</label>
+                    <input id="up-rate-month" v-model.number="form.perMonth" type="number" min="0" :class="inputClass" placeholder="不填表示不限" />
+                    <p v-if="fieldErrors.perMonth" :class="errorClass">{{ fieldErrors.perMonth }}</p>
+                  </div>
+                  <div class="sm:col-span-2">
+                    <label for="up-rate-timezone" :class="labelClass">额度重置时区</label>
+                    <input id="up-rate-timezone" v-model="form.rateLimitTimezone" type="text" :class="inputClass" placeholder="UTC" />
+                    <p :class="helpClass">用于每日、每周、每月额度窗口，填写 IANA 时区，例如 UTC 或 Asia/Shanghai。</p>
+                    <p v-if="fieldErrors.rateLimitTimezone" :class="errorClass">{{ fieldErrors.rateLimitTimezone }}</p>
+                  </div>
+                </div>
+                <p v-if="fieldErrors.rateLimits" :class="errorClass">{{ fieldErrors.rateLimits }}</p>
+              </div>
+            </section>
 
             <p
               v-if="formError !== ''"

@@ -153,7 +153,12 @@ func (a *App) ApplySettings(cfg config.YAMLConfig) error {
 		}
 	}
 
-	// 双模式并行运行，无需全局模式切换。
+	if a.mcpService != nil {
+		a.mcpService.SetDiscoveryLimit(cfg.MCPAPI.SmartDiscoveryLimit)
+	}
+	if a.agg != nil {
+		a.agg.SetRoutingStrategy(cfg.Aggregation.ToolRoutingStrategy)
+	}
 
 	if a.xiaozhiConn == nil {
 		return nil

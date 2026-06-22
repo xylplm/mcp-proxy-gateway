@@ -20,6 +20,7 @@ import (
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 
+	"github.com/myGithub/mcp-proxy-gateway/internal/aggregation"
 	"github.com/myGithub/mcp-proxy-gateway/internal/audit"
 	"github.com/myGithub/mcp-proxy-gateway/internal/config"
 	"github.com/myGithub/mcp-proxy-gateway/internal/health"
@@ -88,6 +89,7 @@ type App struct {
 	auditRecorder *audit.Recorder
 	xiaozhiConn   *xiaozhi.Connector
 	mcpService    *mcpapi.Service
+	agg           *aggregation.Service
 	mgr           *manager.Manager
 	dialer        *sessionDialer
 

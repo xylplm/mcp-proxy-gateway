@@ -26,7 +26,7 @@ func TestRecordCallStoresTimeoutFailureDetail(t *testing.T) {
 		context.Background(),
 		"key-1",
 		"slow_tool",
-		ReverseEntry{UpstreamID: "up-1", OriginalName: "slow_tool"},
+		ToolCandidate{UpstreamID: "up-1", OriginalName: "slow_tool"},
 		time.Now().Add(-time.Second),
 		json.RawMessage(`{"q":"x"}`),
 		domain.ToolResult{},
@@ -60,7 +60,7 @@ func TestRecordCallStoresUpstreamErrorStatus(t *testing.T) {
 	recorder := &callRecordRecorder{}
 	svc := &Service{recorder: recorder}
 
-	svc.recordCall(context.Background(), "", "search", ReverseEntry{UpstreamID: "up-1", OriginalName: "search"}, time.Now(), json.RawMessage(`{}`), domain.ToolResult{
+	svc.recordCall(context.Background(), "", "search", ToolCandidate{UpstreamID: "up-1", OriginalName: "search"}, time.Now(), json.RawMessage(`{}`), domain.ToolResult{
 		IsError: true,
 		Content: json.RawMessage(`[{"type":"text","text":"bad request"}]`),
 	}, nil)

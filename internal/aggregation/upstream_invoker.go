@@ -176,3 +176,16 @@ func (in *SessionInvoker) CallUpstream(ctx context.Context, upstreamID, original
 		}
 	}
 }
+
+// UpstreamAvailable 返回指定上游当前是否具备可调用条件。
+func (in *SessionInvoker) UpstreamAvailable(upstreamID string) bool {
+	if in == nil || in.states == nil || in.sessions == nil {
+		return false
+	}
+	state, _ := in.states.GetState(upstreamID)
+	if state != domain.ConnAvailable {
+		return false
+	}
+	session, ok := in.sessions.Session(upstreamID)
+	return ok && session != nil
+}

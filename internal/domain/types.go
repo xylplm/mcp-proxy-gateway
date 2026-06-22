@@ -51,6 +51,10 @@ type ToolDef struct {
 	UpstreamID string `json:"upstreamId"`
 	// Order 继承所属上游 MCP 的排序顺序。
 	Order int `json:"order"`
+	// SourceCount 表示该对外工具当前可路由的来源上游数量，仅用于管理台展示。
+	SourceCount int `json:"sourceCount,omitempty"`
+	// SchemaConflict 表示同名来源中存在与对外展示 schema 不一致的工具，仅用于管理台提示。
+	SchemaConflict bool `json:"schemaConflict,omitempty"`
 }
 
 // ToolResult 表示上游 MCP 工具调用返回的结果，无论成功或上游报告的错误均原样透传。
@@ -59,6 +63,24 @@ type ToolResult struct {
 	IsError bool `json:"isError"`
 	// Content 为工具调用结果内容（MCP content 数组的原始 JSON）。
 	Content json.RawMessage `json:"content"`
+}
+
+// ToolSourceView 是管理台展示某个对外工具来源上游的只读视图。
+type ToolSourceView struct {
+	UpstreamID     string             `json:"upstreamId"`
+	UpstreamName   string             `json:"upstreamName"`
+	OriginalName   string             `json:"originalName"`
+	Description    string             `json:"description"`
+	InputSchema    json.RawMessage    `json:"inputSchema"`
+	Compatible     bool               `json:"compatible"`
+	SchemaConflict bool               `json:"schemaConflict"`
+	RateLimits     UpstreamRateLimits `json:"rateLimits,omitempty"`
+}
+
+// ToolDetail 是管理台工具列表的只读详情视图。
+type ToolDetail struct {
+	Tool    ToolDef          `json:"tool"`
+	Sources []ToolSourceView `json:"sources"`
 }
 
 // UpstreamConfig 表示上游 MCP 服务的配置。
@@ -80,6 +102,43 @@ type UpstreamConfig struct {
 	SortOrder int `json:"sortOrder"`
 	// AutoSync 表示是否对该上游开启工具列表自动同步。
 	AutoSync bool `json:"autoSync"`
+	// RateLimits 为该上游的调用频率与周期额度限制；未启用时不参与调用路由判定。
+	RateLimits UpstreamRateLimits `json:"rateLimits,omitempty"`
+}
+
+// UpstreamRateLimits 表示上游 MCP 的本地调用频率与周期额度限制。
+//
+// 所有限额均为「单上游实例」维度；取值 <=0 表示该维度不限额。多个维度同时配置时需
+// 同时满足，例如每分钟 60 且每天 1000 表示两条约束都会生效。
+type UpstreamRateLimits struct {
+	Enabled   bool   `json:"enabled"`
+	PerSecond int    `json:"perSecond,omitempty"`
+	PerMinute int    `json:"perMinute,omitempty"`
+	PerHour   int    `json:"perHour,omitempty"`
+	PerDay    int    `json:"perDay,omitempty"`
+	PerWeek   int    `json:"perWeek,omitempty"`
+	PerMonth  int    `json:"perMonth,omitempty"`
+	Timezone  string `json:"timezone,omitempty"`
+}
+
+// ToolRoutingStrategy 表示同名工具有多个来源上游时的内部调用选择策略。
+type ToolRoutingStrategy string
+
+const (
+	// ToolRoutingPriorityFill 按上游排序优先选择第一个健康且未超额的来源。
+	ToolRoutingPriorityFill ToolRoutingStrategy = "priority_fill"
+	// ToolRoutingRoundRobin 在同名来源之间轮询分配调用。
+	ToolRoutingRoundRobin ToolRoutingStrategy = "round_robin"
+)
+
+// ValidToolRoutingStrategy 判断工具调用策略是否为受支持取值。
+func ValidToolRoutingStrategy(s ToolRoutingStrategy) bool {
+	switch s {
+	case ToolRoutingPriorityFill, ToolRoutingRoundRobin:
+		return true
+	default:
+		return false
+	}
 }
 
 // Upstream 表示已持久化的上游 MCP 服务实例及其运行期状态。
