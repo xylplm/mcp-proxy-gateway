@@ -11,8 +11,8 @@ import (
 )
 
 // StatBufferKey 为统计异步缓冲在 Redis 中的键，遵循设计文档「Redis 缓存键设计」的
-// mpg: 分域约定（Req 16.8）。主流程将调用记录 LPUSH 入该 List，后台 worker 批量 RPOP
-// 落库到 call_stat。
+// mpg: 分域约定（Req 16.8）。主流程将调用事件 LPUSH 入该 List，后台 worker 批量 RPOP
+// 写入 Redis 最近记录并 upsert 到 call_stat_daily。
 const StatBufferKey = "mpg:stats:buffer"
 
 // 异步缓冲与批量落库的默认参数。
@@ -49,12 +49,12 @@ type StatBuffer interface {
 	PopBatch(ctx context.Context, max int) ([]string, error)
 }
 
-// StatWriter 是调用统计落库（call_stat 表）的窄接口（Req 16.1）。
+// StatWriter 是调用统计批量写入的窄接口（Req 16.1）。
 //
-// 仅声明后台 worker 实际需要的批量写入能力。*store.CallStatRepo 满足该接口；以接口依赖
-// 便于在单元测试中以内存 fake 替换并注入写入失败，验证「写入失败静默丢弃」（Req 16.9）。
+// 生产实现会同时写 Redis 最近记录与 PostgreSQL 每日聚合；以接口依赖便于在单元测试中以内存
+// fake 替换并注入写入失败，验证「写入失败静默丢弃」（Req 16.9）。
 type StatWriter interface {
-	// Insert 批量写入调用统计记录。空切片为无操作。
+	// Insert 批量写入调用统计事件。空切片为无操作。
 	Insert(ctx context.Context, records []store.CallStatRecord) error
 }
 
@@ -63,7 +63,8 @@ type StatWriter interface {
 // 数据流（见设计文档「统计异步写入与降级」）：
 //
 //	主流程 RecordAsync → 本地缓冲队列（非阻塞，<50ms）
-//	后台 worker → 批量 LPUSH mpg:stats:buffer → 批量 RPOP → 批量 INSERT call_stat
+//	后台 worker → 批量 LPUSH mpg:stats:buffer → 批量 RPOP
+//	              → 写 Redis 最近记录 + upsert call_stat_daily
 //	  任一环节失败 → 静默丢弃该批记录，不影响主流程、不返回错误（Req 16.9）
 //
 // 设计要点：
@@ -76,7 +77,7 @@ type StatWriter interface {
 type Recorder struct {
 	// buffer 为 Redis 异步缓冲；为 nil 时降级为本地队列直接落库。
 	buffer StatBuffer
-	// writer 为 call_stat 批量写入仓储。
+	// writer 为统计事件批量写入器。
 	writer StatWriter
 	// queue 为主流程与 worker 之间的本地非阻塞缓冲队列。
 	queue chan store.CallStatRecord
@@ -142,8 +143,8 @@ func WithLogger(l *slog.Logger) Option {
 
 // New 构造统计异步写入器。
 //
-// buffer 为 Redis 异步缓冲（可为 nil，降级为本地队列直接落库）；writer 为 call_stat
-// 批量写入仓储（必需）。选项可覆盖队列容量、批次大小、刷新周期与日志器。
+// buffer 为 Redis 异步缓冲（可为 nil，降级为本地队列直接写入）；writer 为统计事件
+// 批量写入器（必需）。选项可覆盖队列容量、批次大小、刷新周期与日志器。
 func New(buffer StatBuffer, writer StatWriter, opts ...Option) *Recorder {
 	r := &Recorder{
 		buffer:        buffer,
@@ -177,6 +178,7 @@ func (r *Recorder) RecordAsync(ctx context.Context, rec store.CallStatRecord) {
 	if r.shouldDrop(rec.CalledAt) {
 		return
 	}
+	rec = sanitizeRecordPayloads(rec)
 	select {
 	case r.queue <- rec:
 	default:
@@ -383,7 +385,7 @@ func (r *Recorder) writeDirect(ctx context.Context, recs []store.CallStatRecord)
 	r.insert(ctx, recs)
 }
 
-// insert 批量写入 call_stat；失败静默丢弃、不报错（Req 16.9）。
+// insert 批量写入统计事件；失败静默丢弃、不报错（Req 16.9）。
 func (r *Recorder) insert(ctx context.Context, recs []store.CallStatRecord) {
 	if len(recs) == 0 {
 		return
@@ -395,9 +397,10 @@ func (r *Recorder) insert(ctx context.Context, recs []store.CallStatRecord) {
 		return
 	}
 	if err := r.writer.Insert(ctx, recs); err != nil {
-		// 落库失败：丢弃该批，不影响主流程（Req 16.9）。
-		r.log.Warn("批量写入 call_stat 失败，丢弃该批记录", "count", len(recs), "error", err)
+		// 写入失败：丢弃该批，不影响主流程（Req 16.9）。
+		r.log.Warn("批量写入调用统计失败，丢弃该批记录", "count", len(recs), "error", err)
 	}
+
 }
 
 func (r *Recorder) shouldDrop(at time.Time) bool {

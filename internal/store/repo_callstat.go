@@ -3,22 +3,14 @@ package store
 import (
 	"context"
 	"encoding/json"
-	"fmt"
-	"strconv"
-	"strings"
+	"math"
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
 )
-
-// 时间分区命名约定：call_stat 按「自然月」做声明式范围分区，分区表名形如
-// call_stat_p<YYYYMM>，覆盖 [月初 00:00:00+00, 次月初 00:00:00+00) 的左闭右开区间（Req 16.10）。
-//
-// 将「所覆盖的月份」编码进分区表名，使保留期清理无需解析 PostgreSQL 的分区边界表达式，
-// 仅凭表名即可推算该分区的时间范围，从而以 DROP 整张分区表的方式高效清理超期数据。
-const partitionPrefix = "call_stat_p"
 
 const (
 	CallStatusSuccess       = "success"
@@ -26,19 +18,27 @@ const (
 	CallStatusFailed        = "failed"
 )
 
-// CallStatRecord 是一条调用统计记录（call_stat 表）（Req 16.1）。
+const maxDailySnapshotRunes = 100
+const maxDailyErrorRunes = 1000
+
+// CallStatRecord 是一次工具调用产生的统计事件。
 //
-// 统计维度采用稳定标识 (UpstreamID, OriginalName)，不随别名重命名或上游重排序而断裂；
-// ExposedName 仅作展示。CalledAt 为毫秒精度时间戳。
+// PostgreSQL 仅持久化按 UTC 日期聚合后的多维统计；请求、响应与失败详情仅供 Redis 最近记录
+// 使用，不再写入 PostgreSQL 明细表。统计维度采用稳定标识 (UpstreamID, OriginalName)，
+// ExposedName 仅作展示快照。
 type CallStatRecord struct {
 	// UpstreamID 为所属上游 MCP 标识；可为空（未知上游）。
 	UpstreamID string
+	// UpstreamName 为调用时的上游名称快照，仅作展示；可为空。
+	UpstreamName string
 	// OriginalName 为上游原始工具名（稳定标识）。
 	OriginalName string
 	// ExposedName 为调用时的对外名，仅作展示；可为空。
 	ExposedName string
 	// APIKeyID 为所用 API Key 标识；可为空。
 	APIKeyID string
+	// APIKeyName 为调用时的 API Key 名称快照，仅作展示；可为空。
+	APIKeyName string
 	// CalledAt 为调用时间（毫秒精度）。
 	CalledAt time.Time
 	// LatencyMS 为响应耗时（毫秒）。
@@ -47,13 +47,13 @@ type CallStatRecord struct {
 	Success bool
 	// Status stores success/upstream_error/failed.
 	Status string
-	// RequestArgs 为调用入参 JSON。
+	// RequestArgs 为调用入参 JSON，仅写入 Redis 最近记录。
 	RequestArgs json.RawMessage
-	// ResponseResult 为调用出参 JSON。
+	// ResponseResult 为调用出参 JSON，仅写入 Redis 最近记录。
 	ResponseResult json.RawMessage
 	// ErrorMessage 为调用失败时的错误说明。
 	ErrorMessage string
-	// FailureDetail stores diagnostic JSON for failed calls.
+	// FailureDetail stores diagnostic JSON for failed calls，仅写入 Redis 最近记录。
 	FailureDetail json.RawMessage
 	// Mode 为调用使用的 MCP 模式（full/smart），默认 full。
 	Mode string
@@ -88,12 +88,12 @@ type CallRecordView struct {
 
 // DimensionCount 为按某一维度（上游 MCP 或 API Key）聚合的调用条数（Req 16.2、16.4）。
 type DimensionCount struct {
-	// ID 为该维度的标识（上游 MCP 标识或 API Key 标识）；空串表示该维度为 NULL。
+	// ID 为该维度的标识（上游 MCP 标识或 API Key 标识）；空串表示该维度为空。
 	ID string
-	// Count 为该维度在时间范围内的调用条数（含成功与失败）。
+	// Count 为该维度在日期范围内的调用条数（含成功与失败）。
 	Count int64
-	// Source 仅在 ID 为空（维度 NULL）时有意义，记录该 NULL 组的主要调用来源
-	// （api/xiaozhi）。非 NULL 维度的 Source 为空串。用于区分「小智接入」与真正的未知。
+	// Source 仅在 ID 为空（维度为空）时有意义，记录该空组的调用来源（api/xiaozhi）。
+	// 非空维度的 Source 为空串。用于区分「小智接入」与真正的未知。
 	Source string
 }
 
@@ -103,11 +103,11 @@ type ToolRank struct {
 	UpstreamID string
 	// OriginalName 为上游原始工具名（稳定标识的一部分）。
 	OriginalName string
-	// Count 为该工具在时间范围内的调用次数。
+	// Count 为该工具在日期范围内的调用次数。
 	Count int64
 }
 
-// StatsSummary 为某个时间区间内的调用概览聚合。
+// StatsSummary 为某个日期区间内的调用概览聚合。
 type StatsSummary struct {
 	TotalCalls      int64
 	SuccessCalls    int64
@@ -119,7 +119,7 @@ type StatsSummary struct {
 	P95LatencyMS    float64
 }
 
-// DailyCount 为按自然日聚合的调用趋势。
+// DailyCount 为按 UTC 自然日聚合的调用趋势。
 type DailyCount struct {
 	Day          time.Time
 	TotalCalls   int64
@@ -138,7 +138,7 @@ type ToolErrorRank struct {
 	AvgLatencyMS float64
 }
 
-// CallStatRepo 提供调用统计（call_stat 表）的批量写入与多维度查询。
+// CallStatRepo 提供调用统计每日聚合事实表的批量写入与多维度查询。
 type CallStatRepo struct {
 	db *gorm.DB
 }
@@ -148,268 +148,215 @@ func NewCallStatRepo(db *gorm.DB) *CallStatRepo {
 	return &CallStatRepo{db: db}
 }
 
-// Insert 批量写入调用统计记录，供后台 worker 将异步缓冲批量落库使用（Req 16.1、16.8）。
+// Insert 批量聚合调用统计事件并 upsert 到 call_stat_daily。
 //
-// 使用 GORM 分批插入；空切片为无操作。id 由 BIGSERIAL 自增生成。
+// 数据库不再保存调用明细；本方法按「UTC 日期 + source + mode + upstream + api_key + tool」
+// 折叠批次内记录，然后累加写入每日多维聚合事实表。空切片为无操作。
 func (r *CallStatRepo) Insert(ctx context.Context, records []CallStatRecord) error {
 	if len(records) == 0 {
 		return nil
 	}
-	models := make([]callStatModel, 0, len(records))
-	for _, rec := range records {
-		upstreamID, err := nullableUUID(rec.UpstreamID)
-		if err != nil {
-			return err
-		}
-		apiKeyID, err := nullableUUID(rec.APIKeyID)
-		if err != nil {
-			return err
-		}
-		models = append(models, callStatModel{
-			UpstreamID:     upstreamID,
-			OriginalName:   rec.OriginalName,
-			ExposedName:    nullableString(rec.ExposedName),
-			APIKeyID:       apiKeyID,
-			CalledAt:       rec.CalledAt,
-			LatencyMS:      rec.LatencyMS,
-			Success:        rec.Success,
-			Status:         normalizeCallStatus(rec.Status, rec.Success),
-			RequestArgs:    JSONB(rec.RequestArgs),
-			ResponseResult: JSONB(rec.ResponseResult),
-			ErrorMessage:   nullableString(rec.ErrorMessage),
-			FailureDetail:  JSONB(rec.FailureDetail),
-			Mode:           normalizeMode(rec.Mode),
-			Source:         normalizeSource(rec.Source),
-		})
+	models := aggregateDailyModels(records)
+	if len(models) == 0 {
+		return nil
 	}
-	return r.db.WithContext(ctx).CreateInBatches(models, 1000).Error
+	return r.db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns: []clause.Column{
+			{Name: "stat_date"},
+			{Name: "source"},
+			{Name: "mode"},
+			{Name: "upstream_id"},
+			{Name: "api_key_id"},
+			{Name: "original_name"},
+		},
+		DoUpdates: clause.Assignments(map[string]any{
+			"upstream_name_snapshot": gorm.Expr("CASE WHEN EXCLUDED.upstream_name_snapshot <> '' THEN EXCLUDED.upstream_name_snapshot ELSE call_stat_daily.upstream_name_snapshot END"),
+			"api_key_name_snapshot":  gorm.Expr("CASE WHEN EXCLUDED.api_key_name_snapshot <> '' THEN EXCLUDED.api_key_name_snapshot ELSE call_stat_daily.api_key_name_snapshot END"),
+			"exposed_name_snapshot":  gorm.Expr("CASE WHEN EXCLUDED.exposed_name_snapshot <> '' THEN EXCLUDED.exposed_name_snapshot ELSE call_stat_daily.exposed_name_snapshot END"),
+			"total_calls":            gorm.Expr("call_stat_daily.total_calls + EXCLUDED.total_calls"),
+			"success_calls":          gorm.Expr("call_stat_daily.success_calls + EXCLUDED.success_calls"),
+			"failure_calls":          gorm.Expr("call_stat_daily.failure_calls + EXCLUDED.failure_calls"),
+			"upstream_error_calls":   gorm.Expr("call_stat_daily.upstream_error_calls + EXCLUDED.upstream_error_calls"),
+			"failed_calls":           gorm.Expr("call_stat_daily.failed_calls + EXCLUDED.failed_calls"),
+			"latency_sum_ms":         gorm.Expr("call_stat_daily.latency_sum_ms + EXCLUDED.latency_sum_ms"),
+			"latency_max_ms":         gorm.Expr("GREATEST(call_stat_daily.latency_max_ms, EXCLUDED.latency_max_ms)"),
+			"failure_latency_sum_ms": gorm.Expr("call_stat_daily.failure_latency_sum_ms + EXCLUDED.failure_latency_sum_ms"),
+			"latency_lt_50":          gorm.Expr("call_stat_daily.latency_lt_50 + EXCLUDED.latency_lt_50"),
+			"latency_lt_100":         gorm.Expr("call_stat_daily.latency_lt_100 + EXCLUDED.latency_lt_100"),
+			"latency_lt_200":         gorm.Expr("call_stat_daily.latency_lt_200 + EXCLUDED.latency_lt_200"),
+			"latency_lt_500":         gorm.Expr("call_stat_daily.latency_lt_500 + EXCLUDED.latency_lt_500"),
+			"latency_lt_1000":        gorm.Expr("call_stat_daily.latency_lt_1000 + EXCLUDED.latency_lt_1000"),
+			"latency_lt_3000":        gorm.Expr("call_stat_daily.latency_lt_3000 + EXCLUDED.latency_lt_3000"),
+			"latency_gte_3000":       gorm.Expr("call_stat_daily.latency_gte_3000 + EXCLUDED.latency_gte_3000"),
+			"last_called_at":         gorm.Expr("CASE WHEN call_stat_daily.last_called_at IS NULL OR EXCLUDED.last_called_at > call_stat_daily.last_called_at THEN EXCLUDED.last_called_at ELSE call_stat_daily.last_called_at END"),
+			"last_failed_at":         gorm.Expr("CASE WHEN call_stat_daily.last_failed_at IS NULL OR (EXCLUDED.last_failed_at IS NOT NULL AND EXCLUDED.last_failed_at > call_stat_daily.last_failed_at) THEN EXCLUDED.last_failed_at ELSE call_stat_daily.last_failed_at END"),
+			"last_error_message":     gorm.Expr("CASE WHEN EXCLUDED.last_error_message <> '' AND (call_stat_daily.last_failed_at IS NULL OR EXCLUDED.last_failed_at >= call_stat_daily.last_failed_at) THEN EXCLUDED.last_error_message ELSE call_stat_daily.last_error_message END"),
+			"updated_at":             gorm.Expr("now()"),
+		}),
+	}).CreateInBatches(models, 1000).Error
 }
 
-// ListRecords 按调用时间倒序分页返回调用记录。afterAt/afterID 用于前端停留页面时增量追加最新调用。
-func (r *CallStatRepo) ListRecords(ctx context.Context, limit int, afterID int64, afterAt time.Time) ([]CallRecordView, error) {
-	if limit <= 0 {
-		limit = 20
+// EnrichRecords 为调用事件补齐当前上游/API Key 名称快照；查询失败时返回错误，由调用方决定是否降级。
+func (r *CallStatRepo) EnrichRecords(ctx context.Context, records []CallStatRecord) ([]CallStatRecord, error) {
+	if len(records) == 0 {
+		return records, nil
 	}
-	if limit > 100 {
-		limit = 100
-	}
-	const q = `
-		SELECT
-			cs.id,
-			cs.upstream_id,
-			coalesce(up.name, '') AS upstream_name,
-			cs.original_name,
-			coalesce(cs.exposed_name, '') AS exposed_name,
-			cs.api_key_id,
-			coalesce(ak.name, '') AS api_key_name,
-			cs.called_at,
-			cs.latency_ms,
-			cs.success,
-			cs.status,
-			coalesce(cs.request_args, 'null'::jsonb) AS request_args,
-			coalesce(cs.response_result, 'null'::jsonb) AS response_result,
-			coalesce(cs.error_message, '') AS error_message,
-			coalesce(cs.failure_detail, 'null'::jsonb) AS failure_detail,
-			cs.mode,
-			cs.source
-		FROM call_stat cs
-		LEFT JOIN upstream_mcp up ON up.id = cs.upstream_id
-		LEFT JOIN api_key ak ON ak.id = cs.api_key_id
-		WHERE (
-			(?::bigint = 0 AND ?::timestamptz IS NULL)
-			OR cs.id > ?
-			OR (?::timestamptz IS NOT NULL AND (cs.called_at > ? OR (cs.called_at = ? AND cs.id > ?)))
-		)
-		ORDER BY cs.called_at DESC, cs.id DESC
-		LIMIT ?`
-	var afterAtParam any
-	if !afterAt.IsZero() {
-		afterAtParam = afterAt
-	}
-	var rows []callRecordRow
-	err := r.db.WithContext(ctx).Raw(q, afterID, afterAtParam, afterID, afterAtParam, afterAtParam, afterAtParam, afterID, limit).Scan(&rows).Error
+	upstreamIDs := uniqueValidUUIDs(records, func(rec CallStatRecord) (string, bool) {
+		return rec.UpstreamID, rec.UpstreamName == ""
+	})
+	apiKeyIDs := uniqueValidUUIDs(records, func(rec CallStatRecord) (string, bool) {
+		return rec.APIKeyID, rec.APIKeyName == ""
+	})
+	upstreamNames, err := r.lookupNames(ctx, "upstream_mcp", upstreamIDs)
 	if err != nil {
 		return nil, err
 	}
-	return callRecordRowsToViews(rows), nil
+	apiKeyNames, err := r.lookupNames(ctx, "api_key", apiKeyIDs)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]CallStatRecord, len(records))
+	copy(out, records)
+	for i := range out {
+		if out[i].UpstreamName == "" {
+			out[i].UpstreamName = upstreamNames[out[i].UpstreamID]
+		}
+		if out[i].APIKeyName == "" {
+			out[i].APIKeyName = apiKeyNames[out[i].APIKeyID]
+		}
+	}
+	return out, nil
 }
 
-// GetRecord 按 ID 读取单条调用记录详情。
-func (r *CallStatRepo) GetRecord(ctx context.Context, id int64) (CallRecordView, error) {
-	const q = `
-		SELECT
-			cs.id,
-			cs.upstream_id,
-			coalesce(up.name, '') AS upstream_name,
-			cs.original_name,
-			coalesce(cs.exposed_name, '') AS exposed_name,
-			cs.api_key_id,
-			coalesce(ak.name, '') AS api_key_name,
-			cs.called_at,
-			cs.latency_ms,
-			cs.success,
-			cs.status,
-			coalesce(cs.request_args, 'null'::jsonb) AS request_args,
-			coalesce(cs.response_result, 'null'::jsonb) AS response_result,
-			coalesce(cs.error_message, '') AS error_message,
-			coalesce(cs.failure_detail, 'null'::jsonb) AS failure_detail,
-			cs.mode,
-			cs.source
-		FROM call_stat cs
-		LEFT JOIN upstream_mcp up ON up.id = cs.upstream_id
-		LEFT JOIN api_key ak ON ak.id = cs.api_key_id
-		WHERE cs.id = ?
-		ORDER BY cs.called_at DESC
-		LIMIT 1`
-	var rows []callRecordRow
-	if err := r.db.WithContext(ctx).Raw(q, id).Scan(&rows).Error; err != nil {
-		return CallRecordView{}, err
-	}
-	records := callRecordRowsToViews(rows)
-	if len(records) == 0 {
-		return CallRecordView{}, domain.NewError(domain.CodeNotFound, "调用记录不存在")
-	}
-	return records[0], nil
-}
-
-// ClearRecordsBefore removes call records not newer than cutoff.
-func (r *CallStatRepo) ClearRecordsBefore(ctx context.Context, cutoff time.Time) (int64, error) {
-	res := r.db.WithContext(ctx).Where("called_at <= ?", cutoff).Delete(&callStatModel{})
-	if res.Error != nil {
-		return 0, res.Error
-	}
-	return res.RowsAffected, nil
-}
-
-// CountByUpstream 统计 [start, end] 闭区间内各上游 MCP 的调用条数（含成功失败）（Req 16.2、16.5）。
-//
-// 当 upstream_id 为 NULL（未知上游）时，按 source 二次分组，使「小智接入」与真正的未知上游
-// 区分开（小智调用的 upstream_id 通常非空，此处分组主要为对称与健壮性）。
-//   - start 晚于 end 返回 CodeValidation（Req 16.7）。
-//   - 无记录返回空切片而非错误（Req 16.6）。
+// CountByUpstream 统计日期范围内各上游 MCP 的调用条数（含成功失败）。
 func (r *CallStatRepo) CountByUpstream(ctx context.Context, start, end time.Time) ([]DimensionCount, error) {
-	if err := validateRange(start, end); err != nil {
+	startDate, endDate, err := normalizeStatDateRange(start, end)
+	if err != nil {
 		return nil, err
 	}
 	const q = `
-		SELECT upstream_id AS id, count(*) AS count, max(source) AS source
-		FROM call_stat
-		WHERE called_at >= ? AND called_at <= ?
+		SELECT upstream_id AS id,
+		       coalesce(sum(total_calls), 0)::bigint AS count,
+		       CASE WHEN upstream_id = '' THEN max(source) ELSE '' END AS source
+		FROM call_stat_daily
+		WHERE stat_date >= ? AND stat_date <= ?
 		GROUP BY upstream_id
-		ORDER BY count(*) DESC`
-	return r.queryDimensionCounts(ctx, q, start, end)
+		ORDER BY count DESC, id ASC`
+	return r.queryDimensionCounts(ctx, q, startDate, endDate)
 }
 
-// CountByAPIKey 统计 [start, end] 闭区间内各 API Key 的调用条数（含成功失败）（Req 16.4、16.5）。
-//
-// 当 api_key_id 为 NULL 时，按 source 区分：小智接入（source=xiaozhi）单独成组、
-// Source=xiaozhi；其余真正的未知（source=api）保留为未知、Source=api。非 NULL 的 API Key
-// 取其来源（通常为 api），不影响分组粒度。
-//   - start 晚于 end 返回 CodeValidation（Req 16.7）。
-//   - 无记录返回空切片而非错误（Req 16.6）。
+// CountByAPIKey 统计日期范围内各 API Key 的调用条数（含成功失败）。
 func (r *CallStatRepo) CountByAPIKey(ctx context.Context, start, end time.Time) ([]DimensionCount, error) {
-	if err := validateRange(start, end); err != nil {
+	startDate, endDate, err := normalizeStatDateRange(start, end)
+	if err != nil {
 		return nil, err
 	}
 	const q = `
-		SELECT api_key_id AS id, count(*) AS count,
-		       CASE WHEN bool_and(api_key_id IS NULL)
-		            THEN max(source)
-		            ELSE 'api' END AS source
-		FROM call_stat
-		WHERE called_at >= ? AND called_at <= ?
-		GROUP BY api_key_id,
-		         CASE WHEN api_key_id IS NULL THEN source END
-		ORDER BY count(*) DESC`
-	return r.queryDimensionCounts(ctx, q, start, end)
+		SELECT api_key_id AS id,
+		       coalesce(sum(total_calls), 0)::bigint AS count,
+		       CASE WHEN api_key_id = '' THEN source ELSE '' END AS source
+		FROM call_stat_daily
+		WHERE stat_date >= ? AND stat_date <= ?
+		GROUP BY api_key_id, CASE WHEN api_key_id = '' THEN source ELSE '' END
+		ORDER BY count DESC, id ASC`
+	return r.queryDimensionCounts(ctx, q, startDate, endDate)
 }
 
-// TopTools 返回 [start, end] 闭区间内按调用次数降序排列的工具排行（Req 16.3、16.5）。
-//
-// 基于稳定标识 (upstream_id, original_name) 聚合；limit 限制返回条数。
-//   - start 晚于 end 返回 CodeValidation（Req 16.7）。
-//   - limit ≤ 0 时按 1 处理，避免无意义查询。
-//   - 无记录返回空切片而非错误（Req 16.6）。
+// TopTools 返回日期范围内按调用次数降序排列的工具排行。
 func (r *CallStatRepo) TopTools(ctx context.Context, start, end time.Time, limit int) ([]ToolRank, error) {
-	if err := validateRange(start, end); err != nil {
+	startDate, endDate, err := normalizeStatDateRange(start, end)
+	if err != nil {
 		return nil, err
 	}
 	if limit <= 0 {
 		limit = 1
 	}
 	const q = `
-		SELECT upstream_id, original_name, count(*) AS count
-		FROM call_stat
-		WHERE called_at >= ? AND called_at <= ?
+		SELECT upstream_id, original_name, coalesce(sum(total_calls), 0)::bigint AS count
+		FROM call_stat_daily
+		WHERE stat_date >= ? AND stat_date <= ?
 		GROUP BY upstream_id, original_name
 		ORDER BY count DESC, original_name ASC
 		LIMIT ?`
-	type row struct {
-		UpstreamID   *string
-		OriginalName string
-		Count        int64
-	}
-	var rows []row
-	if err := r.db.WithContext(ctx).Raw(q, start, end, limit).Scan(&rows).Error; err != nil {
+	var rows []ToolRank
+	if err := r.db.WithContext(ctx).Raw(q, startDate, endDate, limit).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
-	result := make([]ToolRank, 0, len(rows))
-	for _, row := range rows {
-		result = append(result, ToolRank{UpstreamID: stringValue(row.UpstreamID), OriginalName: row.OriginalName, Count: row.Count})
+	if rows == nil {
+		return []ToolRank{}, nil
 	}
-	return result, nil
+	return rows, nil
 }
 
-// Summary 返回 [start, end] 闭区间内调用概览。
+// Summary 返回日期范围内调用概览。P95LatencyMS 由每日聚合延迟桶估算。
 func (r *CallStatRepo) Summary(ctx context.Context, start, end time.Time) (StatsSummary, error) {
-	if err := validateRange(start, end); err != nil {
+	startDate, endDate, err := normalizeStatDateRange(start, end)
+	if err != nil {
 		return StatsSummary{}, err
 	}
 	const q = `
 		SELECT
-			count(*) AS total_calls,
-			count(*) FILTER (WHERE success) AS success_calls,
-			count(*) FILTER (WHERE NOT success) AS failure_calls,
-			count(DISTINCT upstream_id) FILTER (WHERE upstream_id IS NOT NULL) AS active_upstreams,
-			count(DISTINCT api_key_id) FILTER (WHERE api_key_id IS NOT NULL) AS active_api_keys,
+			coalesce(sum(total_calls), 0)::bigint AS total_calls,
+			coalesce(sum(success_calls), 0)::bigint AS success_calls,
+			coalesce(sum(failure_calls), 0)::bigint AS failure_calls,
+			count(DISTINCT upstream_id) FILTER (WHERE upstream_id <> '') AS active_upstreams,
+			count(DISTINCT api_key_id) FILTER (WHERE api_key_id <> '') AS active_api_keys,
 			count(DISTINCT (upstream_id, original_name)) AS unique_tools,
-			coalesce(avg(latency_ms), 0)::float8 AS avg_latency_ms,
-			coalesce(percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms), 0)::float8 AS p95_latency_ms
-		FROM call_stat
-		WHERE called_at >= ? AND called_at <= ?`
-	var out StatsSummary
-	if err := r.db.WithContext(ctx).Raw(q, start, end).Scan(&out).Error; err != nil {
+			coalesce(sum(latency_sum_ms), 0)::bigint AS latency_sum_ms,
+			coalesce(max(latency_max_ms), 0)::integer AS latency_max_ms,
+			coalesce(sum(latency_lt_50), 0)::bigint AS latency_lt_50,
+			coalesce(sum(latency_lt_100), 0)::bigint AS latency_lt_100,
+			coalesce(sum(latency_lt_200), 0)::bigint AS latency_lt_200,
+			coalesce(sum(latency_lt_500), 0)::bigint AS latency_lt_500,
+			coalesce(sum(latency_lt_1000), 0)::bigint AS latency_lt_1000,
+			coalesce(sum(latency_lt_3000), 0)::bigint AS latency_lt_3000,
+			coalesce(sum(latency_gte_3000), 0)::bigint AS latency_gte_3000
+		FROM call_stat_daily
+		WHERE stat_date >= ? AND stat_date <= ?`
+	var row summaryAggregateRow
+	if err := r.db.WithContext(ctx).Raw(q, startDate, endDate).Scan(&row).Error; err != nil {
 		return StatsSummary{}, err
+	}
+	out := StatsSummary{
+		TotalCalls:      row.TotalCalls,
+		SuccessCalls:    row.SuccessCalls,
+		FailureCalls:    row.FailureCalls,
+		ActiveUpstreams: row.ActiveUpstreams,
+		ActiveAPIKeys:   row.ActiveAPIKeys,
+		UniqueTools:     row.UniqueTools,
+		P95LatencyMS:    estimateP95LatencyMS(row.latencyBuckets(), row.LatencyMaxMS),
+	}
+	if row.TotalCalls > 0 {
+		out.AvgLatencyMS = float64(row.LatencySumMS) / float64(row.TotalCalls)
 	}
 	return out, nil
 }
 
-// Daily 返回 [start, end] 闭区间内按指定时区自然日聚合的调用趋势。
+// Daily 返回日期范围内按 UTC 自然日聚合的调用趋势。
 //
-// tz 为 IANA 时区名（如 "Asia/Shanghai"），决定「一天」的切分边界；空串回退 UTC。
-// 时区名非法时返回字段级 VALIDATION 错误。调用方负责用与 tz 一致的本地日期 key
-// 匹配结果，避免前后端因时区定义不一致导致热力图错位。
+// tz 仅做 IANA 时区名校验以兼容旧 API；日聚合事实表固定使用 UTC 日期，不再按浏览器时区
+// 动态切分自然日。
 func (r *CallStatRepo) Daily(ctx context.Context, start, end time.Time, tz string) ([]DailyCount, error) {
-	if err := validateRange(start, end); err != nil {
+	if _, err := normalizeTimezoneName(tz); err != nil {
 		return nil, err
 	}
-	zoneName, err := normalizeTimezoneName(tz)
+	startDate, endDate, err := normalizeStatDateRange(start, end)
 	if err != nil {
 		return nil, err
 	}
 	const q = `
 		SELECT
-			(date_trunc('day', called_at AT TIME ZONE ?))::date AS day,
-			count(*) AS total_calls,
-			count(*) FILTER (WHERE success) AS success_calls,
-			count(*) FILTER (WHERE NOT success) AS failure_calls,
-			coalesce(avg(latency_ms), 0)::float8 AS avg_latency_ms
-		FROM call_stat
-		WHERE called_at >= ? AND called_at <= ?
-		GROUP BY day
-		ORDER BY day ASC`
+			stat_date::timestamp AT TIME ZONE 'UTC' AS day,
+			coalesce(sum(total_calls), 0)::bigint AS total_calls,
+			coalesce(sum(success_calls), 0)::bigint AS success_calls,
+			coalesce(sum(failure_calls), 0)::bigint AS failure_calls,
+			coalesce(sum(latency_sum_ms)::float8 / nullif(sum(total_calls), 0), 0)::float8 AS avg_latency_ms
+		FROM call_stat_daily
+		WHERE stat_date >= ? AND stat_date <= ?
+		GROUP BY stat_date
+		ORDER BY stat_date ASC`
 	var result []DailyCount
-	if err := r.db.WithContext(ctx).Raw(q, zoneName, start, end).Scan(&result).Error; err != nil {
+	if err := r.db.WithContext(ctx).Raw(q, startDate, endDate).Scan(&result).Error; err != nil {
 		return nil, err
 	}
 	if result == nil {
@@ -418,9 +365,10 @@ func (r *CallStatRepo) Daily(ctx context.Context, start, end time.Time, tz strin
 	return result, nil
 }
 
-// TopToolErrors 返回 [start, end] 闭区间内按失败次数降序排列的工具错误排行。
+// TopToolErrors 返回日期范围内按失败次数降序排列的工具错误排行。
 func (r *CallStatRepo) TopToolErrors(ctx context.Context, start, end time.Time, limit int) ([]ToolErrorRank, error) {
-	if err := validateRange(start, end); err != nil {
+	startDate, endDate, err := normalizeStatDateRange(start, end)
+	if err != nil {
 		return nil, err
 	}
 	if limit <= 0 {
@@ -430,251 +378,277 @@ func (r *CallStatRepo) TopToolErrors(ctx context.Context, start, end time.Time, 
 		SELECT
 			upstream_id,
 			original_name,
-			count(*) AS total_calls,
-			count(*) FILTER (WHERE NOT success) AS failure_calls,
-			max(called_at) FILTER (WHERE NOT success) AS last_failed_at,
-			coalesce(avg(latency_ms) FILTER (WHERE NOT success), 0)::float8 AS avg_latency_ms
-		FROM call_stat
-		WHERE called_at >= ? AND called_at <= ?
+			coalesce(sum(total_calls), 0)::bigint AS total_calls,
+			coalesce(sum(failure_calls), 0)::bigint AS failure_calls,
+			max(last_failed_at) AS last_failed_at,
+			coalesce(sum(failure_latency_sum_ms)::float8 / nullif(sum(failure_calls), 0), 0)::float8 AS avg_latency_ms
+		FROM call_stat_daily
+		WHERE stat_date >= ? AND stat_date <= ?
 		GROUP BY upstream_id, original_name
-		HAVING count(*) FILTER (WHERE NOT success) > 0
+		HAVING coalesce(sum(failure_calls), 0) > 0
 		ORDER BY failure_calls DESC, total_calls DESC, original_name ASC
 		LIMIT ?`
-	type row struct {
-		UpstreamID   *string
-		OriginalName string
-		TotalCalls   int64
-		FailureCalls int64
-		LastFailedAt time.Time
-		AvgLatencyMS float64
-	}
-	var rows []row
-	if err := r.db.WithContext(ctx).Raw(q, start, end, limit).Scan(&rows).Error; err != nil {
+	var rows []ToolErrorRank
+	if err := r.db.WithContext(ctx).Raw(q, startDate, endDate, limit).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
-	result := make([]ToolErrorRank, 0, len(rows))
-	for _, row := range rows {
-		result = append(result, ToolErrorRank{
-			UpstreamID:   stringValue(row.UpstreamID),
-			OriginalName: row.OriginalName,
-			TotalCalls:   row.TotalCalls,
-			FailureCalls: row.FailureCalls,
-			LastFailedAt: row.LastFailedAt,
-			AvgLatencyMS: row.AvgLatencyMS,
-		})
+	if rows == nil {
+		return []ToolErrorRank{}, nil
 	}
-	return result, nil
+	return rows, nil
 }
 
-// EnsurePartitions 为 [now-1月, now+ahead月] 范围内的每个自然月按需创建时间分区（Req 16.10）。
-//
-// 调用统计按 called_at 做声明式月分区：本方法在保留期清理前先确保「当前月及临近若干个
-// 未来月」的分区已存在，使新写入的记录落入具体时间分区而非默认分区——只有落入时间分区的
-// 数据才能在超期后被整分区 DROP 高效清理。已存在的分区因使用 IF NOT EXISTS 而被跳过，
-// 故本方法幂等，可由定时任务安全地反复调用。
-//
-//   - ahead 为预建的未来月数（<0 时按 0 处理），通常取 1，保证跨月时刻仍有分区可落。
-//   - 同时补建上一个月分区，避免边界时刻（如月初）写入落空到默认分区。
-//
-// 分区创建失败立即返回错误；调用方可据此告警，但不应因此阻断主流程的统计写入
-// （写入失败本就静默降级，Req 16.9）。
-func (r *CallStatRepo) EnsurePartitions(ctx context.Context, now time.Time, ahead int) error {
-	if ahead < 0 {
-		ahead = 0
-	}
-	// 从上一个月起，覆盖当前月与未来 ahead 个月，确保边界时刻写入有分区可落。
-	base := monthStart(now.UTC())
-	for offset := -1; offset <= ahead; offset++ {
-		monthBegin := base.AddDate(0, offset, 0)
-		if err := r.createMonthlyPartition(ctx, monthBegin); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// DropPartitionsOlderThan 删除「整段时间范围都早于 cutoff」的月分区，返回被删除的分区数（Req 16.10）。
-//
-// 仅当某分区覆盖区间的上界（次月月初）不晚于 cutoff 时，该分区内全部记录才确定超期，
-// 此时以 DROP TABLE 整分区删除，远比逐行 DELETE 高效。对「跨越 cutoff」的边界分区不做
-// DROP（其中尚有未超期记录），其超期部分由 DeleteOlderThan 兜底逐行清理。
-//
-// 默认分区（call_stat_default）因边界未知不参与 DROP，仅通过 DeleteOlderThan 兜底。
-func (r *CallStatRepo) DropPartitionsOlderThan(ctx context.Context, cutoff time.Time) (int, error) {
-	names, err := r.listTimePartitions(ctx)
-	if err != nil {
-		return 0, err
-	}
-	cutoffUTC := cutoff.UTC()
-	dropped := 0
-	for _, name := range names {
-		monthBegin, ok := parsePartitionMonth(name)
-		if !ok {
-			continue
-		}
-		// 分区覆盖 [monthBegin, 次月月初)；上界不晚于 cutoff 时整分区均已超期，可整体删除。
-		upper := monthBegin.AddDate(0, 1, 0)
-		if !upper.After(cutoffUTC) {
-			// 分区名来自系统目录（catalog）枚举，非外部输入；仍以受控前缀+月份格式构造，避免注入。
-			stmt := fmt.Sprintf(`DROP TABLE IF EXISTS %s`, quoteIdentifier(name))
-			if derr := r.db.WithContext(ctx).Exec(stmt).Error; derr != nil {
-				return dropped, derr
-			}
-			dropped++
-		}
-	}
-	return dropped, nil
-}
-
-// DeleteOlderThan 清理 called_at 早于 cutoff 的调用统计记录，返回删除条数（Req 16.10）。
-//
-// 作为分区 DROP 的兜底：整分区删除只能清掉「整段超期」的月分区，而跨越 cutoff 的边界
-// 分区与默认分区中仍可能残留超期记录，本方法按时间逐行删除以保证清理边界精确。
+// DeleteOlderThan 删除早于 cutoff 所在 UTC 日期的每日聚合统计，返回删除行数。
 func (r *CallStatRepo) DeleteOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {
-	res := r.db.WithContext(ctx).Where("called_at < ?", cutoff).Delete(&callStatModel{})
+	res := r.db.WithContext(ctx).Where("stat_date < ?", utcDayStart(cutoff)).Delete(&callStatDailyModel{})
 	if res.Error != nil {
 		return 0, res.Error
 	}
 	return res.RowsAffected, nil
 }
 
-// createMonthlyPartition 为 monthBegin 所在自然月创建一个范围分区（已存在则跳过）。
-//
-// 分区覆盖 [月初, 次月月初) 的左闭右开区间，与 PostgreSQL RANGE 分区语义一致；表名将
-// 月份编码为 call_stat_p<YYYYMM>，便于清理时仅凭表名推算区间。
-func (r *CallStatRepo) createMonthlyPartition(ctx context.Context, monthBegin time.Time) error {
-	begin := monthStart(monthBegin.UTC())
-	end := begin.AddDate(0, 1, 0)
-	name := partitionName(begin)
-	// 表名与边界字面量均由受控的时间值格式化而来，非外部输入，无注入风险。
-	stmt := fmt.Sprintf(
-		`CREATE TABLE IF NOT EXISTS %s PARTITION OF call_stat FOR VALUES FROM ('%s') TO ('%s')`,
-		quoteIdentifier(name),
-		begin.Format("2006-01-02 15:04:05-07"),
-		end.Format("2006-01-02 15:04:05-07"),
-	)
-	return r.db.WithContext(ctx).Exec(stmt).Error
+func aggregateDailyModels(records []CallStatRecord) []callStatDailyModel {
+	groups := make(map[dailyAggregateKey]*callStatDailyModel, len(records))
+	now := time.Now().UTC()
+	for _, rec := range records {
+		calledAt := rec.CalledAt.UTC()
+		if calledAt.IsZero() {
+			calledAt = now
+		}
+		status := normalizeCallStatus(rec.Status, rec.Success)
+		key := dailyAggregateKey{
+			StatDate:     utcDayStart(calledAt),
+			Source:       normalizeSource(rec.Source),
+			Mode:         normalizeMode(rec.Mode),
+			UpstreamID:   truncateRunes(rec.UpstreamID, 36),
+			APIKeyID:     truncateRunes(rec.APIKeyID, 36),
+			OriginalName: truncateRunes(rec.OriginalName, maxDailySnapshotRunes),
+		}
+		model := groups[key]
+		if model == nil {
+			model = &callStatDailyModel{
+				StatDate:             key.StatDate,
+				Source:               key.Source,
+				Mode:                 key.Mode,
+				UpstreamID:           key.UpstreamID,
+				UpstreamNameSnapshot: truncateRunes(rec.UpstreamName, maxDailySnapshotRunes),
+				APIKeyID:             key.APIKeyID,
+				APIKeyNameSnapshot:   truncateRunes(rec.APIKeyName, maxDailySnapshotRunes),
+				OriginalName:         key.OriginalName,
+				ExposedNameSnapshot:  truncateRunes(rec.ExposedName, maxDailySnapshotRunes),
+				CreatedAt:            now,
+				UpdatedAt:            now,
+			}
+			groups[key] = model
+		} else {
+			if rec.UpstreamName != "" {
+				model.UpstreamNameSnapshot = truncateRunes(rec.UpstreamName, maxDailySnapshotRunes)
+			}
+			if rec.APIKeyName != "" {
+				model.APIKeyNameSnapshot = truncateRunes(rec.APIKeyName, maxDailySnapshotRunes)
+			}
+			if rec.ExposedName != "" {
+				model.ExposedNameSnapshot = truncateRunes(rec.ExposedName, maxDailySnapshotRunes)
+			}
+		}
+		accumulateDailyModel(model, rec, calledAt, status)
+	}
+
+	models := make([]callStatDailyModel, 0, len(groups))
+	for _, model := range groups {
+		models = append(models, *model)
+	}
+	return models
 }
 
-// listTimePartitions 枚举 call_stat 下所有「时间分区」的表名（不含默认分区与父表）。
-//
-// 经 pg_inherits/pg_class 查询父表 call_stat 的直接子分区，并仅保留符合
-// call_stat_p<YYYYMM> 命名约定者，从而排除默认分区 call_stat_default。
-func (r *CallStatRepo) listTimePartitions(ctx context.Context) ([]string, error) {
-	const q = `
-		SELECT c.relname
-		FROM pg_inherits i
-		JOIN pg_class c   ON c.oid = i.inhrelid
-		JOIN pg_class p   ON p.oid = i.inhparent
-		WHERE p.relname = 'call_stat'`
-	type row struct{ Relname string }
-	var rows []row
-	if err := r.db.WithContext(ctx).Raw(q).Scan(&rows).Error; err != nil {
-		return nil, err
+func accumulateDailyModel(model *callStatDailyModel, rec CallStatRecord, calledAt time.Time, status string) {
+	latency := rec.LatencyMS
+	if latency < 0 {
+		latency = 0
 	}
-	names := make([]string, 0, len(rows))
-	for _, row := range rows {
-		if _, ok := parsePartitionMonth(row.Relname); ok {
-			names = append(names, row.Relname)
+	model.TotalCalls++
+	model.LatencySumMS += int64(latency)
+	if latency > model.LatencyMaxMS {
+		model.LatencyMaxMS = latency
+	}
+	addLatencyBucket(model, latency)
+	if model.LastCalledAt == nil || calledAt.After(*model.LastCalledAt) {
+		model.LastCalledAt = timePtr(calledAt)
+	}
+	if status == CallStatusSuccess {
+		model.SuccessCalls++
+		return
+	}
+	model.FailureCalls++
+	model.FailureLatencySumMS += int64(latency)
+	if model.LastFailedAt == nil || calledAt.After(*model.LastFailedAt) {
+		model.LastFailedAt = timePtr(calledAt)
+		model.LastErrorMessage = truncateRunes(rec.ErrorMessage, maxDailyErrorRunes)
+	}
+	if status == CallStatusUpstreamError {
+		model.UpstreamErrorCalls++
+		return
+	}
+	model.FailedCalls++
+}
+
+func addLatencyBucket(model *callStatDailyModel, latency int) {
+	switch {
+	case latency < 50:
+		model.LatencyLT50++
+	case latency < 100:
+		model.LatencyLT100++
+	case latency < 200:
+		model.LatencyLT200++
+	case latency < 500:
+		model.LatencyLT500++
+	case latency < 1000:
+		model.LatencyLT1000++
+	case latency < 3000:
+		model.LatencyLT3000++
+	default:
+		model.LatencyGTE3000++
+	}
+}
+
+type dailyAggregateKey struct {
+	StatDate     time.Time
+	Source       string
+	Mode         string
+	UpstreamID   string
+	APIKeyID     string
+	OriginalName string
+}
+
+type summaryAggregateRow struct {
+	TotalCalls      int64
+	SuccessCalls    int64
+	FailureCalls    int64
+	ActiveUpstreams int64
+	ActiveAPIKeys   int64
+	UniqueTools     int64
+	LatencySumMS    int64
+	LatencyMaxMS    int
+	LatencyLT50     int64
+	LatencyLT100    int64
+	LatencyLT200    int64
+	LatencyLT500    int64
+	LatencyLT1000   int64
+	LatencyLT3000   int64
+	LatencyGTE3000  int64
+}
+
+func (r summaryAggregateRow) latencyBuckets() []latencyBucketCount {
+	return []latencyBucketCount{
+		{UpperBoundMS: 50, Count: r.LatencyLT50},
+		{UpperBoundMS: 100, Count: r.LatencyLT100},
+		{UpperBoundMS: 200, Count: r.LatencyLT200},
+		{UpperBoundMS: 500, Count: r.LatencyLT500},
+		{UpperBoundMS: 1000, Count: r.LatencyLT1000},
+		{UpperBoundMS: 3000, Count: r.LatencyLT3000},
+		{UpperBoundMS: float64(maxInt(r.LatencyMaxMS, 3000)), Count: r.LatencyGTE3000},
+	}
+}
+
+type latencyBucketCount struct {
+	UpperBoundMS float64
+	Count        int64
+}
+
+func estimateP95LatencyMS(buckets []latencyBucketCount, maxLatencyMS int) float64 {
+	total := int64(0)
+	for _, bucket := range buckets {
+		total += bucket.Count
+	}
+	if total == 0 {
+		return 0
+	}
+	target := int64(math.Ceil(float64(total) * 0.95))
+	if target < 1 {
+		target = 1
+	}
+	seen := int64(0)
+	for _, bucket := range buckets {
+		seen += bucket.Count
+		if seen >= target {
+			if bucket.UpperBoundMS <= 0 {
+				return float64(maxLatencyMS)
+			}
+			return bucket.UpperBoundMS
 		}
 	}
-	return names, nil
+	return float64(maxLatencyMS)
 }
 
-// monthStart 返回 t 所在自然月月初（当月 1 日 00:00:00），并归一到 UTC。
-func monthStart(t time.Time) time.Time {
+func normalizeStatDateRange(start, end time.Time) (time.Time, time.Time, error) {
+	if end.IsZero() {
+		end = time.Now().UTC()
+	}
+	if err := validateRange(start, end); err != nil {
+		return time.Time{}, time.Time{}, err
+	}
+	if start.IsZero() {
+		start = time.Date(1, 1, 1, 0, 0, 0, 0, time.UTC)
+	}
+	return utcDayStart(start), utcDayStart(end), nil
+}
+
+func utcDayStart(t time.Time) time.Time {
 	t = t.UTC()
-	return time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, time.UTC)
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
 }
 
-// partitionName 依据月初时间生成分区表名 call_stat_p<YYYYMM>。
-func partitionName(monthBegin time.Time) string {
-	return fmt.Sprintf("%s%04d%02d", partitionPrefix, monthBegin.Year(), int(monthBegin.Month()))
+func uniqueValidUUIDs(records []CallStatRecord, pick func(CallStatRecord) (string, bool)) []string {
+	seen := make(map[string]struct{})
+	ids := make([]string, 0)
+	for _, rec := range records {
+		id, shouldLookup := pick(rec)
+		if !shouldLookup || !isUUID(id) {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	return ids
 }
 
-// parsePartitionMonth 从分区表名解析其覆盖月份的月初时间（UTC）。
-//
-// 仅接受 call_stat_p<YYYYMM> 形态：前缀匹配且尾部为 6 位、月份在 1..12 内方为有效，
-// 借此排除默认分区与任何不符合命名约定的子表。
-func parsePartitionMonth(name string) (time.Time, bool) {
-	suffix, ok := strings.CutPrefix(name, partitionPrefix)
-	if !ok || len(suffix) != 6 {
-		return time.Time{}, false
+func (r *CallStatRepo) lookupNames(ctx context.Context, table string, ids []string) (map[string]string, error) {
+	out := make(map[string]string, len(ids))
+	if len(ids) == 0 {
+		return out, nil
 	}
-	year, err := strconv.Atoi(suffix[:4])
-	if err != nil {
-		return time.Time{}, false
+	switch table {
+	case "upstream_mcp", "api_key":
+	default:
+		return out, nil
 	}
-	month, err := strconv.Atoi(suffix[4:])
-	if err != nil || month < 1 || month > 12 {
-		return time.Time{}, false
+	type row struct {
+		ID   string
+		Name string
 	}
-	return time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.UTC), true
+	var rows []row
+	if err := r.db.WithContext(ctx).Raw("SELECT id::text AS id, name FROM "+table+" WHERE id IN ?", ids).Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		out[row.ID] = row.Name
+	}
+	return out, nil
 }
 
 // queryDimensionCounts 执行按单一维度分组计数的查询并扫描结果。
 func (r *CallStatRepo) queryDimensionCounts(ctx context.Context, q string, start, end time.Time) ([]DimensionCount, error) {
-	type row struct {
-		ID     *string
-		Count  int64
-		Source string
-	}
-	var rows []row
+	var rows []DimensionCount
 	if err := r.db.WithContext(ctx).Raw(q, start, end).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
-	result := make([]DimensionCount, 0, len(rows))
-	for _, row := range rows {
-		result = append(result, DimensionCount{ID: stringValue(row.ID), Count: row.Count, Source: row.Source})
+	if rows == nil {
+		return []DimensionCount{}, nil
 	}
-	return result, nil
-}
-
-type callRecordRow struct {
-	ID             int64
-	UpstreamID     *string
-	UpstreamName   string
-	OriginalName   string
-	ExposedName    string
-	APIKeyID       *string
-	APIKeyName     string
-	CalledAt       time.Time
-	LatencyMS      int
-	Success        bool
-	Status         string
-	RequestArgs    JSONB
-	ResponseResult JSONB
-	ErrorMessage   string
-	FailureDetail  JSONB
-	Mode           string
-	Source         string
-}
-
-func callRecordRowsToViews(rows []callRecordRow) []CallRecordView {
-	result := make([]CallRecordView, 0, len(rows))
-	for _, row := range rows {
-		item := CallRecordView{
-			ID:             row.ID,
-			UpstreamID:     stringValue(row.UpstreamID),
-			UpstreamName:   row.UpstreamName,
-			OriginalName:   row.OriginalName,
-			ExposedName:    row.ExposedName,
-			APIKeyID:       stringValue(row.APIKeyID),
-			APIKeyName:     row.APIKeyName,
-			CalledAt:       row.CalledAt,
-			LatencyMS:      row.LatencyMS,
-			Success:        row.Success,
-			Status:         normalizeCallStatus(row.Status, row.Success),
-			RequestArgs:    json.RawMessage(row.RequestArgs),
-			ResponseResult: json.RawMessage(row.ResponseResult),
-			ErrorMessage:   row.ErrorMessage,
-			FailureDetail:  json.RawMessage(row.FailureDetail),
-			Mode:           row.Mode,
-			Source:         row.Source,
-		}
-		result = append(result, item)
-	}
-	return result
+	return rows, nil
 }
 
 func normalizeCallStatus(status string, success bool) string {
@@ -715,8 +689,7 @@ func validateRange(start, end time.Time) error {
 
 // normalizeTimezoneName 校验并归一化时区名，空串回退 UTC。
 //
-// 仅信任 Go 的 time.LoadLocation 校验结果，避免拼接任意字符串进 SQL。返回的
-// 名称可直接作为 AT TIME ZONE 参数传入 PostgreSQL（PG 与 Go 共用 IANA 命名）。
+// 日聚合事实表固定使用 UTC 日期；保留本校验函数用于兼容旧 API 参数与错误语义。
 func normalizeTimezoneName(tz string) (string, error) {
 	if tz == "" {
 		return "UTC", nil
@@ -729,6 +702,25 @@ func normalizeTimezoneName(tz string) (string, error) {
 	})
 }
 
-func quoteIdentifier(name string) string {
-	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
+func timePtr(t time.Time) *time.Time {
+	v := t.UTC()
+	return &v
+}
+
+func truncateRunes(s string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	runes := []rune(s)
+	if len(runes) <= limit {
+		return s
+	}
+	return string(runes[:limit])
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }

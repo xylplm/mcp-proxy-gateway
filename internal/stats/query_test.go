@@ -341,7 +341,10 @@ func TestClearRecordsDropsPendingBeforeDeleting(t *testing.T) {
 	if deleted != 8 {
 		t.Fatalf("删除条数未透传：%d", deleted)
 	}
-	if dropper.cutoff.IsZero() || repo.clearCutoff.IsZero() || !dropper.cutoff.Equal(repo.clearCutoff) {
-		t.Fatalf("清空截止时间未同时传给缓冲和仓储：drop=%v repo=%v", dropper.cutoff, repo.clearCutoff)
+	if dropper.cutoff.IsZero() {
+		t.Fatalf("清空调用记录应丢弃异步缓冲中的旧记录")
+	}
+	if !repo.clearCutoff.IsZero() {
+		t.Fatalf("清空 Redis 最近记录应使用零值 cutoff 表示全量清空，实际 %v", repo.clearCutoff)
 	}
 }

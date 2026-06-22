@@ -94,9 +94,8 @@ function toRFC3339(local: string): string | undefined {
   return d.toISOString()
 }
 
-// 浏览器所在 IANA 时区名；同步传给后端按此时区划分自然日，热力图网格也按此时区
-// 对齐日期 key，避免本地「今天」与后端 UTC 分组错位导致显示 0。
-const browserTZ = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+// 统计后端按 UTC 日聚合；热力图网格也用 UTC 日期 key，避免浏览器时区造成日期错位。
+const statsTZ = 'UTC'
 
 // 按 tz 时区把任意 Date 格式化为 YYYY-MM-DD（en-CA locale 默认输出 ISO 日期）。
 // 网格日期与后端 Day 都经此函数生成 key，保证两端「一天」的边界完全一致。
@@ -110,7 +109,7 @@ function localDayKey(date: Date, tz: string): string {
 }
 
 function range(): TimeRangeQuery {
-  return { start: toRFC3339(startLocal.value), end: toRFC3339(endLocal.value), tz: browserTZ }
+  return { start: toRFC3339(startLocal.value), end: toRFC3339(endLocal.value), tz: statsTZ }
 }
 
 function formatInt(value: number): string {
@@ -129,13 +128,13 @@ function formatPercent(value: number): string {
 function formatDate(value: string | Date): string {
   const d = typeof value === 'string' ? new Date(value) : value
   if (Number.isNaN(d.getTime())) return '-'
-  return d.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })
+  return d.toLocaleDateString('zh-CN', { timeZone: statsTZ, month: '2-digit', day: '2-digit' })
 }
 
 function formatFullDate(value: string | Date): string {
   const d = typeof value === 'string' ? new Date(value) : value
   if (Number.isNaN(d.getTime())) return '-'
-  return d.toLocaleDateString('zh-CN')
+  return d.toLocaleDateString('zh-CN', { timeZone: statsTZ })
 }
 
 function upstreamLabel(id: string): string {
@@ -205,20 +204,20 @@ const topErrorTool = computed(() => toolErrors.value[0] ?? null)
 const heatmapDays = computed(() => {
   const byDay = new Map<string, DailyCount>()
   for (const item of daily.value) {
-    byDay.set(localDayKey(new Date(item.Day), browserTZ), item)
+    byDay.set(localDayKey(new Date(item.Day), statsTZ), item)
   }
   const end = endLocal.value === '' ? new Date() : new Date(endLocal.value)
   if (Number.isNaN(end.getTime())) end.setTime(Date.now())
-  end.setHours(0, 0, 0, 0)
+  end.setUTCHours(0, 0, 0, 0)
   const start = new Date(end)
   const dayCount = heatmapDayCount.value
-  start.setDate(start.getDate() - (dayCount - 1))
+  start.setUTCDate(start.getUTCDate() - (dayCount - 1))
   const days: Array<{ key: string; date: Date; item: DailyCount | null; level: number }> = []
   const max = Math.max(1, ...daily.value.map((item) => item.TotalCalls))
   for (let i = 0; i < dayCount; i += 1) {
     const date = new Date(start)
-    date.setDate(start.getDate() + i)
-    const key = localDayKey(date, browserTZ)
+    date.setUTCDate(start.getUTCDate() + i)
+    const key = localDayKey(date, statsTZ)
     const item = byDay.get(key) ?? null
     const count = item?.TotalCalls ?? 0
     const level = count === 0 ? 0 : Math.min(4, Math.ceil((count / max) * 4))
@@ -260,6 +259,7 @@ const apiKeyDistribution = computed(() => topDimensionItems(apiKeyCounts.value, 
 function topDimensionItems(items: DimensionCount[], labeler: (item: DimensionCount) => string) {
   const total = items.reduce((sum, item) => sum + item.Count, 0)
   return items.slice(0, 6).map((item) => ({
+    key: `${item.ID}:${item.Source ?? ''}`,
     id: item.ID,
     label: labeler(item),
     count: item.Count,
@@ -349,7 +349,7 @@ onMounted(async () => {
       <div>
         <h2 class="text-lg font-semibold text-gray-800 dark:text-white/90">调用概览</h2>
         <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-          调整时间后自动刷新；时间为空时统计全部记录。
+          调整时间后自动刷新；统计按 UTC 日期聚合。
         </p>
       </div>
       <div class="flex flex-wrap items-end gap-3">
@@ -415,7 +415,7 @@ onMounted(async () => {
         <div class="mb-4 flex items-center justify-between gap-3">
           <div>
             <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">调用趋势</h3>
-            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">按天查看成功与失败调用。</p>
+            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">按 UTC 日查看成功与失败调用。</p>
           </div>
           <span
             v-if="busiestDay"
@@ -474,8 +474,8 @@ onMounted(async () => {
       <div class="mb-4 flex flex-wrap items-end justify-between gap-3">
         <div>
           <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">调用热力图</h3>
-          <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">按天查看最近 52 周调用密度。</p>
-          <p class="mt-0.5 text-xs text-gray-400 dark:text-gray-500">自动适配屏幕宽度，方块数量随窗口变化。</p>
+          <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">按 UTC 日查看最近调用密度。</p>
+          <p class="mt-0.5 text-xs text-gray-400 dark:text-gray-500">围绕当前结束日期展示每日调用密度。</p>
         </div>
         <div class="flex flex-wrap items-center gap-4 text-xs text-gray-500 dark:text-gray-400">
           <span>合计 {{ formatInt(heatmapTotal) }} 次</span>
@@ -517,7 +517,7 @@ onMounted(async () => {
       <section :class="cardClass">
         <h3 class="mb-4 text-base font-semibold text-gray-800 dark:text-white/90">上游调用分布</h3>
         <div class="space-y-3">
-          <div v-for="item in upstreamDistribution" :key="item.id">
+          <div v-for="item in upstreamDistribution" :key="item.key">
             <div class="mb-1 flex justify-between gap-3 text-sm">
               <span class="truncate text-gray-700 dark:text-gray-300">{{ item.label }}</span>
               <span class="shrink-0 text-gray-500 tabular-nums">{{ formatInt(item.count) }}</span>
@@ -543,7 +543,7 @@ onMounted(async () => {
           API Key 调用分布
         </h3>
         <div class="space-y-3">
-          <div v-for="item in apiKeyDistribution" :key="item.id">
+          <div v-for="item in apiKeyDistribution" :key="item.key">
             <div class="mb-1 flex justify-between gap-3 text-sm">
               <span class="truncate text-gray-700 dark:text-gray-300">{{ item.label }}</span>
               <span class="shrink-0 text-gray-500 tabular-nums">{{ formatInt(item.count) }}</span>

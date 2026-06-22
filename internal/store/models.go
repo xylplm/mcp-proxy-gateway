@@ -142,25 +142,39 @@ type toolCacheModel struct {
 
 func (toolCacheModel) TableName() string { return "tool_cache" }
 
-type callStatModel struct {
-	ID             int64     `gorm:"column:id;type:bigserial;primaryKey;autoIncrement"`
-	UpstreamID     *string   `gorm:"column:upstream_id;type:uuid"`
-	OriginalName   string    `gorm:"column:original_name;type:varchar(100);not null"`
-	ExposedName    *string   `gorm:"column:exposed_name;type:varchar(100)"`
-	APIKeyID       *string   `gorm:"column:api_key_id;type:uuid"`
-	CalledAt       time.Time `gorm:"column:called_at;type:timestamptz;primaryKey;not null"`
-	LatencyMS      int       `gorm:"column:latency_ms;type:integer;not null"`
-	Success        bool      `gorm:"column:success;type:boolean;not null"`
-	Status         string    `gorm:"column:status;type:varchar(32);not null;default:'success'"`
-	RequestArgs    JSONB     `gorm:"column:request_args;type:jsonb"`
-	ResponseResult JSONB     `gorm:"column:response_result;type:jsonb"`
-	ErrorMessage   *string   `gorm:"column:error_message;type:text"`
-	FailureDetail  JSONB     `gorm:"column:failure_detail;type:jsonb"`
-	Mode           string    `gorm:"column:mode;type:varchar(16);not null;default:'full'"`
-	Source         string    `gorm:"column:source;type:varchar(16);not null;default:'api'"`
+type callStatDailyModel struct {
+	StatDate             time.Time  `gorm:"column:stat_date;type:date;primaryKey"`
+	Source               string     `gorm:"column:source;type:varchar(16);primaryKey;not null;default:'api'"`
+	Mode                 string     `gorm:"column:mode;type:varchar(16);primaryKey;not null;default:'full'"`
+	UpstreamID           string     `gorm:"column:upstream_id;type:varchar(36);primaryKey;not null;default:''"`
+	UpstreamNameSnapshot string     `gorm:"column:upstream_name_snapshot;type:varchar(100);not null;default:''"`
+	APIKeyID             string     `gorm:"column:api_key_id;type:varchar(36);primaryKey;not null;default:''"`
+	APIKeyNameSnapshot   string     `gorm:"column:api_key_name_snapshot;type:varchar(100);not null;default:''"`
+	OriginalName         string     `gorm:"column:original_name;type:varchar(100);primaryKey;not null;default:''"`
+	ExposedNameSnapshot  string     `gorm:"column:exposed_name_snapshot;type:varchar(100);not null;default:''"`
+	TotalCalls           int64      `gorm:"column:total_calls;type:bigint;not null;default:0"`
+	SuccessCalls         int64      `gorm:"column:success_calls;type:bigint;not null;default:0"`
+	FailureCalls         int64      `gorm:"column:failure_calls;type:bigint;not null;default:0"`
+	UpstreamErrorCalls   int64      `gorm:"column:upstream_error_calls;type:bigint;not null;default:0"`
+	FailedCalls          int64      `gorm:"column:failed_calls;type:bigint;not null;default:0"`
+	LatencySumMS         int64      `gorm:"column:latency_sum_ms;type:bigint;not null;default:0"`
+	LatencyMaxMS         int        `gorm:"column:latency_max_ms;type:integer;not null;default:0"`
+	FailureLatencySumMS  int64      `gorm:"column:failure_latency_sum_ms;type:bigint;not null;default:0"`
+	LatencyLT50          int64      `gorm:"column:latency_lt_50;type:bigint;not null;default:0"`
+	LatencyLT100         int64      `gorm:"column:latency_lt_100;type:bigint;not null;default:0"`
+	LatencyLT200         int64      `gorm:"column:latency_lt_200;type:bigint;not null;default:0"`
+	LatencyLT500         int64      `gorm:"column:latency_lt_500;type:bigint;not null;default:0"`
+	LatencyLT1000        int64      `gorm:"column:latency_lt_1000;type:bigint;not null;default:0"`
+	LatencyLT3000        int64      `gorm:"column:latency_lt_3000;type:bigint;not null;default:0"`
+	LatencyGTE3000       int64      `gorm:"column:latency_gte_3000;type:bigint;not null;default:0"`
+	LastCalledAt         *time.Time `gorm:"column:last_called_at;type:timestamptz"`
+	LastFailedAt         *time.Time `gorm:"column:last_failed_at;type:timestamptz"`
+	LastErrorMessage     string     `gorm:"column:last_error_message;type:text;not null;default:''"`
+	CreatedAt            time.Time  `gorm:"column:created_at;type:timestamptz;not null;default:now();autoCreateTime:false"`
+	UpdatedAt            time.Time  `gorm:"column:updated_at;type:timestamptz;not null;default:now();autoUpdateTime:false"`
 }
 
-func (callStatModel) TableName() string { return "call_stat" }
+func (callStatDailyModel) TableName() string { return "call_stat_daily" }
 
 type auditLogModel struct {
 	ID         int64     `gorm:"column:id;type:bigserial;primaryKey;autoIncrement"`

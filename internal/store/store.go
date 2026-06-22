@@ -102,8 +102,8 @@ func PingRedis(ctx context.Context, client *redis.Client) error {
 
 // AutoMigrate 在连接 PostgreSQL 成功后、对外服务前初始化当前开发期 schema。
 //
-// 普通业务表使用 GORM AutoMigrate 维护；call_stat 是 PostgreSQL RANGE 分区表，
-// 需通过 GORM Exec 执行幂等 Raw DDL，避免被 AutoMigrate 创建成普通表。
+// 普通业务表使用 GORM AutoMigrate 维护；调用统计按每日多维聚合事实表保存，
+// 由额外幂等 DDL 维护主键与查询索引。
 func AutoMigrate(ctx context.Context, db *gorm.DB, logger *slog.Logger) error {
 	if logger == nil {
 		logger = slog.Default()
@@ -142,16 +142,11 @@ func AutoMigrate(ctx context.Context, db *gorm.DB, logger *slog.Logger) error {
 
 func ensureSchemaExtras(ctx context.Context, db *gorm.DB) error {
 	steps := []string{
-		createCallStatTableSQL,
-		`CREATE TABLE IF NOT EXISTS call_stat_default PARTITION OF call_stat DEFAULT`,
-		`CREATE INDEX IF NOT EXISTS idx_call_stat_called_at ON call_stat (called_at)`,
-		`CREATE INDEX IF NOT EXISTS idx_call_stat_upstream_called_at ON call_stat (upstream_id, called_at)`,
-		`CREATE INDEX IF NOT EXISTS idx_call_stat_apikey_called_at ON call_stat (api_key_id, called_at)`,
-		`CREATE INDEX IF NOT EXISTS idx_call_stat_upstream_orig_name ON call_stat (upstream_id, original_name)`,
-		`CREATE INDEX IF NOT EXISTS idx_call_stat_called_at_id_desc ON call_stat (called_at DESC, id DESC)`,
-		`CREATE INDEX IF NOT EXISTS idx_call_stat_status_called_at ON call_stat (status, called_at DESC)`,
-		`CREATE INDEX IF NOT EXISTS idx_call_stat_mode ON call_stat (mode)`,
-		`CREATE INDEX IF NOT EXISTS idx_call_stat_source ON call_stat (source)`,
+		createCallStatDailyTableSQL,
+		`CREATE INDEX IF NOT EXISTS idx_call_stat_daily_date ON call_stat_daily (stat_date)`,
+		`CREATE INDEX IF NOT EXISTS idx_call_stat_daily_upstream_date ON call_stat_daily (upstream_id, stat_date)`,
+		`CREATE INDEX IF NOT EXISTS idx_call_stat_daily_apikey_date ON call_stat_daily (api_key_id, stat_date)`,
+		`CREATE INDEX IF NOT EXISTS idx_call_stat_daily_tool_date ON call_stat_daily (upstream_id, original_name, stat_date)`,
 		`CREATE INDEX IF NOT EXISTS idx_alias_rule_scope ON alias_rule (scope_type, sort_order)`,
 		`CREATE INDEX IF NOT EXISTS idx_alias_rule_upstream ON alias_rule_upstream (upstream_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_filter_rule_mcp_scope ON filter_rule_mcp (scope_type, sort_order)`,
@@ -168,25 +163,39 @@ func ensureSchemaExtras(ctx context.Context, db *gorm.DB) error {
 	return ensureCascadeConstraints(ctx, db)
 }
 
-const createCallStatTableSQL = `
-CREATE TABLE IF NOT EXISTS call_stat (
-	id              BIGSERIAL,
-	upstream_id     UUID,
-	original_name   VARCHAR(100) NOT NULL,
-	exposed_name    VARCHAR(100),
-	api_key_id      UUID,
-	called_at       TIMESTAMPTZ NOT NULL,
-	latency_ms      INTEGER NOT NULL,
-	success         BOOLEAN NOT NULL,
-	status          VARCHAR(32) NOT NULL DEFAULT 'success',
-	request_args    JSONB,
-	response_result JSONB,
-	error_message   TEXT,
-	failure_detail  JSONB,
-	mode            VARCHAR(16) NOT NULL DEFAULT 'full',
-	source          VARCHAR(16) NOT NULL DEFAULT 'api',
-	PRIMARY KEY (id, called_at)
-) PARTITION BY RANGE (called_at)`
+const createCallStatDailyTableSQL = `
+	CREATE TABLE IF NOT EXISTS call_stat_daily (
+		stat_date                  DATE NOT NULL,
+		source                     VARCHAR(16) NOT NULL DEFAULT 'api',
+		mode                       VARCHAR(16) NOT NULL DEFAULT 'full',
+		upstream_id                VARCHAR(36) NOT NULL DEFAULT '',
+		upstream_name_snapshot     VARCHAR(100) NOT NULL DEFAULT '',
+		api_key_id                 VARCHAR(36) NOT NULL DEFAULT '',
+		api_key_name_snapshot      VARCHAR(100) NOT NULL DEFAULT '',
+		original_name              VARCHAR(100) NOT NULL DEFAULT '',
+		exposed_name_snapshot      VARCHAR(100) NOT NULL DEFAULT '',
+		total_calls                BIGINT NOT NULL DEFAULT 0,
+		success_calls              BIGINT NOT NULL DEFAULT 0,
+		failure_calls              BIGINT NOT NULL DEFAULT 0,
+		upstream_error_calls       BIGINT NOT NULL DEFAULT 0,
+		failed_calls               BIGINT NOT NULL DEFAULT 0,
+		latency_sum_ms             BIGINT NOT NULL DEFAULT 0,
+		latency_max_ms             INTEGER NOT NULL DEFAULT 0,
+		failure_latency_sum_ms     BIGINT NOT NULL DEFAULT 0,
+		latency_lt_50              BIGINT NOT NULL DEFAULT 0,
+		latency_lt_100             BIGINT NOT NULL DEFAULT 0,
+		latency_lt_200             BIGINT NOT NULL DEFAULT 0,
+		latency_lt_500             BIGINT NOT NULL DEFAULT 0,
+		latency_lt_1000            BIGINT NOT NULL DEFAULT 0,
+		latency_lt_3000            BIGINT NOT NULL DEFAULT 0,
+		latency_gte_3000           BIGINT NOT NULL DEFAULT 0,
+		last_called_at             TIMESTAMPTZ,
+		last_failed_at             TIMESTAMPTZ,
+		last_error_message         TEXT NOT NULL DEFAULT '',
+		created_at                 TIMESTAMPTZ NOT NULL DEFAULT now(),
+		updated_at                 TIMESTAMPTZ NOT NULL DEFAULT now(),
+		PRIMARY KEY (stat_date, source, mode, upstream_id, api_key_id, original_name)
+	)`
 
 type cascadeConstraint struct {
 	Table string

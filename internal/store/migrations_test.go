@@ -17,7 +17,7 @@ func TestGormModelsKeepCoreTableNames(t *testing.T) {
 		"api key filter":              filterRuleAPIKeyModel{}.TableName(),
 		"api key acl":                 apiKeyACLModel{}.TableName(),
 		"tool cache":                  toolCacheModel{}.TableName(),
-		"call stat":                   callStatModel{}.TableName(),
+		"call stat daily":             callStatDailyModel{}.TableName(),
 		"audit log":                   auditLogModel{}.TableName(),
 	}
 	want := map[string]string{
@@ -30,7 +30,7 @@ func TestGormModelsKeepCoreTableNames(t *testing.T) {
 		"api key filter":              "filter_rule_apikey",
 		"api key acl":                 "api_key_acl",
 		"tool cache":                  "tool_cache",
-		"call stat":                   "call_stat",
+		"call stat daily":             "call_stat_daily",
 		"audit log":                   "audit_log",
 	}
 	for name, got := range tables {
@@ -40,23 +40,22 @@ func TestGormModelsKeepCoreTableNames(t *testing.T) {
 	}
 }
 
-// TestCallStatSchemaDDLKeepsPartitioning 验证 Go 代码内维护的 call_stat DDL 保留时间分区和关键字段。
-func TestCallStatSchemaDDLKeepsPartitioning(t *testing.T) {
+// TestCallStatDailySchemaDDL 验证 Go 代码内维护的 call_stat_daily DDL 保留日聚合关键字段。
+func TestCallStatDailySchemaDDL(t *testing.T) {
 	checks := []string{
-		"CREATE TABLE IF NOT EXISTS call_stat",
-		"PARTITION BY RANGE (called_at)",
-		"id              BIGSERIAL",
-		"upstream_id     UUID",
-		"request_args    JSONB",
-		"response_result JSONB",
-		"failure_detail  JSONB",
-		"mode            VARCHAR(16) NOT NULL DEFAULT 'full'",
-		"source          VARCHAR(16) NOT NULL DEFAULT 'api'",
-		"PRIMARY KEY (id, called_at)",
+		"CREATE TABLE IF NOT EXISTS call_stat_daily",
+		"stat_date                  DATE NOT NULL",
+		"upstream_id                VARCHAR(36) NOT NULL DEFAULT ''",
+		"api_key_id                 VARCHAR(36) NOT NULL DEFAULT ''",
+		"total_calls                BIGINT NOT NULL DEFAULT 0",
+		"latency_lt_50              BIGINT NOT NULL DEFAULT 0",
+		"latency_gte_3000           BIGINT NOT NULL DEFAULT 0",
+		"last_error_message         TEXT NOT NULL DEFAULT ''",
+		"PRIMARY KEY (stat_date, source, mode, upstream_id, api_key_id, original_name)",
 	}
 	for _, check := range checks {
-		if !strings.Contains(createCallStatTableSQL, check) {
-			t.Errorf("call_stat DDL 缺少关键片段: %s", check)
+		if !strings.Contains(createCallStatDailyTableSQL, check) {
+			t.Errorf("call_stat_daily DDL 缺少关键片段: %s", check)
 		}
 	}
 }

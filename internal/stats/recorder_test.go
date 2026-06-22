@@ -14,7 +14,7 @@ import (
 // 本文件为任务 17.1「实现异步统计写入与降级」的单元测试，覆盖以下核心行为
 // （Req 16.1、16.8、16.9）：
 //   - RecordAsync 非阻塞提交：即便落库侧阻塞，主流程提交也不被阻塞，队列满静默丢弃；
-//   - 后台 worker 经 Redis 缓冲（LPUSH→RPOP）批量落库 call_stat；
+//   - 后台 worker 经 Redis 缓冲（LPUSH→RPOP）批量写入统计事件；
 //   - 未注入 Redis 缓冲时降级为本地队列直接批量落库；
 //   - 写入失败（Push/Pop/Insert 任一环节）静默丢弃，不 panic、不影响主流程。
 //
@@ -185,7 +185,7 @@ func TestRecordAsyncDropsWhenQueueFull(t *testing.T) {
 }
 
 // TestWorkerFlushesThroughBufferToDB 验证：注入 Redis 缓冲时，worker 经 LPUSH→RPOP
-// 将记录批量落库到 call_stat（Req 16.8）。
+// 将记录批量写入统计存储（Req 16.8）。
 func TestWorkerFlushesThroughBufferToDB(t *testing.T) {
 	buffer := &fakeBuffer{}
 	writer := &fakeWriter{}

@@ -193,7 +193,7 @@ async function clearRecords(): Promise<void> {
   if (clearing.value) return
   const ok = await confirm({
     title: '清空调用记录',
-    message: '确定清空全部调用记录？此操作不可恢复。',
+    message: '确定清空最近调用记录？此操作不会清空历史统计。',
     confirmText: '清空',
     tone: 'danger',
   })
@@ -259,7 +259,7 @@ const cardClass =
       <div>
         <h2 class="text-lg font-semibold text-gray-800 dark:text-white/90">调用记录</h2>
         <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-          最新调用排在最上方，停留在本页时会自动追加新记录。
+          最新调用排在最上方，仅保留最近 24 小时记录。
         </p>
       </div>
       <div class="flex items-center gap-2">

@@ -16,6 +16,8 @@ import (
 type ReverseEntry struct {
 	// UpstreamID 为该工具所属上游 MCP 的标识。
 	UpstreamID string
+	// UpstreamName 为调用时的上游名称快照，仅用于统计展示。
+	UpstreamName string
 	// OriginalName 为该工具在上游 MCP 中的原始名称（调用转发依据）。
 	OriginalName string
 }
@@ -28,6 +30,8 @@ type ReverseEntry struct {
 type upstreamBundle struct {
 	// upstreamID 为该上游的标识。
 	upstreamID string
+	// upstreamName 为该上游的名称快照，仅用于统计展示。
+	upstreamName string
 	// sortOrder 为该上游的排序顺序，决定其工具在聚合结果中的相对位置（Req 3.4、10.1）。
 	sortOrder int
 	// tools 为从工具缓存读取的该上游工具列表（仅启用上游，Req 6.2、10.1）。
@@ -98,8 +102,12 @@ func runPipeline(engine domain.Rule_Engine, bundles []upstreamBundle, apiKeyFilt
 
 	// 构建「对外名称 → (上游标识, 原始名)」反向映射，供调用路由复用（Req 10.6）。
 	reverse := make(map[string]ReverseEntry, len(merged))
+	upstreamNames := make(map[string]string, len(sorted))
+	for _, b := range sorted {
+		upstreamNames[b.upstreamID] = b.upstreamName
+	}
 	for _, t := range merged {
-		reverse[t.Name] = ReverseEntry{UpstreamID: t.UpstreamID, OriginalName: t.OriginalName}
+		reverse[t.Name] = ReverseEntry{UpstreamID: t.UpstreamID, UpstreamName: upstreamNames[t.UpstreamID], OriginalName: t.OriginalName}
 	}
 
 	return merged, reverse

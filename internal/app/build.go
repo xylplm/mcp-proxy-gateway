@@ -75,10 +75,12 @@ func (a *App) build(envCfg config.EnvConfig) error {
 	agg.SetInvoker(invoker)
 
 	// --- 统计服务：异步写入 worker（Redis 缓冲）+ 多维查询 + 保留期清理 ---
-	statRecorder := stats.New(stats.NewRedisStatBuffer(a.rdb), repos.CallStat, stats.WithLogger(a.logger))
+	statRecent := stats.NewRedisRecentRecordStore(a.rdb)
+	statWriter := stats.NewCompositeWriter(repos.CallStat, statRecent)
+	statRecorder := stats.New(stats.NewRedisStatBuffer(a.rdb), statWriter, stats.WithLogger(a.logger))
 	agg.SetRecorder(statRecorder)
 	a.statRecorder = statRecorder
-	statQuery, err := stats.NewQueryService(repos.CallStat, a.cfg, stats.WithPendingDropper(statRecorder))
+	statQuery, err := stats.NewQueryService(stats.NewCombinedQuerier(repos.CallStat, statRecent), a.cfg, stats.WithPendingDropper(statRecorder))
 	if err != nil {
 		return err
 	}

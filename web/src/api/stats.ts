@@ -115,7 +115,7 @@ export interface TimeRangeQuery {
   start?: string
   /** 区间终点（RFC3339）；缺省取当前时刻。 */
   end?: string
-  /** 分组所用 IANA 时区名（如 Asia/Shanghai）；仅 daily 端点使用，缺省回退 UTC。 */
+  /** 兼容后端 daily 端点的 IANA 时区参数；统计数据固定按 UTC 日聚合。 */
   tz?: string
 }
 

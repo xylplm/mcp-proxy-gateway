@@ -42,7 +42,7 @@ type StatQuerier interface {
 	ListRecords(ctx context.Context, limit int, afterID int64, afterAt time.Time) ([]store.CallRecordView, error)
 	// GetRecord 按 ID 返回单条调用记录详情。
 	GetRecord(ctx context.Context, id int64) (store.CallRecordView, error)
-	// ClearRecordsBefore 清空指定时刻及以前的调用记录。
+	// ClearRecordsBefore 清空指定时刻及以前的调用记录；cutoff 为零值表示清空全部最近记录。
 	ClearRecordsBefore(ctx context.Context, cutoff time.Time) (int64, error)
 }
 
@@ -159,13 +159,13 @@ func (s *QueryService) GetRecord(ctx context.Context, id int64) (store.CallRecor
 	return s.repo.GetRecord(ctx, id)
 }
 
-// ClearRecords 清空调用记录，返回删除条数。
+// ClearRecords 清空 Redis 最近调用记录，返回删除条数；历史聚合统计不受影响。
 func (s *QueryService) ClearRecords(ctx context.Context) (int64, error) {
 	cutoff := time.Now().UTC()
 	if s.dropper != nil {
 		s.dropper.DropBefore(cutoff)
 	}
-	return s.repo.ClearRecordsBefore(ctx, cutoff)
+	return s.repo.ClearRecordsBefore(ctx, time.Time{})
 }
 
 // resolveTopLimit 计算生效的工具排行返回条数（Req 16.3）。

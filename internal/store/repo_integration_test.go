@@ -59,7 +59,7 @@ func setupRepos(t *testing.T) (context.Context, *gorm.DB, *Repositories) {
 
 	// 清空相关表，保证每个用例从空库开始；CASCADE 会一并清理从属表。
 	if err := db.WithContext(ctx).
-		Exec(`TRUNCATE upstream_mcp, api_key, audit_log, call_stat RESTART IDENTITY CASCADE`).Error; err != nil {
+		Exec(`TRUNCATE upstream_mcp, api_key, audit_log, call_stat_daily RESTART IDENTITY CASCADE`).Error; err != nil {
 		t.Fatalf("清理测试数据失败: %v", err)
 	}
 	return ctx, db, NewRepositories(db)

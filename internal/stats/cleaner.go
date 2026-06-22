@@ -23,27 +23,15 @@ const (
 const (
 	// defaultCleanInterval 为保留期清理任务的默认执行周期。
 	//
-	// 取一天一次：分区按自然月划分，超期分区的产生粒度为「月」，每日清理足以及时回收
-	// 超期分区，又不会给数据库带来明显负担。
+	// 调用统计已改为每日聚合事实表，数据粒度为 UTC 日期；每日清理足以及时回收超期聚合行。
 	defaultCleanInterval = 24 * time.Hour
-	// defaultPartitionAhead 为预建未来月分区的数量。
-	//
-	// 取 1：保证跨月时刻仍有「下个月」的分区可承接新写入，避免记录落入默认分区而无法
-	// 被整分区 DROP 高效清理。
-	defaultPartitionAhead = 1
 )
 
-// PartitionMaintainer 是统计保留期清理依赖的仓储窄接口（Req 16.10）。
+// DailyAggregateMaintainer 是统计保留期清理依赖的仓储窄接口（Req 16.10）。
 //
-// 仅声明清理实际需要的三步能力：按需预建时间分区、整分区删除超期数据、逐行兜底清理
-// 边界与默认分区的残留。*store.CallStatRepo 满足该接口；以接口而非具体类型依赖，
-// 便于单元测试以内存 fake 替换并验证调度与边界计算逻辑。
-type PartitionMaintainer interface {
-	// EnsurePartitions 为 now 临近月份按需创建时间分区，ahead 为预建的未来月数。
-	EnsurePartitions(ctx context.Context, now time.Time, ahead int) error
-	// DropPartitionsOlderThan 删除整段时间均早于 cutoff 的月分区，返回被删除的分区数。
-	DropPartitionsOlderThan(ctx context.Context, cutoff time.Time) (int, error)
-	// DeleteOlderThan 逐行删除 called_at 早于 cutoff 的记录，返回删除条数（兜底）。
+// 调用明细表与月分区已移除，清理仅需删除早于保留边界的每日聚合行。
+type DailyAggregateMaintainer interface {
+	// DeleteOlderThan 删除早于 cutoff 所在 UTC 日期的每日聚合统计，返回删除行数。
 	DeleteOlderThan(ctx context.Context, cutoff time.Time) (int64, error)
 }
 
@@ -56,29 +44,22 @@ type CleanerConfigProvider interface {
 	Config() config.YAMLConfig
 }
 
-// Cleaner 实现统计保留期清理（Req 16.10）：按配置保留期定时回收 call_stat 超期数据。
+// Cleaner 实现统计保留期清理（Req 16.10）：按配置保留期定时回收 call_stat_daily 超期数据。
 //
-// 清理策略（见设计文档「保留期清理 → 定时 DROP 超过 retention_days 的时间分区」）：
-//
-//	定时触发 → EnsurePartitions（预建临近月分区，保证新写入落入时间分区）
-//	        → DropPartitionsOlderThan（整段超期的月分区直接 DROP，高效回收）
-//	        → DeleteOlderThan（边界分区与默认分区的残留逐行兜底删除，保证边界精确）
+// 清理策略：定时触发后按 cutoff = now - retention_days 删除早于 cutoff 所在 UTC 日期的
+// 每日聚合行。调用明细表与月分区已移除，清理逻辑不再维护分区。
 //
 // 设计要点：
 //   - 保留期取自配置 statistics.retention_days，越界或缺失时回退默认 90 天，使清理边界
 //     始终落在合法范围（Req 16.10）。
-//   - 截止时刻 cutoff = now - retention_days：called_at 早于 cutoff 的记录视为超期。
-//   - DROP 整分区是主回收手段（O(分区数)），逐行 DELETE 仅兜底边界与默认分区残留。
 //   - 清理任务独立于统计写入主流程，其失败仅记录日志、不影响写入与查询。
 type Cleaner struct {
-	// repo 为分区维护仓储。
-	repo PartitionMaintainer
+	// repo 为每日聚合统计维护仓储。
+	repo DailyAggregateMaintainer
 	// cfg 为配置存储，提供统计保留期配置。
 	cfg CleanerConfigProvider
 	// interval 为清理任务执行周期。
 	interval time.Duration
-	// ahead 为预建未来月分区数。
-	ahead int
 	// now 返回当前时间，便于在测试中注入可控时钟。
 	now func() time.Time
 	// log 为结构化日志器，记录清理结果与失败，便于观测。
@@ -106,15 +87,6 @@ func WithCleanInterval(d time.Duration) CleanerOption {
 	}
 }
 
-// WithPartitionAhead 设置预建未来月分区数（<0 时回退默认值）。
-func WithPartitionAhead(n int) CleanerOption {
-	return func(c *Cleaner) {
-		if n >= 0 {
-			c.ahead = n
-		}
-	}
-}
-
 // WithCleanerClock 注入自定义时钟（为空时回退到 time.Now）。
 func WithCleanerClock(now func() time.Time) CleanerOption {
 	return func(c *Cleaner) {
@@ -135,14 +107,13 @@ func WithCleanerLogger(l *slog.Logger) CleanerOption {
 
 // NewCleaner 构造统计保留期清理器。
 //
-// repo 为分区维护仓储（必需），cfg 为配置存储（必需，提供保留期）。选项可覆盖执行周期、
-// 预建月数、时钟与日志器。
-func NewCleaner(repo PartitionMaintainer, cfg CleanerConfigProvider, opts ...CleanerOption) *Cleaner {
+// repo 为每日聚合维护仓储（必需），cfg 为配置存储（必需，提供保留期）。选项可覆盖执行周期、
+// 时钟与日志器。
+func NewCleaner(repo DailyAggregateMaintainer, cfg CleanerConfigProvider, opts ...CleanerOption) *Cleaner {
 	c := &Cleaner{
 		repo:     repo,
 		cfg:      cfg,
 		interval: defaultCleanInterval,
-		ahead:    defaultPartitionAhead,
 		now:      time.Now,
 		log:      slog.Default(),
 	}
@@ -152,26 +123,13 @@ func NewCleaner(repo PartitionMaintainer, cfg CleanerConfigProvider, opts ...Cle
 	return c
 }
 
-// Cleanup 执行一次完整的保留期清理：预建临近分区 → DROP 超期分区 → 兜底逐行删除（Req 16.10）。
+// Cleanup 执行一次每日聚合统计保留期清理（Req 16.10）。
 //
-// 返回被删除的分区数与逐行兜底删除的记录条数。任一步骤出错立即返回错误（已完成的步骤
-// 效果保留）；调用方（定时循环）据此记录日志，但不应因清理失败而中断服务。
-func (c *Cleaner) Cleanup(ctx context.Context) (droppedPartitions int, deletedRows int64, err error) {
+// 返回删除的聚合行数。调用方（定时循环）据此记录日志，但不应因清理失败而中断服务。
+func (c *Cleaner) Cleanup(ctx context.Context) (deletedRows int64, err error) {
 	now := c.now().UTC()
-	// 先确保临近月分区存在，使新写入落入时间分区而非默认分区（Req 16.10）。
-	if err := c.repo.EnsurePartitions(ctx, now, c.ahead); err != nil {
-		return 0, 0, err
-	}
 	cutoff := now.AddDate(0, 0, -c.retentionDays())
-	dropped, err := c.repo.DropPartitionsOlderThan(ctx, cutoff)
-	if err != nil {
-		return dropped, 0, err
-	}
-	deleted, err := c.repo.DeleteOlderThan(ctx, cutoff)
-	if err != nil {
-		return dropped, deleted, err
-	}
-	return dropped, deleted, nil
+	return c.repo.DeleteOlderThan(ctx, cutoff)
 }
 
 // Start 启动后台定时清理循环（幂等）。
@@ -236,14 +194,14 @@ func (c *Cleaner) run(ctx context.Context) {
 
 // runOnce 执行单次清理并记录结果；失败仅记日志、不中断循环（Req 16.10）。
 func (c *Cleaner) runOnce(ctx context.Context) {
-	dropped, deleted, err := c.Cleanup(ctx)
+	deleted, err := c.Cleanup(ctx)
 	if err != nil {
 		c.log.Warn("统计保留期清理失败", "error", err)
 		return
 	}
-	if dropped > 0 || deleted > 0 {
+	if deleted > 0 {
 		c.log.Info("统计保留期清理完成",
-			"droppedPartitions", dropped, "deletedRows", deleted, "retentionDays", c.retentionDays())
+			"deletedRows", deleted, "retentionDays", c.retentionDays())
 	}
 }
 

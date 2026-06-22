@@ -275,6 +275,7 @@ func (s *Service) recordCall(ctx context.Context, apiKeyID, exposedName string, 
 	source := SourceFromContext(ctx)
 	s.recorder.RecordAsync(ctx, store.CallStatRecord{
 		UpstreamID:     entry.UpstreamID,
+		UpstreamName:   entry.UpstreamName,
 		OriginalName:   entry.OriginalName,
 		ExposedName:    exposedName,
 		APIKeyID:       apiKeyID,
@@ -435,11 +436,12 @@ func (s *Service) buildToolSetWithReverseMap(ctx context.Context, apiKeyID strin
 		}
 
 		bundles = append(bundles, upstreamBundle{
-			upstreamID: up.ID,
-			sortOrder:  up.Config.SortOrder,
-			tools:      tools,
-			aliases:    aliases,
-			mcpFilters: mcpFilters,
+			upstreamID:   up.ID,
+			upstreamName: up.Config.Name,
+			sortOrder:    up.Config.SortOrder,
+			tools:        tools,
+			aliases:      aliases,
+			mcpFilters:   mcpFilters,
 		})
 	}
 

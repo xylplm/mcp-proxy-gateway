@@ -164,11 +164,9 @@ func (r *Router) statsSummary(c *gin.Context) {
 	respondOK(c, gin.H{"summary": summary})
 }
 
-// statsDaily 返回区间内按日聚合的调用趋势。
+// statsDaily 返回区间内按 UTC 日聚合的调用趋势。
 //
-// tz 查询参数指定分组所用时区（IANA 名，如 Asia/Shanghai），缺省回退 UTC。
-// 前端热力图按用户浏览器时区渲染，需传入对应 tz 以保证「本地今天」格子与后端
-// 分组边界一致，避免跨日错位。
+// tz 查询参数保留用于兼容旧调用方与参数校验；统计数据固定按 UTC 日期聚合。
 func (r *Router) statsDaily(c *gin.Context) {
 	if r.stats == nil {
 		respondServiceUnavailable(c, "统计查询服务未就绪")
