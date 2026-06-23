@@ -20,6 +20,7 @@ const errorMessage = ref('')
 const newCount = ref(0)
 const autoRefresh = ref(true)
 const clearing = ref(false)
+const searchKeyword = ref('')
 let pollTimer: number | undefined
 const pageLimit = 30
 const maxLocalRecords = 120
@@ -29,14 +30,27 @@ const detailOpen = ref(false)
 
 const latestId = computed(() => records.value.reduce((max, item) => Math.max(max, item.ID), 0))
 const latestCalledAt = computed(() => records.value[0]?.CalledAt ?? '')
-const successCount = computed(() => records.value.filter((item) => statusOf(item) === 'success').length)
+const normalizedSearchKeyword = computed(() => searchKeyword.value.trim().toLowerCase())
+const hasSearchKeyword = computed(() => normalizedSearchKeyword.value !== '')
+const filteredRecords = computed(() => {
+  const keyword = normalizedSearchKeyword.value
+  if (keyword === '') return records.value
+  return records.value.filter((item) => callRecordSearchText(item).includes(keyword))
+})
+const recordCountLabel = computed(() => {
+  if (!hasSearchKeyword.value) return `${records.value.length.toLocaleString('zh-CN')}`
+  return `${filteredRecords.value.length.toLocaleString('zh-CN')} / ${records.value.length.toLocaleString('zh-CN')}`
+})
+const successCount = computed(() => filteredRecords.value.filter((item) => statusOf(item) === 'success').length)
 const upstreamErrorCount = computed(
-  () => records.value.filter((item) => statusOf(item) === 'upstream_error').length,
+  () => filteredRecords.value.filter((item) => statusOf(item) === 'upstream_error').length,
 )
-const failedCount = computed(() => records.value.filter((item) => statusOf(item) === 'failed').length)
+const failedCount = computed(() => filteredRecords.value.filter((item) => statusOf(item) === 'failed').length)
 const avgLatency = computed(() => {
-  if (records.value.length === 0) return 0
-  return Math.round(records.value.reduce((sum, item) => sum + item.LatencyMS, 0) / records.value.length)
+  if (filteredRecords.value.length === 0) return 0
+  return Math.round(
+    filteredRecords.value.reduce((sum, item) => sum + item.LatencyMS, 0) / filteredRecords.value.length,
+  )
 })
 
 function formatDateTime(value: string): string {
@@ -114,6 +128,33 @@ function isXiaozhi(record: CallRecord): boolean {
 function sourceLabel(record: CallRecord): string {
   if (isXiaozhi(record)) return '小智接入'
   return apiKeyLabel(record)
+}
+
+function callRecordSearchText(record: CallRecord): string {
+  const detail = record.FailureDetail
+  return [
+    String(record.ID),
+    mcpLabel(record),
+    toolLabel(record),
+    record.OriginalName,
+    record.ExposedName,
+    sourceLabel(record),
+    record.APIKeyID,
+    record.UpstreamID,
+    statusOf(record),
+    statusLabel(record),
+    modeLabel(record),
+    record.ErrorMessage,
+    record.Description,
+    detail?.kind,
+    detail?.code,
+    detail?.message,
+    detail?.httpStatus,
+    detail?.businessCode,
+    ...(detail?.fields ? Object.values(detail.fields) : []),
+  ]
+    .join(' ')
+    .toLowerCase()
 }
 
 // 耗时分级：<1s 正常、1-3s 较慢、>3s 很慢。卡片耗时格与统计区平均耗时共用。
@@ -291,7 +332,7 @@ const cardClass =
           最新调用排在最上方，仅保留最近 24 小时记录。
         </p>
       </div>
-      <div class="flex items-center gap-2">
+      <div class="flex flex-wrap items-center gap-2">
         <button
           v-if="newCount > 0"
           type="button"
@@ -300,6 +341,23 @@ const cardClass =
         >
           新增 {{ newCount }} 条
         </button>
+        <label class="relative block w-full sm:w-72">
+          <span class="sr-only">搜索调用记录</span>
+          <input
+            v-model="searchKeyword"
+            type="search"
+            placeholder="搜索工具、上游、来源或错误"
+            class="h-10 w-full rounded-lg border border-gray-200 bg-white px-3 pr-12 text-sm text-gray-800 shadow-sm transition placeholder:text-gray-400 focus:border-brand-300 focus:ring-3 focus:ring-brand-500/10 focus:outline-none dark:border-gray-800 dark:bg-gray-900 dark:text-white/90"
+          />
+          <button
+            v-if="hasSearchKeyword"
+            type="button"
+            class="absolute top-1/2 right-2 -translate-y-1/2 rounded-md px-2 py-1 text-xs text-gray-500 transition hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+            @click="searchKeyword = ''"
+          >
+            清空
+          </button>
+        </label>
         <label
           class="inline-flex h-10 items-center gap-2 rounded-lg border border-gray-200 px-3 text-sm text-gray-600 dark:border-gray-800 dark:text-gray-400"
         >
@@ -352,9 +410,11 @@ const cardClass =
     </p>
     <div class="mb-5 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
       <section :class="cardClass">
-        <p class="text-sm text-gray-500 dark:text-gray-400">当前列表</p>
+        <p class="text-sm text-gray-500 dark:text-gray-400">
+          {{ hasSearchKeyword ? '匹配记录' : '当前列表' }}
+        </p>
         <p class="mt-2 text-2xl font-semibold text-gray-800 dark:text-white/90">
-          {{ records.length.toLocaleString('zh-CN') }}
+          {{ recordCountLabel }}
         </p>
       </section>
       <section :class="cardClass">
@@ -395,10 +455,16 @@ const cardClass =
     >
       暂无调用记录
     </div>
+    <div
+      v-else-if="filteredRecords.length === 0"
+      class="rounded-2xl border border-dashed border-gray-300 bg-white px-5 py-12 text-center text-sm text-gray-400 dark:border-gray-700 dark:bg-white/[0.03]"
+    >
+      没有匹配的调用记录
+    </div>
 
     <div v-else class="grid grid-cols-1 gap-3 xl:grid-cols-2 3xl:grid-cols-3">
       <div
-        v-for="record in records"
+        v-for="record in filteredRecords"
         :key="record.ID"
         role="button"
         tabindex="0"
