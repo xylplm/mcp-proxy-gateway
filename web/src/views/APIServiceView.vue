@@ -25,6 +25,11 @@ import { getAggregatedTools, type GatewayTool, type ToolDef, type ToolDetail, ty
 import type { UpstreamRateLimits } from '@/api/rateLimits'
 import { useClipboard } from '@/composables/useClipboard'
 import { useToast } from '@/composables/useToast'
+import {
+  buildMCPClientConfig,
+  normalizeMCPServerName,
+  type MCPClientConfigKind,
+} from '@/utils/mcpClientConfig'
 
 type EndpointKey = 'sse' | 'http' | 'ws'
 type AuthKey = 'header' | 'bearer' | 'query'
@@ -63,6 +68,8 @@ const guideOpen = ref(false)
 const guideMode = ref<'full' | 'smart'>('full')
 const selectedGuideEndpoint = ref<EndpointKey>('http')
 const selectedGuideAuth = ref<AuthKey>('bearer')
+const guideConfigKind = ref<MCPClientConfigKind>('mcp-json')
+const guideServerName = ref('mcp-proxy-gateway')
 const guideCopiedKey = ref('')
 const guideCopyError = ref('')
 const { copy } = useClipboard()
@@ -284,8 +291,10 @@ const guideAuthText = computed(() => {
 const guideSnippets = computed<GuideSnippet[]>(() => [
   {
     key: 'client-config',
-    title: 'MCP 客户端配置',
-    desc: '适用于支持远程 MCP 的客户端。',
+    title: guideConfigKind.value === 'mcp-json' ? 'MCP 客户端配置' : 'MCP 服务条目',
+    desc: guideConfigKind.value === 'mcp-json'
+      ? '适用于支持远程 MCP 的客户端。'
+      : '复制到已有 mcpServers 对象中使用。',
     code: clientConfigSnippet(),
   },
   {
@@ -374,16 +383,15 @@ function shellLines(command: string, args: string[]): string {
 }
 
 function clientConfigSnippet(): string {
-  const config: Record<string, unknown> = {
-    mcpServers: {
-      'mcp-proxy-gateway': {
-        type: selectedEndpoint.value.clientType,
-        url: guideAddress.value,
-        ...(authHeadersJSON() ? { headers: authHeadersJSON() } : {}),
-      },
+  return buildMCPClientConfig(
+    {
+      serverName: guideServerName.value,
+      clientType: selectedEndpoint.value.clientType,
+      url: guideAddress.value,
+      headers: authHeadersJSON(),
     },
-  }
-  return formatJSON(config)
+    guideConfigKind.value,
+  )
 }
 
 function guideCommandSnippet(): string {
@@ -1276,6 +1284,51 @@ const errClass = 'mt-1 text-xs text-error-500'
                       </span>
                       <span class="mt-2 block text-xs leading-5 text-gray-500 dark:text-gray-400">{{ item.desc }}</span>
                     </button>
+                  </div>
+                </div>
+
+                <div>
+                  <div class="mb-3 flex items-center gap-2">
+                    <span class="flex h-6 w-6 items-center justify-center rounded-full bg-brand-50 text-xs font-semibold text-brand-600 dark:bg-brand-500/10 dark:text-brand-400">4</span>
+                    <h4 class="text-sm font-semibold text-gray-800 dark:text-white/90">配置生成</h4>
+                  </div>
+                  <div class="rounded-xl border border-gray-200 p-4 dark:border-gray-800">
+                    <label class="block">
+                      <span class="mb-1.5 block text-xs font-medium text-gray-500 dark:text-gray-400">服务名称</span>
+                      <input
+                        v-model="guideServerName"
+                        type="text"
+                        class="h-10 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-800 shadow-sm transition placeholder:text-gray-400 focus:border-brand-300 focus:ring-3 focus:ring-brand-500/10 focus:outline-none dark:border-gray-700 dark:bg-gray-900 dark:text-white/90"
+                        placeholder="mcp-proxy-gateway"
+                      />
+                    </label>
+                    <div class="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      <button
+                        type="button"
+                        class="rounded-lg border px-3 py-2 text-left transition"
+                        :class="guideConfigKind === 'mcp-json'
+                          ? 'border-brand-300 bg-brand-50/60 dark:border-brand-500/50 dark:bg-brand-500/[0.08]'
+                          : 'border-gray-200 hover:border-brand-300 hover:bg-brand-50/40 dark:border-gray-800 dark:hover:border-brand-500/40 dark:hover:bg-brand-500/[0.06]'"
+                        @click="guideConfigKind = 'mcp-json'"
+                      >
+                        <span class="block text-xs font-semibold text-gray-800 dark:text-white/90">完整 MCP JSON</span>
+                        <span class="mt-1 block text-[11px] leading-4 text-gray-500 dark:text-gray-400">适合新建配置文件</span>
+                      </button>
+                      <button
+                        type="button"
+                        class="rounded-lg border px-3 py-2 text-left transition"
+                        :class="guideConfigKind === 'server-entry'
+                          ? 'border-brand-300 bg-brand-50/60 dark:border-brand-500/50 dark:bg-brand-500/[0.08]'
+                          : 'border-gray-200 hover:border-brand-300 hover:bg-brand-50/40 dark:border-gray-800 dark:hover:border-brand-500/40 dark:hover:bg-brand-500/[0.06]'"
+                        @click="guideConfigKind = 'server-entry'"
+                      >
+                        <span class="block text-xs font-semibold text-gray-800 dark:text-white/90">服务条目</span>
+                        <span class="mt-1 block text-[11px] leading-4 text-gray-500 dark:text-gray-400">适合合并到已有 mcpServers</span>
+                      </button>
+                    </div>
+                    <p class="mt-2 text-[11px] leading-5 text-gray-400 dark:text-gray-500">
+                      当前服务名：{{ normalizeMCPServerName(guideServerName) }}
+                    </p>
                   </div>
                 </div>
               </div>
