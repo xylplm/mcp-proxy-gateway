@@ -28,6 +28,7 @@ import {
   reconnectUpstream,
   previewUpstreamImport,
   importUpstreamsFromJSON,
+  exportUpstreamsMCPJSON,
   CONN_STATE_LABELS,
   TRANSPORT_OPTIONS,
   type Upstream,
@@ -70,6 +71,7 @@ const importFailed = ref<UpstreamImportResultItem[]>([])
 const importLoading = ref(false)
 const importExecuting = ref(false)
 const importError = ref('')
+const exportingMCPJSON = ref(false)
 
 const sortingOpen = ref(false)
 const sortDraft = ref<Upstream[]>([])
@@ -213,6 +215,12 @@ function showError(err: unknown, fallback: string): void {
   toast.error(err instanceof Error ? err.message : fallback)
 }
 
+function mcpJSONFileNameNow(): string {
+  const d = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `mpg-mcp-servers-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.json`
+}
+
 /** 加载上游列表（按 sortOrder 排序）。 */
 async function loadUpstreams(showLoading = true): Promise<void> {
   if (showLoading) loading.value = true
@@ -352,6 +360,27 @@ async function submitImport(): Promise<void> {
     importError.value = err instanceof Error ? err.message : '导入失败'
   } finally {
     importExecuting.value = false
+  }
+}
+
+async function downloadMCPJSON(): Promise<void> {
+  if (exportingMCPJSON.value) return
+  exportingMCPJSON.value = true
+  try {
+    const blob = await exportUpstreamsMCPJSON()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = mcpJSONFileNameNow()
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+    toast.success('MCP JSON 已导出')
+  } catch (err) {
+    showError(err, '导出 MCP JSON 失败')
+  } finally {
+    exportingMCPJSON.value = false
   }
 }
 
@@ -709,6 +738,23 @@ function goPage(p: number): void {
             />
           </svg>
           导入 JSON
+        </button>
+        <button
+          type="button"
+          class="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 px-3.5 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:opacity-60 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+          :disabled="exportingMCPJSON || upstreams.length === 0"
+          @click="downloadMCPJSON"
+        >
+          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none">
+            <path
+              d="M12 21V10M8 14l4-4 4 4M5 7V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v2"
+              stroke="currentColor"
+              stroke-width="1.8"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+          {{ exportingMCPJSON ? '导出中...' : '导出 JSON' }}
         </button>
         <button
           type="button"

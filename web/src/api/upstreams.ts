@@ -20,6 +20,7 @@
  *   GET    /upstreams/tool-summaries 批量读取工具缓存摘要
  *   POST   /upstreams/import/preview 预览 MCP JSON 批量导入
  *   POST   /upstreams/import         执行 MCP JSON 批量导入
+ *   GET    /upstreams/export/mcp-json 导出标准 MCP JSON 配置
  */
 import request from '@/api/request'
 import type { ToolDef } from '@/api/tools'
@@ -214,6 +215,11 @@ export async function importUpstreamsFromJSON(content: string): Promise<Upstream
     created: res.data?.created ?? [],
     failed: res.data?.failed ?? [],
   }
+}
+
+export async function exportUpstreamsMCPJSON(): Promise<Blob> {
+  const res = await request.get<Blob>('/upstreams/export/mcp-json', { responseType: 'blob' })
+  return res.data
 }
 
 /** 更新指定上游 MCP（Req 2.4）。 */

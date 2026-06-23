@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -66,6 +67,24 @@ type mcpServerConfig struct {
 	SortOrder  int                       `json:"sortOrder"`
 }
 
+type mcpExportFile struct {
+	MCPServers map[string]mcpExportServer `json:"mcpServers"`
+}
+
+type mcpExportServer struct {
+	Type       string            `json:"type,omitempty"`
+	Command    string            `json:"command,omitempty"`
+	Args       []string          `json:"args,omitempty"`
+	Env        map[string]string `json:"env,omitempty"`
+	CWD        string            `json:"cwd,omitempty"`
+	URL        string            `json:"url,omitempty"`
+	Headers    map[string]string `json:"headers,omitempty"`
+	Credential string            `json:"credential,omitempty"`
+	Enabled    bool              `json:"enabled"`
+	AutoSync   bool              `json:"autoSync"`
+	Tags       []string          `json:"tags,omitempty"`
+}
+
 func (r *Router) previewUpstreamImport(c *gin.Context) {
 	items, ok := r.parseUpstreamImport(c)
 	if !ok {
@@ -110,6 +129,20 @@ func (r *Router) importUpstreams(c *gin.Context) {
 		r.recordCreate(c, audit.ResourceUpstream, cfg.Name)
 	}
 	respondOK(c, result)
+}
+
+func (r *Router) exportUpstreamsMCPJSON(c *gin.Context) {
+	if r.upstream == nil {
+		respondServiceUnavailable(c, "上游管理服务未就绪")
+		return
+	}
+	upstreams, err := r.upstream.List(c.Request.Context())
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	filename := "mpg-mcp-servers-" + time.Now().Format("20060102-150405") + ".json"
+	respondJSONDownload(c, filename, buildMCPExport(upstreams))
 }
 
 func (r *Router) parseUpstreamImport(c *gin.Context) ([]upstreamImportItem, bool) {
@@ -274,6 +307,52 @@ func mcpServerToUpstreamConfig(name string, server mcpServerConfig) domain.Upstr
 	return cfg
 }
 
+func buildMCPExport(upstreams []domain.Upstream) mcpExportFile {
+	out := mcpExportFile{MCPServers: make(map[string]mcpExportServer, len(upstreams))}
+	seen := make(map[string]int, len(upstreams))
+	for _, up := range upstreams {
+		name := strings.TrimSpace(up.Config.Name)
+		if name == "" {
+			name = up.ID
+		}
+		name = uniqueMCPExportName(name, seen)
+		out.MCPServers[name] = upstreamToMCPExportServer(up.Config)
+	}
+	return out
+}
+
+func uniqueMCPExportName(name string, seen map[string]int) string {
+	if seen == nil {
+		return name
+	}
+	count := seen[name]
+	seen[name] = count + 1
+	if count == 0 {
+		return name
+	}
+	return fmt.Sprintf("%s-%d", name, count+1)
+}
+
+func upstreamToMCPExportServer(cfg domain.UpstreamConfig) mcpExportServer {
+	server := mcpExportServer{
+		Type:       string(cfg.Transport),
+		Credential: cfg.Credential,
+		Enabled:    cfg.Enabled,
+		AutoSync:   cfg.AutoSync,
+		Tags:       cfg.Tags,
+	}
+	if cfg.Transport == domain.TransportStdio {
+		server.Command, _ = cfg.ConnParams["command"].(string)
+		server.Args = stringSliceFromAny(cfg.ConnParams["args"])
+		server.Env = stringMapFromAny(cfg.ConnParams["env"])
+		server.CWD, _ = cfg.ConnParams["cwd"].(string)
+		return server
+	}
+	server.URL, _ = cfg.ConnParams["url"].(string)
+	server.Headers = stringMapFromAny(cfg.ConnParams["headers"])
+	return server
+}
+
 func inferImportTransport(server mcpServerConfig) domain.TransportType {
 	raw := strings.ToLower(strings.TrimSpace(firstNonEmpty(server.Transport, server.Type)))
 	switch raw {
@@ -302,6 +381,50 @@ func transportFromURL(rawURL string) domain.TransportType {
 		return domain.TransportSSE
 	default:
 		return domain.TransportStreamableHTTP
+	}
+}
+
+func stringSliceFromAny(raw any) []string {
+	switch v := raw.(type) {
+	case []string:
+		out := make([]string, len(v))
+		copy(out, v)
+		return out
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			s, ok := item.(string)
+			if !ok {
+				return nil
+			}
+			out = append(out, s)
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func stringMapFromAny(raw any) map[string]string {
+	switch v := raw.(type) {
+	case map[string]string:
+		out := make(map[string]string, len(v))
+		for k, val := range v {
+			out[k] = val
+		}
+		return out
+	case map[string]any:
+		out := make(map[string]string, len(v))
+		for k, item := range v {
+			s, ok := item.(string)
+			if !ok {
+				return nil
+			}
+			out[k] = s
+		}
+		return out
+	default:
+		return nil
 	}
 }
 

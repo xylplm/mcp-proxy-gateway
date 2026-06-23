@@ -85,6 +85,7 @@ func (r *Router) registerUpstreamRoutes(g *gin.RouterGroup) {
 	ups.POST("/test", r.testUpstream)
 	ups.POST("/import/preview", r.previewUpstreamImport)
 	ups.POST("/import", r.importUpstreams)
+	ups.GET("/export/mcp-json", r.exportUpstreamsMCPJSON)
 	ups.PUT("/:id", r.updateUpstream)
 	ups.DELETE("/:id", r.deleteUpstream)
 	ups.POST("/:id/enable", r.enableUpstream)

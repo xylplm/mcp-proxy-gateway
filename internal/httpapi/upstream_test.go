@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"testing"
 	"time"
@@ -242,6 +243,58 @@ func TestImportUpstreamsCreatesValidAndReportsFailures(t *testing.T) {
 	}
 	if len(got.Failed) != 1 || got.Failed[0].Name != "bad" || got.Failed[0].Fields["connParams.url"] == "" {
 		t.Fatalf("失败项不符合预期：%+v", got.Failed)
+	}
+}
+
+func TestExportUpstreamsMCPJSONReturnsStandardConfig(t *testing.T) {
+	upstream := &fakeUpstreamService{list: []domain.Upstream{
+		{
+			ID: "up-local",
+			Config: domain.UpstreamConfig{
+				Name:      "local-files",
+				Transport: domain.TransportStdio,
+				ConnParams: map[string]any{
+					"command": "npx",
+					"args":    []any{"-y", "@modelcontextprotocol/server-filesystem", "D:/work"},
+					"env":     map[string]any{"TOKEN": "abc"},
+					"cwd":     "D:/work",
+				},
+				Credential: "local-secret",
+				Enabled:    true,
+				AutoSync:   true,
+				Tags:       []string{"local"},
+			},
+		},
+		{
+			ID: "up-remote",
+			Config: domain.UpstreamConfig{
+				Name:       "remote",
+				Transport:  domain.TransportStreamableHTTP,
+				ConnParams: map[string]any{"url": "https://example.com/mcp", "headers": map[string]any{"Authorization": "Bearer token"}},
+				Enabled:    false,
+				AutoSync:   true,
+			},
+		},
+	}}
+	e := newTestEngine(Deps{Upstream: upstream})
+
+	w := doJSON(e, http.MethodGet, "/api/admin/upstreams/export/mcp-json", "")
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("期望 HTTP 200，实际 %d，响应体 %s", w.Code, w.Body.String())
+	}
+	assertDownloadHeaders(t, w, "mpg-mcp-servers-")
+	var got mcpExportFile
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("导出响应应为 MCP JSON 对象：%v", err)
+	}
+	local := got.MCPServers["local-files"]
+	if local.Command != "npx" || len(local.Args) != 3 || local.Env["TOKEN"] != "abc" || local.Credential != "local-secret" || !local.Enabled {
+		t.Fatalf("stdio 导出不符合预期：%+v", local)
+	}
+	remote := got.MCPServers["remote"]
+	if remote.Type != "streamable-http" || remote.URL != "https://example.com/mcp" || remote.Headers["Authorization"] != "Bearer token" || remote.Enabled {
+		t.Fatalf("远程导出不符合预期：%+v", remote)
 	}
 }
 
