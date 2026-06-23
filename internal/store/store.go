@@ -126,6 +126,8 @@ func AutoMigrate(ctx context.Context, db *gorm.DB, logger *slog.Logger) error {
 		&apiKeyACLModel{},
 		&toolCacheModel{},
 		&auditLogModel{},
+		&securityEventModel{},
+		&securityBlockModel{},
 	}
 	if err := tx.AutoMigrate(models...); err != nil {
 		logger.Error("执行 GORM AutoMigrate 失败", "error", err)
@@ -154,6 +156,8 @@ func ensureSchemaExtras(ctx context.Context, db *gorm.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_filter_rule_apikey_apikey ON filter_rule_apikey (api_key_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_api_key_acl_apikey ON api_key_acl (api_key_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_audit_log_occurred_at ON audit_log (occurred_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_security_event_created_at ON security_event (created_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_security_block_created_at ON security_block (created_at DESC)`,
 	}
 	for _, step := range steps {
 		if err := db.WithContext(ctx).Exec(step).Error; err != nil {

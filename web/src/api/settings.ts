@@ -27,6 +27,8 @@ export type ToolRoutingStrategy = 'priority_fill' | 'round_robin'
 /** 日志级别取值，与后端 config.LogLevel* 对齐。 */
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error'
 
+export type SecurityMode = 'off' | 'monitor' | 'enforce'
+
 /** 服务监听配置（对应后端 ServerConfig）。 */
 export interface ServerConfig {
   /** 管理台与管理 API 监听地址，默认 :8080。 */
@@ -112,6 +114,19 @@ export interface AuditConfig {
   retention_days: number
 }
 
+export interface SecurityConfig {
+  mode: SecurityMode
+  failure_window_s: number
+  max_failures_per_ip: number
+  max_failures_per_key_fingerprint: number
+  max_acl_denies_per_key_ip: number
+  first_block_duration_s: number
+  max_block_duration_s: number
+  escalation_window_s: number
+  trusted_proxy_cidrs: string[]
+  exempt_cidrs: string[]
+}
+
 /** 小智接入配置（对应后端 XiaoZhiConfig，Req 15）。 */
 export interface XiaoZhiConfig {
   /** 是否启用小智接入。 */
@@ -139,6 +154,7 @@ export interface YAMLConfig {
   mcp_api: MCPAPIConfig
   statistics: StatisticsConfig
   audit: AuditConfig
+  security: SecurityConfig
   xiaozhi: XiaoZhiConfig
 }
 

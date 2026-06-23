@@ -187,6 +187,44 @@ type auditLogModel struct {
 
 func (auditLogModel) TableName() string { return "audit_log" }
 
+type securityEventModel struct {
+	ID             int64     `gorm:"column:id;type:bigserial;primaryKey;autoIncrement"`
+	EventType      string    `gorm:"column:event_type;type:varchar(32);not null;index:idx_security_event_type_time,priority:1"`
+	SubjectType    string    `gorm:"column:subject_type;type:varchar(32);not null;default:'';index:idx_security_event_subject_time,priority:1"`
+	Subject        string    `gorm:"column:subject;type:varchar(255);not null;default:'';index:idx_security_event_subject_time,priority:2"`
+	ClientIP       string    `gorm:"column:client_ip;type:varchar(64);not null;default:'';index:idx_security_event_ip_time,priority:1"`
+	APIKeyID       string    `gorm:"column:api_key_id;type:varchar(36);not null;default:'';index:idx_security_event_apikey_time,priority:1"`
+	APIKeyPrefix   string    `gorm:"column:api_key_prefix;type:varchar(12);not null;default:''"`
+	KeyFingerprint string    `gorm:"column:key_fingerprint;type:varchar(64);not null;default:''"`
+	Method         string    `gorm:"column:method;type:varchar(16);not null;default:''"`
+	Path           string    `gorm:"column:path;type:varchar(255);not null;default:''"`
+	UserAgent      string    `gorm:"column:user_agent;type:varchar(512);not null;default:''"`
+	Reason         string    `gorm:"column:reason;type:varchar(64);not null;default:''"`
+	Count          int       `gorm:"column:count;type:integer;not null;default:0"`
+	CreatedAt      time.Time `gorm:"column:created_at;type:timestamptz;not null;default:now();autoCreateTime:false;index:idx_security_event_type_time,priority:2;index:idx_security_event_subject_time,priority:3;index:idx_security_event_ip_time,priority:2;index:idx_security_event_apikey_time,priority:2"`
+}
+
+func (securityEventModel) TableName() string { return "security_event" }
+
+type securityBlockModel struct {
+	ID             string     `gorm:"column:id;type:uuid;primaryKey"`
+	SubjectType    string     `gorm:"column:subject_type;type:varchar(32);not null;index:idx_security_block_subject,priority:1"`
+	Subject        string     `gorm:"column:subject;type:varchar(255);not null;index:idx_security_block_subject,priority:2"`
+	ClientIP       string     `gorm:"column:client_ip;type:varchar(64);not null;default:'';index:idx_security_block_ip"`
+	APIKeyID       string     `gorm:"column:api_key_id;type:varchar(36);not null;default:'';index:idx_security_block_apikey"`
+	APIKeyPrefix   string     `gorm:"column:api_key_prefix;type:varchar(12);not null;default:''"`
+	KeyFingerprint string     `gorm:"column:key_fingerprint;type:varchar(64);not null;default:''"`
+	Reason         string     `gorm:"column:reason;type:varchar(64);not null;default:''"`
+	FailureCount   int        `gorm:"column:failure_count;type:integer;not null;default:0"`
+	Status         string     `gorm:"column:status;type:varchar(16);not null;default:'active';index:idx_security_block_status_until,priority:1"`
+	BlockedUntil   *time.Time `gorm:"column:blocked_until;type:timestamptz;index:idx_security_block_status_until,priority:2"`
+	ReleasedAt     *time.Time `gorm:"column:released_at;type:timestamptz"`
+	CreatedAt      time.Time  `gorm:"column:created_at;type:timestamptz;not null;default:now();autoCreateTime:false"`
+	UpdatedAt      time.Time  `gorm:"column:updated_at;type:timestamptz;not null;default:now();autoUpdateTime:false"`
+}
+
+func (securityBlockModel) TableName() string { return "security_block" }
+
 func nullableString(s string) *string {
 	if s == "" {
 		return nil

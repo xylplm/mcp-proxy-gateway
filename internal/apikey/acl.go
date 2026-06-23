@@ -96,6 +96,13 @@ type ACLGuard struct {
 	lister ACLLister
 	// logger 用于记录白名单加载等异常；为空时回退到 slog.Default()。
 	logger *slog.Logger
+	// denyRecorder 在来源拒绝时记录安全事件；为空时跳过。
+	denyRecorder ACLDenyRecorder
+}
+
+// ACLDenyRecorder 是 ACL 拒绝旁路记录器，供安全中心接入。
+type ACLDenyRecorder interface {
+	RecordACLDenied(c *gin.Context, apiKeyID, keyPrefix string)
 }
 
 // NewACLGuard 构造来源白名单访问控制组件。lister 为必需依赖；logger 为空时回退到默认 logger。
@@ -104,6 +111,12 @@ func NewACLGuard(lister ACLLister, logger *slog.Logger) *ACLGuard {
 		logger = slog.Default()
 	}
 	return &ACLGuard{lister: lister, logger: logger}
+}
+
+// WithDenyRecorder 注入 ACL 拒绝记录器。
+func (g *ACLGuard) WithDenyRecorder(recorder ACLDenyRecorder) *ACLGuard {
+	g.denyRecorder = recorder
+	return g
 }
 
 // Allow 判定来源地址 remoteIP 是否被允许使用 apiKeyID 对应的 API Key（Req 13.9、13.10）。
@@ -162,11 +175,17 @@ func (g *ACLGuard) Middleware(resolve ACLKeyResolver) gin.HandlerFunc {
 		if err != nil {
 			// 无法核验来源（白名单加载失败或地址非法）：fail-closed，拒绝以信守安全保证。
 			g.logger.Warn("来源白名单校验失败，拒绝请求", "apiKeyID", key.ID, "clientIP", c.ClientIP(), "error", err)
+			if g.denyRecorder != nil {
+				g.denyRecorder.RecordACLDenied(c, key.ID, key.KeyPrefix)
+			}
 			abortForbidden(c)
 			return
 		}
 
 		if !allowed {
+			if g.denyRecorder != nil {
+				g.denyRecorder.RecordACLDenied(c, key.ID, key.KeyPrefix)
+			}
 			abortForbidden(c)
 			return
 		}

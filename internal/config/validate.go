@@ -96,6 +96,30 @@ func ValidateYAMLConfig(cfg YAMLConfig) error {
 	// audit.retention_days 范围 1-3650（Req 22.5）。
 	rangeCheck(fields, "audit.retention_days", cfg.Audit.RetentionDays, 1, 3650)
 
+	if !ValidSecurityMode(cfg.Security.Mode) {
+		fields["security.mode"] = "安全防护模式应为 off、monitor 或 enforce"
+	}
+	rangeCheck(fields, "security.failure_window_s", cfg.Security.FailureWindowS, 60, 3600)
+	rangeCheck(fields, "security.max_failures_per_ip", cfg.Security.MaxFailuresPerIP, 1, 10000)
+	rangeCheck(fields, "security.max_failures_per_key_fingerprint", cfg.Security.MaxFailuresPerKeyFingerprint, 1, 10000)
+	rangeCheck(fields, "security.max_acl_denies_per_key_ip", cfg.Security.MaxACLDeniesPerKeyIP, 1, 10000)
+	rangeCheck(fields, "security.first_block_duration_s", cfg.Security.FirstBlockDurationS, 60, 86400)
+	rangeCheck(fields, "security.max_block_duration_s", cfg.Security.MaxBlockDurationS, 60, 604800)
+	rangeCheck(fields, "security.escalation_window_s", cfg.Security.EscalationWindowS, 300, 604800)
+	if cfg.Security.FirstBlockDurationS > cfg.Security.MaxBlockDurationS {
+		fields["security.first_block_duration_s"] = "首次封禁时长不能大于最长自动封禁时长"
+	}
+	for i, cidr := range cfg.Security.TrustedProxyCIDRs {
+		if err := validateCIDROrIP(cidr); err != nil {
+			fields[fmt.Sprintf("security.trusted_proxy_cidrs.%d", i)] = err.Error()
+		}
+	}
+	for i, cidr := range cfg.Security.ExemptCIDRs {
+		if err := validateCIDROrIP(cidr); err != nil {
+			fields[fmt.Sprintf("security.exempt_cidrs.%d", i)] = err.Error()
+		}
+	}
+
 	// xiaozhi.endpoint：启用时必须为 ws:// 或 wss:// 合法 URL（Req 15.6）。
 	if cfg.XiaoZhi.Enabled {
 		if err := validateXiaoZhiEndpoint(cfg.XiaoZhi.Endpoint); err != nil {
@@ -107,6 +131,20 @@ func ValidateYAMLConfig(cfg YAMLConfig) error {
 		return domain.NewValidationError("YAML 配置校验失败", fields)
 	}
 	return nil
+}
+
+func validateCIDROrIP(s string) error {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return fmt.Errorf("CIDR 或 IP 不能为空")
+	}
+	if _, _, err := net.ParseCIDR(s); err == nil {
+		return nil
+	}
+	if ip := net.ParseIP(s); ip != nil {
+		return nil
+	}
+	return fmt.Errorf("CIDR 或 IP 格式非法")
 }
 
 // validateListenAddr 校验监听地址是否适合作为 net/http Server.Addr。

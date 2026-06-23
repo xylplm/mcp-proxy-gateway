@@ -106,6 +106,11 @@ func (a *App) startBackground(ctx context.Context) {
 	if err := a.mgr.RestoreConnections(ctx); err != nil {
 		a.logger.Error("恢复上游连接状态失败，后续启用或重连时将按需恢复", "error", err)
 	}
+	if a.securityGuard != nil {
+		if err := a.securityGuard.RestoreActiveBlocks(ctx); err != nil {
+			a.logger.Warn("恢复安全封禁缓存失败，后续新触发封禁仍会生效", "error", err)
+		}
+	}
 
 	// 统计异步落库 worker 与保留期清理（Req 16.8、16.10）。
 	a.statRecorder.Start(ctx)
@@ -152,7 +157,6 @@ func (a *App) ApplySettings(cfg config.YAMLConfig) error {
 			a.logger.Info("日志级别已更新", "level", config.NormalizeLogLevel(cfg.Server.LogLevel))
 		}
 	}
-
 	if a.mcpService != nil {
 		a.mcpService.SetDiscoveryLimit(cfg.MCPAPI.SmartDiscoveryLimit)
 	}

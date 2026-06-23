@@ -41,6 +41,8 @@ type Repositories struct {
 	CallStat *CallStatRepo
 	// Audit 为审计日志仓储。
 	Audit *AuditRepo
+	// Security 为安全事件与封禁记录仓储。
+	Security *SecurityRepo
 }
 
 // NewRepositories 基于 GORM 数据库句柄构造所有仓储。
@@ -55,6 +57,7 @@ func NewRepositories(db *gorm.DB) *Repositories {
 		ToolCache:    NewToolCacheRepo(db),
 		CallStat:     NewCallStatRepo(db),
 		Audit:        NewAuditRepo(db),
+		Security:     NewSecurityRepo(db),
 	}
 }
 

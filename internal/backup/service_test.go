@@ -3,6 +3,7 @@ package backup
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/config"
@@ -102,7 +103,7 @@ func TestExportImportRoundTrip(t *testing.T) {
 		t.Fatalf("导入合法备份应成功，却返回错误：%v", err)
 	}
 
-	if dstYAML.cfg != srcYAML.cfg {
+	if !reflect.DeepEqual(dstYAML.cfg, srcYAML.cfg) {
 		t.Errorf("导入后 YAML 配置应与导出前等价\n导出前=%+v\n导入后=%+v", srcYAML.cfg, dstYAML.cfg)
 	}
 	if len(dstBiz.bc.Upstreams) != 1 || dstBiz.bc.Upstreams[0].Config.Name != "demo-upstream" {

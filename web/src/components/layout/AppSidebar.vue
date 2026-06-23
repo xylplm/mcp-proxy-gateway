@@ -92,6 +92,7 @@ import {
   SettingsIcon,
   PieChartIcon,
   DocsIcon,
+  ErrorHexaIcon,
   FlagIcon,
   Message2Line,
   InfoCircleIcon,
@@ -162,6 +163,11 @@ const menuGroups = [
         icon: SettingsIcon,
         name: '系统设置',
         path: '/settings',
+      },
+      {
+        icon: ErrorHexaIcon,
+        name: '安全中心',
+        path: '/security',
       },
       {
         icon: FlagIcon,

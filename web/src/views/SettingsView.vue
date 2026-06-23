@@ -5,7 +5,7 @@
  * 以 TailAdmin 表单组件风格编辑网关运行参数：同步 cron、连接/重试超时、统计/审计保留期、
  * 会话超时。个人密码、对外服务模式与 API 服务接入已拆到更贴近使用场景的页面。
  *
- * 覆盖 Req 7.3（cron 服务端校验，字段级错误回显）与 17.5（管理 REST API 接入）。
+ * 系统设置页：配置同步、连接、安全与管理后台参数。
  *
  * 校验策略：字段范围由后端统一强制（见 internal/config/validate.go），前端仅以 min/max
  * 提示与 number 输入辅助，并在保存失败时按后端返回的 fields 将错误定位到对应字段。
@@ -38,6 +38,9 @@ const gridClass = computed(() =>
 
 /** 当前配置表单模型（加载后填充）。 */
 const config = ref<YAMLConfig | null>(null)
+
+const trustedProxyCIDRs = ref('')
+const exemptCIDRs = ref('')
 
 /** Port helpers: strip ':prefix on load, restore on save. */
 const adminPort = ref<number|string>('')
@@ -79,6 +82,39 @@ const routingStrategies: ReadonlyArray<{ value: ToolRoutingStrategy; label: stri
   },
 ]
 
+const securityModes = [
+  { value: 'monitor', label: '仅记录', desc: '记录异常事件，不自动拦截来源。' },
+  { value: 'enforce', label: '自动封禁', desc: '达到阈值后临时封禁异常来源。' },
+  { value: 'off', label: '关闭', desc: '不记录鉴权失败事件，也不触发自动封禁。' },
+] as const
+
+const trustedProxyCIDRError = computed(() => firstIndexedError('security.trusted_proxy_cidrs'))
+const exemptCIDRError = computed(() => firstIndexedError('security.exempt_cidrs'))
+
+function firstIndexedError(prefix: string): string {
+  for (const [key, value] of Object.entries(fieldErrors)) {
+    if (key === prefix || key.startsWith(`${prefix}.`)) return value
+  }
+  return ''
+}
+
+function cidrListToText(values: string[]): string {
+  return values.join('\n')
+}
+
+function textToCIDRList(value: string): string[] {
+  return value
+    .split(/\r?\n/)
+    .map((item) => item.trim())
+    .filter((item) => item !== '')
+}
+
+function syncSecurityTextFields(): void {
+  if (config.value === null) return
+  trustedProxyCIDRs.value = cidrListToText(config.value.security.trusted_proxy_cidrs ?? [])
+  exemptCIDRs.value = cidrListToText(config.value.security.exempt_cidrs ?? [])
+}
+
 /** 清空所有字段级错误与整体错误。 */
 function clearErrors(): void {
   formError.value = ''
@@ -95,6 +131,7 @@ async function loadSettings(): Promise<void> {
     config.value = await getSettings()
     adminPort.value = addrToPort(config.value.server.admin_addr)
     publicMCPPort.value = addrToPort(config.value.server.public_mcp_addr)
+    syncSecurityTextFields()
   } catch (err) {
     loadError.value = err instanceof Error ? err.message : '加载系统设置失败'
   } finally {
@@ -116,7 +153,7 @@ function applyServerError(err: unknown): void {
     body?.message ?? (err instanceof Error ? err.message : '保存失败，请稍后重试')
 }
 
-/** 保存常规配置（Req 7.3、18.4）。 */
+/** 保存常规配置。 */
 async function saveSettings(): Promise<void> {
   if (config.value === null || saving.value) return
   const ok = await confirm({
@@ -132,11 +169,14 @@ async function saveSettings(): Promise<void> {
   // Restore port strings from numeric port inputs before saving
   config.value.server.admin_addr = portToAddr(adminPort.value)
   config.value.server.public_mcp_addr = portToAddr(publicMCPPort.value)
+  config.value.security.trusted_proxy_cidrs = textToCIDRList(trustedProxyCIDRs.value)
+  config.value.security.exempt_cidrs = textToCIDRList(exemptCIDRs.value)
   saving.value = true
   try {
     config.value = await updateSettings(config.value, { restart: true })
     adminPort.value = addrToPort(config.value.server.admin_addr)
     publicMCPPort.value = addrToPort(config.value.server.public_mcp_addr)
+    syncSecurityTextFields()
     toast.success('系统设置已保存，网关正在重启')
   } catch (err) {
     applyServerError(err)
@@ -186,7 +226,7 @@ const errClass = 'mt-1 text-xs text-error-500'
         >
           <h3 class="mb-1 text-base font-semibold text-gray-800 dark:text-white/90">同步</h3>
           <p class="mb-5 text-sm text-gray-500 dark:text-gray-400">
-            工具列表自动同步的调度与超时设置（Req 7）。
+            工具列表自动同步的调度与超时设置。
           </p>
           <div :class="gridClass">
             <div>
@@ -223,7 +263,7 @@ const errClass = 'mt-1 text-xs text-error-500'
         >
           <h3 class="mb-1 text-base font-semibold text-gray-800 dark:text-white/90">超时与重试</h3>
           <p class="mb-5 text-sm text-gray-500 dark:text-gray-400">
-            上游连接、重试退避与聚合调用的超时设置（Req 4、5、10）。
+            上游连接、重试退避与聚合调用的超时设置。
           </p>
           <div :class="gridClass">
             <div>
@@ -445,6 +485,100 @@ const errClass = 'mt-1 text-xs text-error-500'
           </div>
         </section>
 
+        <section
+          class="rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03]"
+        >
+          <div class="mb-5 flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h3 class="mb-1 text-base font-semibold text-gray-800 dark:text-white/90">安全防护</h3>
+              <p class="text-sm text-gray-500 dark:text-gray-400">
+                控制对外 MCP 入口的鉴权失败记录和自动封禁策略，事件与封禁处置在安全中心查看。
+              </p>
+            </div>
+            <router-link
+              to="/security"
+              class="rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+            >
+              打开安全中心
+            </router-link>
+          </div>
+
+          <div class="mb-5 grid grid-cols-1 gap-3 lg:grid-cols-3">
+            <label
+              v-for="item in securityModes"
+              :key="item.value"
+              class="cursor-pointer rounded-lg border p-3 transition"
+              :class="
+                config.security.mode === item.value
+                  ? 'border-brand-300 bg-brand-50/70 dark:border-brand-500/50 dark:bg-brand-500/[0.08]'
+                  : 'border-gray-200 hover:border-brand-200 hover:bg-brand-50/40 dark:border-gray-800 dark:hover:border-brand-500/30 dark:hover:bg-brand-500/[0.06]'
+              "
+            >
+              <input v-model="config.security.mode" class="sr-only" type="radio" :value="item.value" />
+              <span class="block text-sm font-medium text-gray-800 dark:text-white/90">{{ item.label }}</span>
+              <span class="mt-1 block text-xs leading-5 text-gray-500 dark:text-gray-400">{{ item.desc }}</span>
+            </label>
+          </div>
+          <p v-if="fieldErrors['security.mode']" :class="errClass">{{ fieldErrors['security.mode'] }}</p>
+
+          <div :class="gridClass">
+            <div>
+              <FieldLabel label="失败统计窗口（秒）" required tooltip="在该时间窗口内累计鉴权失败和来源拒绝次数。" />
+              <input v-model.number="config.security.failure_window_s" type="number" min="60" max="3600" :class="inputClass" />
+              <p :class="hintClass">范围 60 - 3600，默认 300。</p>
+              <p v-if="fieldErrors['security.failure_window_s']" :class="errClass">{{ fieldErrors['security.failure_window_s'] }}</p>
+            </div>
+            <div>
+              <FieldLabel label="单 IP 失败阈值" required tooltip="同一来源 IP 在统计窗口内允许的无效 API Key 尝试次数。" />
+              <input v-model.number="config.security.max_failures_per_ip" type="number" min="1" max="10000" :class="inputClass" />
+              <p :class="hintClass">默认 30。公网暴露时可适当收紧。</p>
+              <p v-if="fieldErrors['security.max_failures_per_ip']" :class="errClass">{{ fieldErrors['security.max_failures_per_ip'] }}</p>
+            </div>
+            <div>
+              <FieldLabel label="疑似 Key 失败阈值" required tooltip="同一疑似 API Key 指纹在统计窗口内允许失败的次数。" />
+              <input v-model.number="config.security.max_failures_per_key_fingerprint" type="number" min="1" max="10000" :class="inputClass" />
+              <p :class="hintClass">默认 8。用于识别持续尝试同一无效凭证的来源。</p>
+              <p v-if="fieldErrors['security.max_failures_per_key_fingerprint']" :class="errClass">{{ fieldErrors['security.max_failures_per_key_fingerprint'] }}</p>
+            </div>
+            <div>
+              <FieldLabel label="ACL 拒绝阈值" required tooltip="同一 API Key 与来源 IP 在统计窗口内被来源白名单拒绝的次数。" />
+              <input v-model.number="config.security.max_acl_denies_per_key_ip" type="number" min="1" max="10000" :class="inputClass" />
+              <p :class="hintClass">默认 5。命中后封禁该 API Key 与来源 IP 的组合。</p>
+              <p v-if="fieldErrors['security.max_acl_denies_per_key_ip']" :class="errClass">{{ fieldErrors['security.max_acl_denies_per_key_ip'] }}</p>
+            </div>
+            <div>
+              <FieldLabel label="首次封禁时长（秒）" required tooltip="第一次达到自动封禁阈值后的临时封禁时长。" />
+              <input v-model.number="config.security.first_block_duration_s" type="number" min="60" max="86400" :class="inputClass" />
+              <p :class="hintClass">默认 900，即 15 分钟。</p>
+              <p v-if="fieldErrors['security.first_block_duration_s']" :class="errClass">{{ fieldErrors['security.first_block_duration_s'] }}</p>
+            </div>
+            <div>
+              <FieldLabel label="最长自动封禁（秒）" required tooltip="重复触发封禁升级后允许达到的最长封禁时长。" />
+              <input v-model.number="config.security.max_block_duration_s" type="number" min="60" max="604800" :class="inputClass" />
+              <p :class="hintClass">默认 86400，即 24 小时。</p>
+              <p v-if="fieldErrors['security.max_block_duration_s']" :class="errClass">{{ fieldErrors['security.max_block_duration_s'] }}</p>
+            </div>
+            <div>
+              <FieldLabel label="封禁升级窗口（秒）" required tooltip="在该时间内重复触发同一对象封禁时会逐步延长封禁时长。" />
+              <input v-model.number="config.security.escalation_window_s" type="number" min="300" max="604800" :class="inputClass" />
+              <p :class="hintClass">默认 86400，即 24 小时。</p>
+              <p v-if="fieldErrors['security.escalation_window_s']" :class="errClass">{{ fieldErrors['security.escalation_window_s'] }}</p>
+            </div>
+            <div>
+              <FieldLabel label="可信代理 CIDR" tooltip="每行一个 IP 或 CIDR。只有这些代理来源的转发头会被用于识别真实客户端 IP。" />
+              <textarea v-model="trustedProxyCIDRs" rows="4" :class="[inputClass, 'h-auto py-3 font-mono']" placeholder="10.0.0.0/8"></textarea>
+              <p :class="hintClass">部署在反向代理后时填写代理出口地址。</p>
+              <p v-if="trustedProxyCIDRError" :class="errClass">{{ trustedProxyCIDRError }}</p>
+            </div>
+            <div>
+              <FieldLabel label="自动封禁豁免 CIDR" tooltip="每行一个 IP 或 CIDR。匹配来源仍会记录事件，但不会被自动封禁。" />
+              <textarea v-model="exemptCIDRs" rows="4" :class="[inputClass, 'h-auto py-3 font-mono']" placeholder="192.168.0.0/16"></textarea>
+              <p :class="hintClass">适合内网监控、探活或固定可信出口。</p>
+              <p v-if="exemptCIDRError" :class="errClass">{{ exemptCIDRError }}</p>
+            </div>
+          </div>
+        </section>
+
         <!-- 保留期 -->
         <section
           class="rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03]"
@@ -519,7 +653,7 @@ const errClass = 'mt-1 text-xs text-error-500'
         >
           <h3 class="mb-1 text-base font-semibold text-gray-800 dark:text-white/90">会话</h3>
           <p class="mb-5 text-sm text-gray-500 dark:text-gray-400">
-            管理后台会话令牌的有效期（Req 1.4、1.7）。
+            管理后台会话令牌的有效期。
           </p>
           <div :class="gridClass">
             <div>

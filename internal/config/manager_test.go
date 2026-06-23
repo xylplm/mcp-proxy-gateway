@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
@@ -53,7 +54,7 @@ func TestLoadCreatesDefaultConfigWhenMissing(t *testing.T) {
 
 	// 返回与内存快照均应等于默认配置。
 	want := DefaultYAMLConfig()
-	if got := mgr.Config(); got != want {
+	if got := mgr.Config(); !reflect.DeepEqual(got, want) {
 		t.Errorf("默认配置不一致：\n期望 %+v\n实际 %+v", want, got)
 	}
 }
@@ -163,7 +164,7 @@ func TestSavePersistsConfig(t *testing.T) {
 	}
 
 	// 内存快照应立即更新。
-	if got := mgr.Config(); got != updated {
+	if got := mgr.Config(); !reflect.DeepEqual(got, updated) {
 		t.Errorf("Save 后内存快照不一致：\n期望 %+v\n实际 %+v", updated, got)
 	}
 
@@ -172,7 +173,7 @@ func TestSavePersistsConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("再次 Load 失败：%v", err)
 	}
-	if got := reloaded.Config(); got != updated {
+	if got := reloaded.Config(); !reflect.DeepEqual(got, updated) {
 		t.Errorf("回写持久化后重新读取不一致：\n期望 %+v\n实际 %+v", updated, got)
 	}
 }
@@ -199,7 +200,7 @@ func TestSaveRejectsInvalidConfig(t *testing.T) {
 	}
 
 	// 内存快照应保持不变。
-	if got := mgr.Config(); got != original {
+	if got := mgr.Config(); !reflect.DeepEqual(got, original) {
 		t.Errorf("非法 Save 不应更改内存快照：\n期望 %+v\n实际 %+v", original, got)
 	}
 }
@@ -217,6 +218,7 @@ func TestSaveNormalizesDefaultableFields(t *testing.T) {
 
 	cfg := mgr.Config()
 	cfg.Aggregation.ToolRoutingStrategy = ""
+	cfg.Security = SecurityConfig{}
 	if err := mgr.Save(cfg); err != nil {
 		t.Fatalf("Save 不应返回错误：%v", err)
 	}
@@ -225,6 +227,9 @@ func TestSaveNormalizesDefaultableFields(t *testing.T) {
 	if got.Aggregation.ToolRoutingStrategy != domain.ToolRoutingRoundRobin {
 		t.Fatalf("保存后工具调用策略未归一化：got=%q want=%q", got.Aggregation.ToolRoutingStrategy, domain.ToolRoutingRoundRobin)
 	}
+	if !reflect.DeepEqual(got.Security, DefaultYAMLConfig().Security) {
+		t.Fatalf("保存后安全配置未补齐默认值：got=%+v want=%+v", got.Security, DefaultYAMLConfig().Security)
+	}
 
 	reloaded, err := Load(nil, dataDir)
 	if err != nil {
@@ -232,6 +237,9 @@ func TestSaveNormalizesDefaultableFields(t *testing.T) {
 	}
 	if reloaded.Config().Aggregation.ToolRoutingStrategy != domain.ToolRoutingRoundRobin {
 		t.Fatalf("落盘后的工具调用策略未归一化：got=%q", reloaded.Config().Aggregation.ToolRoutingStrategy)
+	}
+	if !reflect.DeepEqual(reloaded.Config().Security, DefaultYAMLConfig().Security) {
+		t.Fatalf("落盘后的安全配置未补齐默认值：got=%+v", reloaded.Config().Security)
 	}
 }
 

@@ -18,6 +18,7 @@ import (
 	"github.com/myGithub/mcp-proxy-gateway/internal/httpapi"
 	"github.com/myGithub/mcp-proxy-gateway/internal/manager"
 	"github.com/myGithub/mcp-proxy-gateway/internal/mcpapi"
+	"github.com/myGithub/mcp-proxy-gateway/internal/security"
 	"github.com/myGithub/mcp-proxy-gateway/internal/stats"
 	"github.com/myGithub/mcp-proxy-gateway/internal/store"
 	syncsvc "github.com/myGithub/mcp-proxy-gateway/internal/sync"
@@ -112,8 +113,10 @@ func (a *App) build(envCfg config.EnvConfig) error {
 	// --- API Key 管理与对外鉴权链路组件（Req 11.9、12、13、21）---
 	apiKeyMgr := apikey.New(repos.APIKey)
 	apiKeyFilterMgr := apikey.NewFilterManager(repos.FilterAPIKey, ruleEngine)
-	authenticator := apikey.NewAuthenticator(repos.APIKey, a.logger)
-	aclGuard := apikey.NewACLGuard(repos.ACL, a.logger)
+	securityGuard := security.NewGuard(repos.Security, security.NewRedisCache(a.rdb), a.cfg, a.logger)
+	a.securityGuard = securityGuard
+	authenticator := apikey.NewAuthenticator(repos.APIKey, a.logger).WithFailureRecorder(securityGuard)
+	aclGuard := apikey.NewACLGuard(repos.ACL, a.logger).WithDenyRecorder(securityGuard)
 	rateLimiter := apikey.NewRateLimiter(apikey.NewRedisRateCounter(a.rdb), a.logger)
 
 	// --- 认证服务（Auth_Service）+ 管理员 JWT 中间件 ---
@@ -195,6 +198,7 @@ func (a *App) build(envCfg config.EnvConfig) error {
 		Stats:           statQuery,
 		Audit:           auditSvc,
 		AuditRecorder:   a.auditRecorder,
+		Security:        securityGuard,
 		SystemLogs:      a.systemLogs,
 		Templates:       templateMarket,
 	})
@@ -205,6 +209,7 @@ func (a *App) build(envCfg config.EnvConfig) error {
 		adminAuth:      adminAuth,
 		mcpEndpoints:   mcpEndpoints,
 		authenticator:  authenticator,
+		securityGuard:  securityGuard,
 		aclGuard:       aclGuard,
 		rateLimiter:    rateLimiter,
 		detailReporter: detailReporter,

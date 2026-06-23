@@ -26,6 +26,8 @@ type YAMLConfig struct {
 	Statistics StatisticsConfig `yaml:"statistics" json:"statistics"`
 	// Audit 为审计日志配置（Req 22）。
 	Audit AuditConfig `yaml:"audit" json:"audit"`
+	// Security 为对外 MCP API 的安全防护配置。
+	Security SecurityConfig `yaml:"security" json:"security"`
 	// XiaoZhi 为小智接入配置（Req 15）。
 	XiaoZhi XiaoZhiConfig `yaml:"xiaozhi" json:"xiaozhi"`
 }
@@ -111,6 +113,30 @@ type AuditConfig struct {
 	RetentionDays int `yaml:"retention_days" json:"retention_days"`
 }
 
+// SecurityConfig 为对外 MCP API 的鉴权失败防护配置。
+type SecurityConfig struct {
+	// Mode 为防护模式：off/monitor/enforce。
+	Mode string `yaml:"mode" json:"mode"`
+	// FailureWindowS 为失败计数窗口秒数。
+	FailureWindowS int `yaml:"failure_window_s" json:"failure_window_s"`
+	// MaxFailuresPerIP 为单 IP 在窗口内允许的鉴权失败次数。
+	MaxFailuresPerIP int `yaml:"max_failures_per_ip" json:"max_failures_per_ip"`
+	// MaxFailuresPerKeyFingerprint 为同一疑似 Key 指纹在窗口内允许的失败次数。
+	MaxFailuresPerKeyFingerprint int `yaml:"max_failures_per_key_fingerprint" json:"max_failures_per_key_fingerprint"`
+	// MaxACLDeniesPerKeyIP 为同一 API Key + IP 在窗口内允许的 ACL 拒绝次数。
+	MaxACLDeniesPerKeyIP int `yaml:"max_acl_denies_per_key_ip" json:"max_acl_denies_per_key_ip"`
+	// FirstBlockDurationS 为首次自动封禁秒数。
+	FirstBlockDurationS int `yaml:"first_block_duration_s" json:"first_block_duration_s"`
+	// MaxBlockDurationS 为自动封禁最长秒数。
+	MaxBlockDurationS int `yaml:"max_block_duration_s" json:"max_block_duration_s"`
+	// EscalationWindowS 为重复封禁升级观察窗口秒数。
+	EscalationWindowS int `yaml:"escalation_window_s" json:"escalation_window_s"`
+	// TrustedProxyCIDRs 为可信代理出口；只有这些来源的转发头会被安全中心采信。
+	TrustedProxyCIDRs []string `yaml:"trusted_proxy_cidrs" json:"trusted_proxy_cidrs"`
+	// ExemptCIDRs 为自动封禁豁免来源。
+	ExemptCIDRs []string `yaml:"exempt_cidrs" json:"exempt_cidrs"`
+}
+
 // XiaoZhiConfig 为小智接入配置（Req 15）。
 type XiaoZhiConfig struct {
 	// Enabled 表示是否启用小智接入。
@@ -137,6 +163,12 @@ const (
 	LogLevelError = "error"
 )
 
+const (
+	SecurityModeOff     = "off"
+	SecurityModeMonitor = "monitor"
+	SecurityModeEnforce = "enforce"
+)
+
 // ValidLogLevel 判断给定字符串是否为合法的日志级别取值（不含空串）。
 func ValidLogLevel(s string) bool {
 	switch s {
@@ -153,6 +185,31 @@ func NormalizeLogLevel(s string) string {
 		return s
 	}
 	return LogLevelInfo
+}
+
+// ValidSecurityMode 判断给定值是否为合法安全防护模式。
+func ValidSecurityMode(s string) bool {
+	switch s {
+	case SecurityModeOff, SecurityModeMonitor, SecurityModeEnforce:
+		return true
+	default:
+		return false
+	}
+}
+
+func defaultSecurityConfig() SecurityConfig {
+	return SecurityConfig{
+		Mode:                         SecurityModeMonitor,
+		FailureWindowS:               300,
+		MaxFailuresPerIP:             30,
+		MaxFailuresPerKeyFingerprint: 8,
+		MaxACLDeniesPerKeyIP:         5,
+		FirstBlockDurationS:          900,
+		MaxBlockDurationS:            86400,
+		EscalationWindowS:            86400,
+		TrustedProxyCIDRs:            []string{},
+		ExemptCIDRs:                  []string{},
+	}
 }
 
 // DefaultYAMLConfig 返回带有设计文档约定默认值的 YAML 配置（Req 18.5）。
@@ -203,6 +260,7 @@ func DefaultYAMLConfig() YAMLConfig {
 			PageSizeDefault: 20,
 			RetentionDays:   180,
 		},
+		Security: defaultSecurityConfig(),
 		XiaoZhi: XiaoZhiConfig{
 			Enabled:  false,
 			Endpoint: "",
@@ -215,6 +273,37 @@ func DefaultYAMLConfig() YAMLConfig {
 func NormalizeYAMLConfig(cfg YAMLConfig) YAMLConfig {
 	if cfg.Aggregation.ToolRoutingStrategy == "" {
 		cfg.Aggregation.ToolRoutingStrategy = domain.ToolRoutingRoundRobin
+	}
+	defSecurity := defaultSecurityConfig()
+	if cfg.Security.Mode == "" {
+		cfg.Security.Mode = defSecurity.Mode
+	}
+	if cfg.Security.FailureWindowS == 0 {
+		cfg.Security.FailureWindowS = defSecurity.FailureWindowS
+	}
+	if cfg.Security.MaxFailuresPerIP == 0 {
+		cfg.Security.MaxFailuresPerIP = defSecurity.MaxFailuresPerIP
+	}
+	if cfg.Security.MaxFailuresPerKeyFingerprint == 0 {
+		cfg.Security.MaxFailuresPerKeyFingerprint = defSecurity.MaxFailuresPerKeyFingerprint
+	}
+	if cfg.Security.MaxACLDeniesPerKeyIP == 0 {
+		cfg.Security.MaxACLDeniesPerKeyIP = defSecurity.MaxACLDeniesPerKeyIP
+	}
+	if cfg.Security.FirstBlockDurationS == 0 {
+		cfg.Security.FirstBlockDurationS = defSecurity.FirstBlockDurationS
+	}
+	if cfg.Security.MaxBlockDurationS == 0 {
+		cfg.Security.MaxBlockDurationS = defSecurity.MaxBlockDurationS
+	}
+	if cfg.Security.EscalationWindowS == 0 {
+		cfg.Security.EscalationWindowS = defSecurity.EscalationWindowS
+	}
+	if cfg.Security.TrustedProxyCIDRs == nil {
+		cfg.Security.TrustedProxyCIDRs = []string{}
+	}
+	if cfg.Security.ExemptCIDRs == nil {
+		cfg.Security.ExemptCIDRs = []string{}
 	}
 	return cfg
 }

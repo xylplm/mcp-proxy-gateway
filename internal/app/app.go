@@ -26,6 +26,7 @@ import (
 	"github.com/myGithub/mcp-proxy-gateway/internal/health"
 	"github.com/myGithub/mcp-proxy-gateway/internal/manager"
 	"github.com/myGithub/mcp-proxy-gateway/internal/mcpapi"
+	"github.com/myGithub/mcp-proxy-gateway/internal/security"
 	"github.com/myGithub/mcp-proxy-gateway/internal/stats"
 	"github.com/myGithub/mcp-proxy-gateway/internal/store"
 	syncsvc "github.com/myGithub/mcp-proxy-gateway/internal/sync"
@@ -90,6 +91,7 @@ type App struct {
 	xiaozhiConn   *xiaozhi.Connector
 	mcpService    *mcpapi.Service
 	agg           *aggregation.Service
+	securityGuard *security.Guard
 	mgr           *manager.Manager
 	dialer        *sessionDialer
 

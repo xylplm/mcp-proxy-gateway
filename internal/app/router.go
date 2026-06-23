@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/myGithub/mcp-proxy-gateway/internal/health"
 	"github.com/myGithub/mcp-proxy-gateway/internal/httpapi"
 	"github.com/myGithub/mcp-proxy-gateway/internal/mcpapi"
+	"github.com/myGithub/mcp-proxy-gateway/internal/security"
 	"github.com/myGithub/mcp-proxy-gateway/internal/static"
 	"github.com/myGithub/mcp-proxy-gateway/internal/store"
 )
@@ -19,6 +21,7 @@ type routerWiring struct {
 	adminAuth      gin.HandlerFunc
 	mcpEndpoints   *mcpapi.Endpoints
 	authenticator  *apikey.Authenticator
+	securityGuard  *security.Guard
 	aclGuard       *apikey.ACLGuard
 	rateLimiter    *apikey.RateLimiter
 	detailReporter *health.DetailReporter
@@ -42,6 +45,7 @@ func (a *App) buildRouter(w routerWiring) *gin.Engine {
 // /mcp/*，便于把对外 MCP 服务迁移到独立端口后收紧公网暴露面。
 func (a *App) buildAdminRouter(w routerWiring, exposeMCP bool) *gin.Engine {
 	engine := newBaseEngine()
+	a.configureTrustedProxies(engine)
 
 	// 公开存活探针（无鉴权，Req 20.6）。
 	engine.GET("/healthz", health.LivenessHandler())
@@ -76,6 +80,7 @@ func (a *App) buildAdminRouter(w routerWiring, exposeMCP bool) *gin.Engine {
 // 与 SPA 兜底，适合直接暴露到公网并在反向代理层叠加更严格的安全策略。
 func (a *App) buildMCPRouter(w routerWiring, exposeHealthz bool) *gin.Engine {
 	engine := newBaseEngine()
+	a.configureTrustedProxies(engine)
 	if exposeHealthz {
 		engine.GET("/healthz", health.LivenessHandler())
 	}
@@ -90,16 +95,50 @@ func newBaseEngine() *gin.Engine {
 	return engine
 }
 
+func (a *App) configureTrustedProxies(engine *gin.Engine) {
+	if engine == nil || a == nil || a.cfg == nil {
+		return
+	}
+	proxies := a.cfg.Config().Security.TrustedProxyCIDRs
+	cleaned := make([]string, 0, len(proxies))
+	for _, proxy := range proxies {
+		if v := strings.TrimSpace(proxy); v != "" {
+			cleaned = append(cleaned, v)
+		}
+	}
+	if len(cleaned) == 0 {
+		cleaned = nil
+	}
+	if err := engine.SetTrustedProxies(cleaned); err != nil {
+		a.logger.Warn("配置可信代理失败，已禁用转发来源头解析", "error", err)
+		_ = engine.SetTrustedProxies(nil)
+	}
+}
+
 func registerMCPRoutes(engine *gin.Engine, w routerWiring) {
 	// 服务面：对外 MCP API，API Key 鉴权 → 来源白名单 → 限流，三者依次前置（Req 11.8、11.9、13、21）。
 	mcpGroup := engine.Group("/")
+	if w.securityGuard != nil {
+		mcpGroup.Use(w.securityGuard.PreAuthMiddleware())
+	}
 	mcpGroup.Use(w.authenticator.Middleware())
+	if w.securityGuard != nil {
+		mcpGroup.Use(w.securityGuard.PostAuthMiddleware(resolveAPIKeyForSecurity))
+	}
 	mcpGroup.Use(w.aclGuard.Middleware(apikey.MetadataFromContext))
 	mcpGroup.Use(w.rateLimiter.Middleware(apikey.MetadataFromContext))
 	w.mcpEndpoints.Register(mcpGroup)
 
 	// 智能模式端点：与全量模式共享同一套鉴权链。
 	w.mcpEndpoints.RegisterSmart(mcpGroup)
+}
+
+func resolveAPIKeyForSecurity(c *gin.Context) (id, prefix string, ok bool) {
+	meta, ok := apikey.MetadataFromContext(c)
+	if !ok {
+		return "", "", false
+	}
+	return meta.ID, meta.KeyPrefix, true
 }
 
 // repoUpstreamGet 经连接管理器无法直接读取持久化行，故由本方法直接走仓储读取单条上游行。

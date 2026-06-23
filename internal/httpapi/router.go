@@ -266,6 +266,14 @@ type AuditRecorder interface {
 	RecordAccessDenied(ctx context.Context, target, reason string) error
 }
 
+// SecurityService 是安全中心依赖的应用服务窄接口。
+type SecurityService interface {
+	Summary(ctx context.Context) (store.SecuritySummary, error)
+	ListEvents(ctx context.Context, query store.SecurityEventQuery) ([]store.SecurityEvent, error)
+	ListBlocks(ctx context.Context, query store.SecurityBlockQuery) ([]store.SecurityBlock, error)
+	ReleaseBlock(ctx context.Context, id string) (store.SecurityBlock, error)
+}
+
 // SystemLogService 是进程运行日志查询依赖的窄接口。
 type SystemLogService interface {
 	List(afterID int64, level string, limit int) []syslog.Entry
@@ -315,6 +323,8 @@ type Router struct {
 	audit AuditService
 	// auditRecorder 为审计事件异步写入器（登录/增删改/访问被拒）；为 nil 时跳过审计写入。
 	auditRecorder AuditRecorder
+	// security 为安全中心服务。
+	security SecurityService
 	// systemLogs 为进程运行日志缓冲。
 	systemLogs SystemLogService
 	// templates 为模板市场只读查询应用服务。
@@ -342,6 +352,7 @@ type Deps struct {
 	Stats           StatsService
 	Audit           AuditService
 	AuditRecorder   AuditRecorder
+	Security        SecurityService
 	SystemLogs      SystemLogService
 	Templates       TemplateService
 }
@@ -368,6 +379,7 @@ func NewRouter(d Deps) *Router {
 		stats:           d.Stats,
 		audit:           d.Audit,
 		auditRecorder:   d.AuditRecorder,
+		security:        d.Security,
 		systemLogs:      d.SystemLogs,
 		templates:       d.Templates,
 	}
@@ -401,6 +413,7 @@ func (r *Router) Register(router gin.IRouter, adminAuth gin.HandlerFunc) {
 	r.registerToolRoutes(admin)
 	r.registerStatsRoutes(admin)
 	r.registerAuditRoutes(admin)
+	r.registerSecurityRoutes(admin)
 	r.registerSystemLogRoutes(admin)
 	r.registerTemplateRoutes(admin)
 	r.registerProtectedAuthRoutes(admin)
