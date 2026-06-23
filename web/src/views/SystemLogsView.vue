@@ -365,11 +365,16 @@ const controlClass =
                 {{ levelLabel(entry.level) }}
               </span>
               <span class="ml-3 truncate text-gray-200">{{ entry.message }}</span>
-              <span
+              <AppTooltip
                 v-if="entry.source"
-                class="ml-auto shrink-0 pl-3 text-gray-400"
-                :title="entry.source"
-              >{{ entry.source }}</span>
+                :content="entry.source"
+                placement="bottom-end"
+                :wrap="true"
+                tag="span"
+                class="ml-auto min-w-0 shrink-0 pl-3 text-gray-400"
+              >
+                <span class="block max-w-[12rem] truncate">{{ entry.source }}</span>
+              </AppTooltip>
               <span
                 v-if="attrsText(entry) !== ''"
                 class="ml-2 shrink-0 text-gray-400 transition group-hover:text-gray-200"

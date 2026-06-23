@@ -1,27 +1,6 @@
-// import { ref } from 'vue'
-
-// export function useSidebar() {
-//   const isMobileOpen = ref(false)
-//   const isDesktopOpen = ref(true)
-
-//   const toggleSidebar = () => {
-//     isDesktopOpen.value = !isDesktopOpen.value
-//   }
-
-//   const toggleMobileSidebar = () => {
-//     isMobileOpen.value = !isMobileOpen.value
-//   }
-
-//   return {
-//     isMobileOpen,
-//     isDesktopOpen,
-//     toggleSidebar,
-//     toggleMobileSidebar,
-//   }
-// }
-
 import { ref, computed, onMounted, onUnmounted, provide, inject } from 'vue'
-import type { Ref } from 'vue' //
+import type { Ref } from 'vue'
+import { shouldUseSidebarDrawer } from '@/constants/breakpoints'
 
 interface SidebarContextType {
   isExpanded: Ref<boolean>
@@ -31,6 +10,7 @@ interface SidebarContextType {
   openSubmenu: Ref<string | null>
   toggleSidebar: () => void
   toggleMobileSidebar: () => void
+  closeMobileSidebar: () => void
   setIsHovered: (isHovered: boolean) => void
   setActiveItem: (item: string | null) => void
   toggleSubmenu: (item: string) => void
@@ -41,22 +21,22 @@ const SidebarSymbol = Symbol()
 export function useSidebarProvider() {
   const isExpanded = ref(true)
   const isMobileOpen = ref(false)
-  const isMobile = ref(false)
+  const isCompact = ref(false)
   const isHovered = ref(false)
   const activeItem = ref<string | null>(null)
   const openSubmenu = ref<string | null>(null)
 
   const handleResize = () => {
-    const mobile = window.innerWidth < 768
-    isMobile.value = mobile
-    if (!mobile) {
+    const compact = shouldUseSidebarDrawer(window.innerWidth)
+    isCompact.value = compact
+    if (!compact) {
       isMobileOpen.value = false
     }
   }
 
   onMounted(() => {
     handleResize()
-    window.addEventListener('resize', handleResize)
+    window.addEventListener('resize', handleResize, { passive: true })
   })
 
   onUnmounted(() => {
@@ -64,7 +44,7 @@ export function useSidebarProvider() {
   })
 
   const toggleSidebar = () => {
-    if (isMobile.value) {
+    if (isCompact.value) {
       isMobileOpen.value = !isMobileOpen.value
     } else {
       isExpanded.value = !isExpanded.value
@@ -73,6 +53,10 @@ export function useSidebarProvider() {
 
   const toggleMobileSidebar = () => {
     isMobileOpen.value = !isMobileOpen.value
+  }
+
+  const closeMobileSidebar = () => {
+    isMobileOpen.value = false
   }
 
   const setIsHovered = (value: boolean) => {
@@ -88,13 +72,14 @@ export function useSidebarProvider() {
   }
 
   const context: SidebarContextType = {
-    isExpanded: computed(() => (isMobile.value ? false : isExpanded.value)),
+    isExpanded: computed(() => (isCompact.value ? false : isExpanded.value)),
     isMobileOpen,
     isHovered,
     activeItem,
     openSubmenu,
     toggleSidebar,
     toggleMobileSidebar,
+    closeMobileSidebar,
     setIsHovered,
     setActiveItem,
     toggleSubmenu,

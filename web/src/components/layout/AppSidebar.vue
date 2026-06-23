@@ -1,11 +1,11 @@
 <template>
   <aside
     :class="[
-      'fixed top-0 left-0 z-99999 mt-16 flex h-screen flex-col border-r border-gray-200 bg-white px-5 text-gray-900 transition-all duration-300 ease-in-out lg:mt-0 dark:border-gray-800 dark:bg-gray-900',
+      'fixed top-0 left-0 z-99999 mt-16 flex h-[calc(100dvh-4rem)] flex-col border-r border-gray-200 bg-white px-5 text-gray-900 transition-all duration-300 ease-in-out lg:mt-0 lg:h-screen dark:border-gray-800 dark:bg-gray-900',
       {
         'lg:w-[290px]': isExpanded || isMobileOpen || isHovered,
         'lg:w-[90px]': !isExpanded && !isHovered,
-        'w-[290px] translate-x-0': isMobileOpen,
+        'w-[min(290px,calc(100vw_-_24px))] translate-x-0': isMobileOpen,
         '-translate-x-full': !isMobileOpen,
         'lg:translate-x-0': true,
       },
@@ -14,7 +14,7 @@
     @mouseleave="isHovered = false"
   >
     <div :class="['flex py-8', !isExpanded && !isHovered ? 'lg:justify-center' : 'justify-start']">
-      <router-link to="/">
+      <router-link to="/" @click="closeMobileSidebar">
         <img
           v-if="isExpanded || isHovered || isMobileOpen"
           class="dark:hidden"
@@ -61,6 +61,7 @@
                       'menu-item-inactive': !isActive(item.path),
                     },
                   ]"
+                  @click="closeMobileSidebar"
                 >
                   <span
                     :class="[
@@ -104,7 +105,7 @@ import { useSidebar } from '@/composables/useSidebar'
 
 const route = useRoute()
 
-const { isExpanded, isMobileOpen, isHovered } = useSidebar()
+const { isExpanded, isMobileOpen, isHovered, closeMobileSidebar } = useSidebar()
 
 const menuGroups = [
   {

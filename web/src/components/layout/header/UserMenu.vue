@@ -2,6 +2,8 @@
   <div class="relative" ref="dropdownRef">
     <button
       class="flex items-center text-gray-700 dark:text-gray-400"
+      :aria-expanded="dropdownOpen"
+      :aria-label="dropdownOpen ? '收起账户菜单' : '展开账户菜单'"
       @click.prevent="toggleDropdown"
     >
       <!-- 初始/图标头像，不依赖 /images/user/*.jpg -->

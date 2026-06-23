@@ -105,8 +105,8 @@ export const FORM_COLUMNS_BY_BREAKPOINT: Record<BreakpointKey, number> = {
 
 /**
  * 侧边栏在各断点下的展现形态。
- * - `drawer`    抽屉式（汉堡菜单触发覆盖层），用于手机。
- * - `collapsed` 折叠为图标栏常驻，用于平板。
+ * - `drawer`    抽屉式（汉堡菜单触发覆盖层），用于手机和平板。
+ * - `collapsed` 折叠为图标栏常驻，保留给后续更大屏紧凑形态。
  * - `expanded`  完整展开常驻，用于 PC 及以上。
  */
 export const SidebarMode = {
@@ -121,7 +121,7 @@ export type SidebarModeKey = (typeof SidebarMode)[keyof typeof SidebarMode]
 /** 各断点下侧边栏的默认形态。 */
 export const SIDEBAR_MODE_BY_BREAKPOINT: Record<BreakpointKey, SidebarModeKey> = {
   [Breakpoint.Mobile]: SidebarMode.Drawer,
-  [Breakpoint.Tablet]: SidebarMode.Collapsed,
+  [Breakpoint.Tablet]: SidebarMode.Drawer,
   [Breakpoint.Desktop]: SidebarMode.Expanded,
   [Breakpoint.Wide]: SidebarMode.Expanded,
   [Breakpoint.UltraWide]: SidebarMode.Expanded,
@@ -132,6 +132,11 @@ export const SIDEBAR_WIDTH_EXPANDED = 290
 
 /** 侧边栏折叠态（图标栏）宽度（单位 px，与 TailAdmin AppSidebar 的 90px 对齐）。 */
 export const SIDEBAR_WIDTH_COLLAPSED = 90
+
+/** 是否应使用抽屉式侧边栏（手机和平板）。 */
+export function shouldUseSidebarDrawer(width: number): boolean {
+  return width < BREAKPOINT_MIN_WIDTH[Breakpoint.Desktop]
+}
 
 /**
  * 根据视口宽度计算当前断点。
