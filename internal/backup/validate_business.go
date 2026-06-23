@@ -1,6 +1,7 @@
 package backup
 
 import (
+	"errors"
 	"fmt"
 	"net/netip"
 	"strings"
@@ -14,6 +15,7 @@ import (
 // domain.CodeBackupInvalid 错误。
 func validateBusiness(bc BusinessConfig) error {
 	fields := make(map[string]string)
+	ruleEngine := domain.NewRuleEngine()
 
 	seenUpstreamID := make(map[string]struct{})
 	for i, u := range bc.Upstreams {
@@ -39,6 +41,7 @@ func validateBusiness(bc BusinessConfig) error {
 			fields[prefix+".pattern"] = "别名规则匹配模式不能为空"
 		}
 		validateRuleScope(fields, prefix, ar.ScopeType, ar.UpstreamIDs, seenUpstreamID)
+		mergeRuleValidation(fields, prefix, ruleEngine.ValidateAlias(ar))
 	}
 	for i, fr := range bc.MCPFilterRules {
 		prefix := fmt.Sprintf("mcpFilterRules[%d]", i)
@@ -46,6 +49,7 @@ func validateBusiness(bc BusinessConfig) error {
 			fields[prefix+".pattern"] = "屏蔽规则匹配模式不能为空"
 		}
 		validateRuleScope(fields, prefix, fr.ScopeType, fr.UpstreamIDs, seenUpstreamID)
+		mergeRuleValidation(fields, prefix, ruleEngine.ValidateFilter(fr))
 	}
 
 	seenKeyID := make(map[string]struct{})
@@ -65,6 +69,7 @@ func validateBusiness(bc BusinessConfig) error {
 			if strings.TrimSpace(fr.Pattern) == "" {
 				fields[fmt.Sprintf("%s.filterRules[%d].pattern", prefix, j)] = "屏蔽规则匹配模式不能为空"
 			}
+			mergeRuleValidation(fields, fmt.Sprintf("%s.filterRules[%d]", prefix, j), ruleEngine.ValidateFilter(fr))
 		}
 		for j, cidr := range k.ACLCIDRs {
 			if _, err := netip.ParsePrefix(cidr); err != nil {
@@ -83,6 +88,20 @@ func validateBusiness(bc BusinessConfig) error {
 		}
 	}
 	return nil
+}
+
+func mergeRuleValidation(fields map[string]string, prefix string, err error) {
+	if err == nil {
+		return
+	}
+	var apiErr *domain.APIError
+	if errors.As(err, &apiErr) {
+		for key, msg := range apiErr.Fields {
+			fields[prefix+"."+key] = msg
+		}
+		return
+	}
+	fields[prefix] = err.Error()
 }
 
 func validateRuleScope(fields map[string]string, prefix, scopeType string, upstreamIDs []string, upstreams map[string]struct{}) {

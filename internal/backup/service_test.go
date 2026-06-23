@@ -185,3 +185,14 @@ func assertBackupInvalid(t *testing.T, err error) {
 		t.Fatalf("期望错误码 %q，实际 %q（%s）", domain.CodeBackupInvalid, apiErr.Code, apiErr.Message)
 	}
 }
+
+func assertBackupField(t *testing.T, err error, field string) {
+	t.Helper()
+	var apiErr *domain.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("期望错误类型为 *domain.APIError，实际为 %T：%v", err, err)
+	}
+	if apiErr.Fields[field] == "" {
+		t.Fatalf("期望字段 %q 有校验错误，实际 fields=%+v", field, apiErr.Fields)
+	}
+}

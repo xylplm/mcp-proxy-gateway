@@ -153,7 +153,7 @@ func genValidAliasRule(t *rapid.T, upstreamIDs []string, label string) domain.Al
 		Pattern:     genNonEmptyToken(t, label+"_pattern"),
 		IsRegex:     rapid.Bool().Draw(t, label+"_isRegex"),
 		TargetName:  genNonEmptyToken(t, label+"_targetName"),
-		TargetDesc:  rapid.String().Draw(t, label+"_targetDesc"),
+		TargetDesc:  rapid.StringMatching(`[a-zA-Z0-9_\- ]{0,80}`).Draw(t, label+"_targetDesc"),
 		SortOrder:   rapid.IntRange(0, 100).Draw(t, label+"_sortOrder"),
 	}
 }

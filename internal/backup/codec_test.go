@@ -2,6 +2,7 @@ package backup
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/config"
@@ -66,4 +67,40 @@ func TestValidateRejectsEmptyUpstreamName(t *testing.T) {
 	biz.Upstreams[0].Config.Name = ""
 	b := Backup{Version: FormatVersion, YAML: config.DefaultYAMLConfig(), Business: biz}
 	assertBackupInvalid(t, Validate(b))
+}
+
+// TestValidateRejectsAliasWithoutTarget 验证备份导入复用领域别名规则校验，
+// 不允许绕过管理 API 导入缺少目标名称/描述的别名规则。
+func TestValidateRejectsAliasWithoutTarget(t *testing.T) {
+	biz := sampleBusiness()
+	biz.AliasRules[0].TargetName = ""
+	biz.AliasRules[0].TargetDesc = ""
+	b := Backup{Version: FormatVersion, YAML: config.DefaultYAMLConfig(), Business: biz}
+
+	err := Validate(b)
+	assertBackupInvalid(t, err)
+	assertBackupField(t, err, "aliasRules[0].targetName")
+}
+
+// TestValidateRejectsInvalidRegexFilter 验证备份中的 MCP 级屏蔽规则仍需满足领域正则校验。
+func TestValidateRejectsInvalidRegexFilter(t *testing.T) {
+	biz := sampleBusiness()
+	biz.MCPFilterRules[0].Pattern = "["
+	biz.MCPFilterRules[0].IsRegex = true
+	b := Backup{Version: FormatVersion, YAML: config.DefaultYAMLConfig(), Business: biz}
+
+	err := Validate(b)
+	assertBackupInvalid(t, err)
+	assertBackupField(t, err, "mcpFilterRules[0].pattern")
+}
+
+// TestValidateRejectsInvalidAPIKeyFilter 验证 API Key 从属屏蔽规则同样不能绕过领域规则校验。
+func TestValidateRejectsInvalidAPIKeyFilter(t *testing.T) {
+	biz := sampleBusiness()
+	biz.APIKeys[0].FilterRules[0].Pattern = strings.Repeat("x", 201)
+	b := Backup{Version: FormatVersion, YAML: config.DefaultYAMLConfig(), Business: biz}
+
+	err := Validate(b)
+	assertBackupInvalid(t, err)
+	assertBackupField(t, err, "apiKeys[0].filterRules[0].pattern")
 }
