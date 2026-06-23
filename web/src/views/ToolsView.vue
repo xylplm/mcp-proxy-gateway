@@ -5,6 +5,7 @@ import PageBreadcrumb from '@/components/common/PageBreadcrumb.vue'
 import { getAggregatedTools, type ToolDef, type ToolDetail, type ToolSource } from '@/api/tools'
 import type { UpstreamRateLimits } from '@/api/rateLimits'
 import { RefreshIcon } from '@/icons'
+import { explainToolGovernance, type ToolGovernanceTone } from '@/utils/toolGovernanceExplain'
 
 type ConflictFilter = 'all' | 'conflict' | 'multi'
 
@@ -64,6 +65,9 @@ const selectedToolDetail = computed<ToolDetail | null>(() => {
   if (selectedToolName.value === '') return null
   return toolDetailsByName.value.get(selectedToolName.value) ?? null
 })
+const selectedGovernance = computed(() =>
+  selectedToolDetail.value === null ? null : explainToolGovernance(selectedToolDetail.value),
+)
 
 const totalSourceCount = computed(() =>
   toolDetails.value.reduce((sum, detail) => sum + (detail.sources?.length ?? 0), 0),
@@ -178,6 +182,19 @@ function sourceStatusClass(source: ToolSource): string {
     return 'bg-warning-50 text-warning-700 dark:bg-warning-500/10 dark:text-warning-400'
   }
   return 'bg-success-50 text-success-700 dark:bg-success-500/10 dark:text-success-400'
+}
+
+function governanceToneClass(tone: ToolGovernanceTone): string {
+  switch (tone) {
+    case 'success':
+      return 'border-success-100 bg-success-50 text-success-700 dark:border-success-500/20 dark:bg-success-500/10 dark:text-success-300'
+    case 'warning':
+      return 'border-warning-200 bg-warning-50 text-warning-700 dark:border-warning-500/30 dark:bg-warning-500/10 dark:text-warning-300'
+    case 'info':
+      return 'border-brand-100 bg-brand-50 text-brand-700 dark:border-brand-500/20 dark:bg-brand-500/10 dark:text-brand-300'
+    default:
+      return 'border-gray-200 bg-gray-50 text-gray-600 dark:border-gray-800 dark:bg-white/[0.03] dark:text-gray-300'
+  }
 }
 
 onMounted(() => {
@@ -397,6 +414,36 @@ onMounted(() => {
             >
               同名来源的入参 Schema 不完全一致，调用时只会选择与当前展示 Schema 一致的来源。
             </div>
+
+            <section
+              v-if="selectedGovernance !== null"
+              class="mt-4 rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-white/[0.02]"
+            >
+              <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div class="min-w-0">
+                  <h4 class="text-sm font-semibold text-gray-800 dark:text-white/90">
+                    {{ selectedGovernance.title }}
+                  </h4>
+                  <p class="mt-1 text-sm leading-6 text-gray-500 dark:text-gray-400">
+                    {{ selectedGovernance.description }}
+                  </p>
+                </div>
+                <span class="shrink-0 rounded-full bg-gray-100 px-2.5 py-1 text-xs text-gray-600 dark:bg-white/5 dark:text-gray-400">
+                  治理解释
+                </span>
+              </div>
+              <div class="mt-4 grid grid-cols-1 gap-2 md:grid-cols-2">
+                <div
+                  v-for="item in selectedGovernance.items"
+                  :key="item.key"
+                  class="rounded-lg border px-3 py-2"
+                  :class="governanceToneClass(item.tone)"
+                >
+                  <p class="text-xs font-semibold">{{ item.title }}</p>
+                  <p class="mt-1 text-xs leading-5 opacity-90">{{ item.description }}</p>
+                </div>
+              </div>
+            </section>
 
             <div class="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
               <div
