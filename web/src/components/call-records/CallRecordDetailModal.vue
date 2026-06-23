@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import type { CallRecord } from '@/api/stats'
+import { buildCallTraceTimeline, type CallTraceTone } from '@/utils/callTraceTimeline'
 
 const props = defineProps<{
   open: boolean
@@ -39,6 +40,7 @@ const diagnosticInsight = computed(() => {
   if (detail.value === null || statusOf(detail.value) === 'success') return null
   return buildDiagnosticInsight(detail.value)
 })
+const traceTimeline = computed(() => (detail.value === null ? [] : buildCallTraceTimeline(detail.value)))
 
 function formatDateTime(value: string): string {
   const date = new Date(value)
@@ -183,6 +185,36 @@ function sourceLabel(item: CallRecord): string {
   return item.APIKeyName || item.APIKeyID || 'API 调用'
 }
 
+function traceDotClass(tone: CallTraceTone): string {
+  switch (tone) {
+    case 'success':
+      return 'border-success-200 bg-success-500 dark:border-success-500/30'
+    case 'warning':
+      return 'border-warning-200 bg-warning-500 dark:border-warning-500/30'
+    case 'error':
+      return 'border-error-200 bg-error-500 dark:border-error-500/30'
+    case 'info':
+      return 'border-brand-200 bg-brand-500 dark:border-brand-500/30'
+    default:
+      return 'border-gray-200 bg-gray-400 dark:border-gray-700'
+  }
+}
+
+function traceTimeClass(tone: CallTraceTone): string {
+  switch (tone) {
+    case 'success':
+      return 'bg-success-50 text-success-700 dark:bg-success-500/10 dark:text-success-400'
+    case 'warning':
+      return 'bg-warning-50 text-warning-700 dark:bg-warning-500/10 dark:text-warning-400'
+    case 'error':
+      return 'bg-error-50 text-error-600 dark:bg-error-500/10 dark:text-error-400'
+    case 'info':
+      return 'bg-brand-50 text-brand-600 dark:bg-brand-500/10 dark:text-brand-400'
+    default:
+      return 'bg-gray-100 text-gray-600 dark:bg-white/5 dark:text-gray-400'
+  }
+}
+
 function prettify(value: unknown): string {
   if (value === null || value === undefined) return 'null'
   if (typeof value === 'string') {
@@ -321,6 +353,63 @@ onUnmounted(() => {
               </p>
             </div>
           </div>
+
+          <section class="mt-5 rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-white/[0.02]">
+            <div class="mb-4 flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h4 class="text-sm font-semibold text-gray-800 dark:text-white/90">调用链路</h4>
+                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  从入口、路由、上游调用到结果返回的关键步骤。
+                </p>
+              </div>
+              <span class="rounded-full bg-gray-100 px-2.5 py-1 text-xs text-gray-600 dark:bg-white/5 dark:text-gray-400">
+                {{ traceTimeline.length }} 步
+              </span>
+            </div>
+            <ol class="space-y-4">
+              <li
+                v-for="(item, index) in traceTimeline"
+                :key="item.key"
+                class="relative flex gap-3"
+              >
+                <div class="flex flex-col items-center">
+                  <span
+                    class="mt-0.5 h-3 w-3 rounded-full border-4"
+                    :class="traceDotClass(item.tone)"
+                    aria-hidden="true"
+                  />
+                  <span
+                    v-if="index < traceTimeline.length - 1"
+                    class="mt-1 h-full min-h-10 w-px bg-gray-200 dark:bg-gray-800"
+                    aria-hidden="true"
+                  />
+                </div>
+                <div class="min-w-0 flex-1 pb-1">
+                  <div class="flex flex-wrap items-center gap-2">
+                    <h5 class="text-sm font-medium text-gray-800 dark:text-white/90">
+                      {{ item.label }}
+                    </h5>
+                    <span class="rounded-full px-2 py-0.5 text-xs font-medium" :class="traceTimeClass(item.tone)">
+                      {{ item.timeLabel }}
+                    </span>
+                  </div>
+                  <p class="mt-1 text-sm leading-6 text-gray-600 dark:text-gray-300">
+                    {{ item.description }}
+                  </p>
+                  <div v-if="item.meta.length > 0" class="mt-2 flex flex-wrap gap-2">
+                    <span
+                      v-for="meta in item.meta"
+                      :key="`${item.key}-${meta.label}`"
+                      class="max-w-full rounded-lg bg-gray-50 px-2.5 py-1 text-xs text-gray-500 dark:bg-gray-800/70 dark:text-gray-400"
+                    >
+                      <span class="text-gray-400 dark:text-gray-500">{{ meta.label }}：</span>
+                      <span class="break-all font-medium text-gray-700 dark:text-gray-200">{{ meta.value }}</span>
+                    </span>
+                  </div>
+                </div>
+              </li>
+            </ol>
+          </section>
 
           <!-- 失败详情 -->
           <section
