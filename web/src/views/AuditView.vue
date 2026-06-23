@@ -12,7 +12,9 @@
 import { computed, onMounted, ref } from 'vue'
 import AdminLayout from '@/components/layout/AdminLayout.vue'
 import PageBreadcrumb from '@/components/common/PageBreadcrumb.vue'
+import { ArchiveIcon } from '@/icons'
 import {
+  exportAudit,
   listAudit,
   AUDIT_EVENT_LABELS,
   AUDIT_DEFAULT_PAGE_SIZE,
@@ -30,6 +32,7 @@ const startTime = ref('')
 const endTime = ref('')
 
 const loading = ref(false)
+const exporting = ref(false)
 const loadError = ref('')
 
 /** 总页数（至少 1 页，便于禁用「下一页」判断）。 */
@@ -88,13 +91,7 @@ async function load(): Promise<void> {
   loading.value = true
   loadError.value = ''
   try {
-    const res = await listAudit({
-      page: page.value,
-      pageSize: pageSize.value,
-      eventType: eventType.value,
-      start: toRFC3339(startTime.value),
-      end: toRFC3339(endTime.value),
-    })
+    const res = await listAudit(auditQuery())
     records.value = res.records
     // 回显后端收敛后的实际分页参数与总数。
     page.value = res.page
@@ -104,6 +101,43 @@ async function load(): Promise<void> {
     loadError.value = err instanceof Error ? err.message : '加载审计日志失败'
   } finally {
     loading.value = false
+  }
+}
+
+function auditQuery() {
+  return {
+    page: page.value,
+    pageSize: pageSize.value,
+    eventType: eventType.value,
+    start: toRFC3339(startTime.value),
+    end: toRFC3339(endTime.value),
+  }
+}
+
+function auditFileNameNow(): string {
+  const d = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `mpg-audit-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.json`
+}
+
+async function downloadAudit(): Promise<void> {
+  if (exporting.value) return
+  exporting.value = true
+  loadError.value = ''
+  try {
+    const blob = await exportAudit(auditQuery())
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = auditFileNameNow()
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+  } catch (err) {
+    loadError.value = err instanceof Error ? err.message : '导出审计日志失败'
+  } finally {
+    exporting.value = false
   }
 }
 
@@ -178,6 +212,16 @@ const pagerBtnClass =
           </p>
         </div>
         <div class="flex items-center gap-2">
+          <button
+            v-tooltip:bottom="'导出当前页'"
+            type="button"
+            class="inline-flex h-9 items-center gap-1.5 rounded-lg border border-gray-300 px-3 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:opacity-60 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+            :disabled="loading || exporting"
+            @click="downloadAudit"
+          >
+            <ArchiveIcon class="h-4 w-4" />
+            导出
+          </button>
           <label class="text-sm text-gray-500 dark:text-gray-400">每页</label>
           <input
             v-model.number="pageSize"

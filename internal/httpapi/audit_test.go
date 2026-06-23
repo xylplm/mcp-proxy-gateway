@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"testing"
 	"time"
@@ -95,6 +96,32 @@ func TestQueryAuditParsesFilters(t *testing.T) {
 	}
 }
 
+func TestExportAuditReturnsDownload(t *testing.T) {
+	a := &fakeAudit{result: audit.PageResult{
+		Records:  []store.AuditRecord{{ID: 9, EventType: store.AuditEventUpdate, Target: "settings"}},
+		Page:     1,
+		PageSize: 20,
+		Total:    1,
+	}}
+	e := newTestEngine(Deps{Audit: a})
+
+	w := doJSON(e, http.MethodGet, "/api/admin/audit/export?page=1&pageSize=20&eventType=update", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("期望 HTTP 200，实际 %d，响应体 %s", w.Code, w.Body.String())
+	}
+	var got []store.AuditRecord
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("导出响应应为 JSON 数组：%v", err)
+	}
+	if len(got) != 1 || got[0].ID != 9 || got[0].EventType != store.AuditEventUpdate {
+		t.Fatalf("导出审计记录不符合预期：%+v", got)
+	}
+	if a.gotPage != 1 || a.gotSize != 20 || a.gotQuery.EventType != store.AuditEventUpdate {
+		t.Fatalf("应透传分页和筛选参数，实际 page=%d size=%d query=%+v", a.gotPage, a.gotSize, a.gotQuery)
+	}
+	assertDownloadHeaders(t, w, "mpg-audit-")
+}
+
 // TestQueryAuditInvalidPageMapsTo400 验证非整数分页参数返回字段级 400。
 func TestQueryAuditInvalidPageMapsTo400(t *testing.T) {
 	a := &fakeAudit{}
@@ -103,6 +130,11 @@ func TestQueryAuditInvalidPageMapsTo400(t *testing.T) {
 	w := doJSON(e, http.MethodGet, "/api/admin/audit?page=abc", "")
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("非法分页参数期望 HTTP 400，实际 %d", w.Code)
+	}
+
+	w = doJSON(e, http.MethodGet, "/api/admin/audit/export?page=abc", "")
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("导出非法分页参数期望 HTTP 400，实际 %d", w.Code)
 	}
 }
 
@@ -119,6 +151,11 @@ func TestQueryAuditInvalidFilterMapsTo400(t *testing.T) {
 		if w.Code != http.StatusBadRequest {
 			t.Fatalf("%s 期望 HTTP 400，实际 %d", path, w.Code)
 		}
+	}
+
+	w := doJSON(e, http.MethodGet, "/api/admin/audit/export?eventType=unknown", "")
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("导出非法筛选参数期望 HTTP 400，实际 %d", w.Code)
 	}
 }
 

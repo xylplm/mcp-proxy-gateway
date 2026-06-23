@@ -24,6 +24,7 @@ import (
 // registerAuditRoutes 在管理分组下注册审计日志查询端点（Req 22.4）。
 func (r *Router) registerAuditRoutes(g *gin.RouterGroup) {
 	g.GET("/audit", r.queryAudit)
+	g.GET("/audit/export", r.exportAudit)
 }
 
 // queryAudit 按发生时间倒序分页返回审计记录（Req 22.4）。
@@ -55,6 +56,31 @@ func (r *Router) queryAudit(c *gin.Context) {
 		"pageSize": result.PageSize,
 		"total":    result.Total,
 	})
+}
+
+func (r *Router) exportAudit(c *gin.Context) {
+	if r.audit == nil {
+		respondServiceUnavailable(c, "审计查询服务未就绪")
+		return
+	}
+	page, ok := parseOptionalInt(c, "page")
+	if !ok {
+		return
+	}
+	pageSize, ok := parseOptionalInt(c, "pageSize")
+	if !ok {
+		return
+	}
+	query, ok := parseAuditQuery(c)
+	if !ok {
+		return
+	}
+	result, err := r.audit.List(c.Request.Context(), page, pageSize, query)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	respondJSONDownload(c, "mpg-audit-"+time.Now().Format("20060102-150405")+".json", result.Records)
 }
 
 func parseAuditQuery(c *gin.Context) (audit.Query, bool) {

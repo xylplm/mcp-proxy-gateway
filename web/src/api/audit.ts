@@ -84,6 +84,23 @@ export const AUDIT_DEFAULT_PAGE_SIZE = 20
  * pageSize 超过 200 收敛为 200。响应回显实际生效的 page/pageSize 与总数。
  */
 export async function listAudit(query: AuditQuery = {}): Promise<AuditPage> {
+  const params = buildAuditParams(query)
+  const res = await request.get<AuditResponse>('/audit', { params })
+  return {
+    records: res.data?.records ?? [],
+    page: res.data?.page ?? 1,
+    pageSize: res.data?.pageSize ?? AUDIT_DEFAULT_PAGE_SIZE,
+    total: res.data?.total ?? 0,
+  }
+}
+
+export async function exportAudit(query: AuditQuery = {}): Promise<Blob> {
+  const params = buildAuditParams(query)
+  const res = await request.get<Blob>('/audit/export', { params, responseType: 'blob' })
+  return res.data
+}
+
+function buildAuditParams(query: AuditQuery): Record<string, string> {
   const params: Record<string, string> = {}
   if (query.page !== undefined && query.page > 0) {
     params.page = String(query.page)
@@ -100,11 +117,5 @@ export async function listAudit(query: AuditQuery = {}): Promise<AuditPage> {
   if (query.end !== undefined && query.end !== '') {
     params.end = query.end
   }
-  const res = await request.get<AuditResponse>('/audit', { params })
-  return {
-    records: res.data?.records ?? [],
-    page: res.data?.page ?? 1,
-    pageSize: res.data?.pageSize ?? AUDIT_DEFAULT_PAGE_SIZE,
-    total: res.data?.total ?? 0,
-  }
+  return params
 }
