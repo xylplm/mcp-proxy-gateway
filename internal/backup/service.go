@@ -65,9 +65,11 @@ func (s *Service) Export(ctx context.Context) ([]byte, error) {
 // 流程：
 //  1. 解析备份文件字节；格式非法返回备份无效错误（Req 23.6）。
 //  2. 校验版本、YAML 配置与业务配置；校验失败返回备份无效错误（Req 23.6）。
-//  3. 先应用业务配置（整体替换），再保存 YAML 常规配置（Req 23.5）。
+//  3. 保存 YAML 常规配置，再应用业务配置（整体替换）（Req 23.5）。
 //
 // 注意：仅在校验全部通过后才开始应用，避免对非法备份产生部分写入。
+// 业务配置替换在数据库事务中完成；若业务替换失败，服务会尽力写回导入前的 YAML 配置，
+// 避免用户在失败响应后落入 YAML 已变更、业务仍旧的半导入状态。
 func (s *Service) Import(ctx context.Context, data []byte) error {
 	if s.yaml == nil || s.business == nil {
 		return domain.NewError(domain.CodeValidation, "备份服务未正确装配")
@@ -78,13 +80,15 @@ func (s *Service) Import(ctx context.Context, data []byte) error {
 		return err
 	}
 
-	// 先应用业务配置（整体替换库中现有上游/规则/API Key）。
-	if err := s.business.ImportBusiness(ctx, b.Business); err != nil {
+	previousYAML := s.yaml.Config()
+	if err := s.yaml.Save(b.YAML); err != nil {
 		return err
 	}
 
-	// 再保存 YAML 常规配置（Save 内部会再次做范围校验）。
-	if err := s.yaml.Save(b.YAML); err != nil {
+	if err := s.business.ImportBusiness(ctx, b.Business); err != nil {
+		if restoreErr := s.yaml.Save(previousYAML); restoreErr != nil {
+			return domain.NewError(domain.CodeInternal, "导入业务配置失败，且恢复原 YAML 配置失败，请检查配置文件写入权限后从备份重试")
+		}
 		return err
 	}
 	return nil

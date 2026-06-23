@@ -13,12 +13,18 @@ import (
 
 // fakeYAMLStore 是 YAMLStore 的内存实现，便于在不触及文件系统的前提下测试 Service。
 type fakeYAMLStore struct {
-	cfg config.YAMLConfig
+	cfg     config.YAMLConfig
+	saveErr error
+	saves   int
 }
 
 func (f *fakeYAMLStore) Config() config.YAMLConfig { return f.cfg }
 
 func (f *fakeYAMLStore) Save(cfg config.YAMLConfig) error {
+	f.saves++
+	if f.saveErr != nil {
+		return f.saveErr
+	}
 	// 模仿 config.Manager.Save 的语义：先校验再应用。
 	if err := config.ValidateYAMLConfig(cfg); err != nil {
 		return err
@@ -29,7 +35,9 @@ func (f *fakeYAMLStore) Save(cfg config.YAMLConfig) error {
 
 // fakeBusinessStore 是 BusinessStore 的内存实现。
 type fakeBusinessStore struct {
-	bc BusinessConfig
+	bc        BusinessConfig
+	importErr error
+	imports   int
 }
 
 func (f *fakeBusinessStore) ExportBusiness(_ context.Context) (BusinessConfig, error) {
@@ -37,6 +45,10 @@ func (f *fakeBusinessStore) ExportBusiness(_ context.Context) (BusinessConfig, e
 }
 
 func (f *fakeBusinessStore) ImportBusiness(_ context.Context, bc BusinessConfig) error {
+	f.imports++
+	if f.importErr != nil {
+		return f.importErr
+	}
 	f.bc = bc
 	return nil
 }
@@ -168,6 +180,69 @@ func TestImportDoesNotApplyInvalidBackup(t *testing.T) {
 
 	if len(dstBiz.bc.Upstreams) != len(before.Upstreams) {
 		t.Errorf("非法备份不应改动业务配置，却发生变更")
+	}
+}
+
+func TestImportRestoresYAMLWhenBusinessImportFails(t *testing.T) {
+	originalYAML := config.DefaultYAMLConfig()
+	originalYAML.MCPAPI.SmartDiscoveryLimit = 12
+	importYAML := config.DefaultYAMLConfig()
+	importYAML.MCPAPI.SmartDiscoveryLimit = 88
+	originalBusiness := sampleBusiness()
+	importBusiness := sampleBusiness()
+	importBusiness.Upstreams[0].Config.Name = "imported-upstream"
+
+	data, err := Marshal(Backup{Version: FormatVersion, YAML: importYAML, Business: importBusiness})
+	if err != nil {
+		t.Fatalf("序列化备份失败：%v", err)
+	}
+
+	yamlStore := &fakeYAMLStore{cfg: originalYAML}
+	businessStore := &fakeBusinessStore{bc: originalBusiness, importErr: errors.New("database unavailable")}
+	svc := NewService(yamlStore, businessStore)
+
+	if err := svc.Import(context.Background(), data); err == nil {
+		t.Fatal("业务导入失败时应返回错误")
+	}
+	if !reflect.DeepEqual(yamlStore.cfg, originalYAML) {
+		t.Fatalf("业务导入失败后应恢复原 YAML 配置\n原始=%+v\n实际=%+v", originalYAML, yamlStore.cfg)
+	}
+	if !reflect.DeepEqual(businessStore.bc, originalBusiness) {
+		t.Fatalf("业务导入失败不应改动业务配置\n原始=%+v\n实际=%+v", originalBusiness, businessStore.bc)
+	}
+	if yamlStore.saves != 2 {
+		t.Fatalf("应先保存导入 YAML，再失败后恢复一次，实际保存 %d 次", yamlStore.saves)
+	}
+}
+
+func TestImportDoesNotApplyBusinessWhenYAMLSaveFails(t *testing.T) {
+	originalYAML := config.DefaultYAMLConfig()
+	importYAML := config.DefaultYAMLConfig()
+	importYAML.MCPAPI.SmartDiscoveryLimit = 99
+	originalBusiness := sampleBusiness()
+	importBusiness := sampleBusiness()
+	importBusiness.Upstreams[0].Config.Name = "imported-upstream"
+
+	data, err := Marshal(Backup{Version: FormatVersion, YAML: importYAML, Business: importBusiness})
+	if err != nil {
+		t.Fatalf("序列化备份失败：%v", err)
+	}
+
+	yamlStore := &fakeYAMLStore{cfg: originalYAML, saveErr: errors.New("disk readonly")}
+	businessStore := &fakeBusinessStore{bc: originalBusiness}
+	svc := NewService(yamlStore, businessStore)
+
+	if err := svc.Import(context.Background(), data); err == nil {
+		t.Fatal("YAML 保存失败时应返回错误")
+	}
+	if !reflect.DeepEqual(yamlStore.cfg, originalYAML) {
+		t.Fatalf("YAML 保存失败不应改动内存配置\n原始=%+v\n实际=%+v", originalYAML, yamlStore.cfg)
+	}
+	if !reflect.DeepEqual(businessStore.bc, originalBusiness) {
+		t.Fatalf("YAML 保存失败不应导入业务配置\n原始=%+v\n实际=%+v", originalBusiness, businessStore.bc)
+	}
+	if businessStore.imports != 0 {
+		t.Fatalf("YAML 保存失败时不应触发业务导入，实际 %d 次", businessStore.imports)
 	}
 }
 
