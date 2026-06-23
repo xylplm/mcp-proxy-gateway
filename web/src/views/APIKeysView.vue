@@ -11,7 +11,7 @@
  * 风格：Tailwind 工具类 + TailAdmin 组件风格（卡片、表格、徽章、按钮、开关、分页、模态框）；
  * 响应式：分页条数来自 useBreakpoint，小屏下表格可横向滚动。
  */
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import AdminLayout from '@/components/layout/AdminLayout.vue'
 import PageBreadcrumb from '@/components/common/PageBreadcrumb.vue'
 import APIKeyCreateModal from '@/components/apikeys/APIKeyCreateModal.vue'
@@ -46,6 +46,7 @@ const revealed = ref<Set<string>>(new Set())
 
 /** 分页：当前页（1 起）。 */
 const currentPage = ref(1)
+const searchKeyword = ref('')
 
 /** 各类弹窗开关与目标。 */
 const createOpen = ref(false)
@@ -54,13 +55,25 @@ const created = ref<CreatedAPIKey | null>(null)
 /** 当前配置目标。 */
 const configuring = ref<APIKey | null>(null)
 
+const normalizedSearchKeyword = computed(() => searchKeyword.value.trim().toLowerCase())
+const hasSearchKeyword = computed(() => normalizedSearchKeyword.value !== '')
+const filteredAPIKeys = computed(() => {
+  const keyword = normalizedSearchKeyword.value
+  if (keyword === '') return apiKeys.value
+  return apiKeys.value.filter((key) => apiKeySearchText(key).includes(keyword))
+})
+const apiKeyCountLabel = computed(() => {
+  if (!hasSearchKeyword.value) return `共 ${apiKeys.value.length} 个 API Key`
+  return `匹配 ${filteredAPIKeys.value.length} / 共 ${apiKeys.value.length} 个 API Key`
+})
+
 /** 总页数。 */
-const totalPages = computed(() => Math.max(1, Math.ceil(apiKeys.value.length / pageSize.value)))
+const totalPages = computed(() => Math.max(1, Math.ceil(filteredAPIKeys.value.length / pageSize.value)))
 
 /** 当前页展示切片。 */
 const pagedKeys = computed(() => {
   const start = (currentPage.value - 1) * pageSize.value
-  return apiKeys.value.slice(start, start + pageSize.value)
+  return filteredAPIKeys.value.slice(start, start + pageSize.value)
 })
 
 /** 标记/解除行级繁忙态。 */
@@ -85,6 +98,30 @@ function formatTime(value?: string): string {
   const d = new Date(value)
   return Number.isNaN(d.getTime()) ? value : d.toLocaleString()
 }
+
+function apiKeySearchText(key: APIKey): string {
+  const rateLimit = key.rateLimit && key.rateWindowS ? `限流 ${key.rateLimit}/${key.rateWindowS}s` : '不限流'
+  const expires = key.expiresAt === undefined ? '永不过期' : `${formatTime(key.expiresAt)} ${isExpired(key) ? '已过期' : '有效'}`
+  return [
+    key.name,
+    key.id,
+    key.keyPrefix,
+    key.plaintextKey,
+    key.enabled ? '已启用 enabled' : '已停用 disabled',
+    rateLimit,
+    expires,
+  ]
+    .join(' ')
+    .toLowerCase()
+}
+
+watch(searchKeyword, () => {
+  currentPage.value = 1
+})
+
+watch(totalPages, (next) => {
+  if (currentPage.value > next) currentPage.value = next
+})
 
 /** 加载 API Key 列表。 */
 async function loadAPIKeys(): Promise<void> {
@@ -193,8 +230,25 @@ async function copyKey(key: APIKey): Promise<void> {
 
     <!-- 工具栏 -->
     <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
-      <p class="text-sm text-gray-500 dark:text-gray-400">共 {{ apiKeys.length }} 个 API Key</p>
+      <p class="text-sm text-gray-500 dark:text-gray-400">{{ apiKeyCountLabel }}</p>
       <div class="flex flex-wrap items-center gap-2">
+        <label class="relative block w-full sm:w-72">
+          <span class="sr-only">搜索 API Key</span>
+          <input
+            v-model="searchKeyword"
+            type="search"
+            placeholder="搜索名称、前缀或密钥"
+            class="h-10 w-full rounded-lg border border-gray-300 bg-white px-3 pr-12 text-sm text-gray-800 shadow-sm transition placeholder:text-gray-400 focus:border-brand-300 focus:ring-3 focus:ring-brand-500/10 focus:outline-none dark:border-gray-700 dark:bg-gray-900 dark:text-white/90"
+          />
+          <button
+            v-if="hasSearchKeyword"
+            type="button"
+            class="absolute top-1/2 right-2 -translate-y-1/2 rounded-md px-2 py-1 text-xs text-gray-500 transition hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+            @click="searchKeyword = ''"
+          >
+            清空
+          </button>
+        </label>
         <button
           type="button"
           class="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 px-3.5 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:opacity-60 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
@@ -240,6 +294,12 @@ async function copyKey(key: APIKey): Promise<void> {
         class="rounded-2xl border border-dashed border-gray-300 bg-white px-5 py-12 text-center text-sm text-gray-400 dark:border-gray-700 dark:bg-white/[0.03]"
       >
         暂无 API Key，点击「新建 API Key」开始创建
+      </div>
+      <div
+        v-else-if="filteredAPIKeys.length === 0"
+        class="rounded-2xl border border-dashed border-gray-300 bg-white px-5 py-12 text-center text-sm text-gray-400 dark:border-gray-700 dark:bg-white/[0.03]"
+      >
+        没有匹配的 API Key
       </div>
 
       <!-- 卡片网格：手机 1 列、平板 2 列、桌面 3 列 -->
