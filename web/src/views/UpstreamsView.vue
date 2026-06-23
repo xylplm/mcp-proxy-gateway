@@ -38,6 +38,7 @@ import {
 import type { ToolDef } from '@/api/tools'
 import type { PrefillForm } from '@/api/templates'
 import { buildToolCountSnapshot, toolCountLabel, type ToolCountSnapshot } from '@/utils/toolCountSnapshot'
+import { buildUpstreamDetailSummary } from '@/utils/upstreamDetailSummary'
 
 const { pageSize } = useBreakpoint()
 const toast = useToast()
@@ -88,6 +89,8 @@ const toolModalUpdatedAt = ref<string | null>(null)
 const toolModalLoading = ref(false)
 const toolModalError = ref('')
 const toolModalSearchKeyword = ref('')
+const detailOpen = ref(false)
+const detailUpstream = ref<Upstream | null>(null)
 
 let statusPollTimer: number | undefined
 let statusPollingUntil = 0
@@ -142,6 +145,11 @@ const importResultLabel = computed(() => {
   if (failed === 0) return `已导入 ${created} 个上游`
   return `已导入 ${created} 个，${failed} 个需要处理`
 })
+const detailSummary = computed(() =>
+  detailUpstream.value === null
+    ? null
+    : buildUpstreamDetailSummary(detailUpstream.value, toolCounts.value[detailUpstream.value.id]),
+)
 
 function normalizeTags(tags: string[]): string[] {
   const seen = new Set<string>()
@@ -189,6 +197,16 @@ watch(searchKeyword, () => {
 
 watch(totalPages, (next) => {
   if (currentPage.value > next) currentPage.value = next
+})
+
+watch(upstreams, (next) => {
+  if (detailUpstream.value === null) return
+  const latest = next.find((up) => up.id === detailUpstream.value?.id) ?? null
+  if (latest === null) {
+    closeDetail()
+    return
+  }
+  detailUpstream.value = latest
 })
 
 watch(importContent, () => {
@@ -298,6 +316,21 @@ function openEdit(up: Upstream): void {
   editing.value = up
   prefill.value = null
   drawerOpen.value = true
+}
+
+function openDetail(up: Upstream): void {
+  detailUpstream.value = up
+  detailOpen.value = true
+}
+
+function closeDetail(): void {
+  detailOpen.value = false
+  detailUpstream.value = null
+}
+
+function editFromDetail(up: Upstream): void {
+  closeDetail()
+  openEdit(up)
 }
 
 /** 模板市场选中模板：关闭弹窗并以预填充打开创建抽屉（Req 14.7）。 */
@@ -871,6 +904,13 @@ function goPage(p: number): void {
             <div class="flex flex-wrap items-center justify-end gap-1.5">
               <button
                 type="button"
+                class="rounded-lg px-2.5 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800"
+                @click="openDetail(up)"
+              >
+                详情
+              </button>
+              <button
+                type="button"
                 class="rounded-lg px-2.5 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-100 disabled:opacity-50 dark:text-gray-300 dark:hover:bg-gray-800"
                 :disabled="isBusy(up.id, 'refresh')"
                 @click="refresh(up)"
@@ -940,6 +980,160 @@ function goPage(p: number): void {
       @close="drawerOpen = false"
       @saved="onSaved"
     />
+
+    <transition name="fade">
+      <div
+        v-if="detailOpen && detailUpstream !== null && detailSummary !== null"
+        class="fixed inset-0 z-[100001] flex items-stretch justify-end bg-gray-900/40 backdrop-blur-[1px]"
+        @click.self="closeDetail"
+      >
+        <aside
+          class="flex h-full w-full max-w-xl flex-col border-l border-gray-200 bg-white shadow-xl dark:border-gray-800 dark:bg-gray-900"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div class="flex items-start justify-between gap-4 border-b border-gray-200 px-5 py-4 dark:border-gray-800">
+            <div class="min-w-0">
+              <div class="flex flex-wrap items-center gap-2">
+                <h3 class="truncate text-base font-semibold text-gray-800 dark:text-white/90">
+                  {{ detailUpstream.config.name }}
+                </h3>
+                <ConnStateBadge :state="detailUpstream.state" />
+              </div>
+              <p class="mt-1 break-all text-xs text-gray-500 dark:text-gray-400">
+                {{ detailSummary.endpointValue }}
+              </p>
+            </div>
+            <button
+              v-tooltip:bottom-end="'关闭'"
+              type="button"
+              class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-800"
+              aria-label="关闭上游详情"
+              @click="closeDetail"
+            >
+              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none">
+                <path
+                  d="M6 6l12 12M6 18L18 6"
+                  stroke="currentColor"
+                  stroke-width="1.8"
+                  stroke-linecap="round"
+                />
+              </svg>
+            </button>
+          </div>
+
+          <div class="custom-scrollbar min-h-0 flex-1 overflow-y-auto p-5">
+            <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <section class="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-800 dark:bg-white/[0.03]">
+                <p class="text-xs text-gray-500 dark:text-gray-400">运行状态</p>
+                <p class="mt-2 text-sm leading-6 text-gray-700 dark:text-gray-300">
+                  {{ detailSummary.healthDescription }}
+                </p>
+              </section>
+              <section class="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-800 dark:bg-white/[0.03]">
+                <p class="text-xs text-gray-500 dark:text-gray-400">工具缓存</p>
+                <p class="mt-2 text-lg font-semibold text-gray-800 dark:text-white/90">
+                  {{ detailSummary.toolLabel }}
+                </p>
+                <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
+                  {{ detailSummary.syncDescription }}
+                </p>
+              </section>
+            </div>
+
+            <section class="mt-4 rounded-xl border border-gray-200 p-4 dark:border-gray-800">
+              <div class="mb-3 flex items-center justify-between gap-3">
+                <h4 class="text-sm font-semibold text-gray-800 dark:text-white/90">运行摘要</h4>
+                <span
+                  class="rounded-full px-2.5 py-1 text-xs"
+                  :class="detailUpstream.config.enabled
+                    ? 'bg-success-50 text-success-700 dark:bg-success-500/10 dark:text-success-400'
+                    : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300'"
+                >
+                  {{ detailUpstream.config.enabled ? '启用' : '停用' }}
+                </span>
+              </div>
+              <dl class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div
+                  v-for="item in detailSummary.runtimeItems"
+                  :key="item.label"
+                  class="min-w-0 rounded-lg bg-gray-50 px-3 py-2 dark:bg-white/[0.03]"
+                >
+                  <dt class="text-xs text-gray-400 dark:text-gray-500">{{ item.label }}</dt>
+                  <dd class="mt-1 break-all text-sm font-medium text-gray-700 dark:text-gray-200">
+                    {{ item.value }}
+                  </dd>
+                </div>
+              </dl>
+            </section>
+
+            <section class="mt-4 rounded-xl border border-gray-200 p-4 dark:border-gray-800">
+              <h4 class="mb-3 text-sm font-semibold text-gray-800 dark:text-white/90">连接配置</h4>
+              <dl class="grid grid-cols-1 gap-3">
+                <div
+                  v-for="item in detailSummary.connectionItems"
+                  :key="item.label"
+                  class="min-w-0 rounded-lg bg-gray-50 px-3 py-2 dark:bg-white/[0.03]"
+                >
+                  <dt class="text-xs text-gray-400 dark:text-gray-500">{{ item.label }}</dt>
+                  <dd class="mt-1 break-all text-sm font-medium text-gray-700 dark:text-gray-200">
+                    {{ item.value }}
+                  </dd>
+                </div>
+              </dl>
+            </section>
+
+            <section v-if="detailUpstream.config.tags?.length" class="mt-4">
+              <h4 class="mb-2 text-sm font-semibold text-gray-800 dark:text-white/90">标签</h4>
+              <div class="flex flex-wrap gap-1.5">
+                <span
+                  v-for="tag in detailUpstream.config.tags"
+                  :key="tag"
+                  class="rounded-full bg-brand-50 px-2.5 py-1 text-xs font-medium text-brand-600 dark:bg-brand-500/10 dark:text-brand-300"
+                >
+                  {{ tag }}
+                </span>
+              </div>
+            </section>
+          </div>
+
+          <div class="border-t border-gray-200 p-4 dark:border-gray-800">
+            <div class="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              <button
+                type="button"
+                class="rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-60 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+                :disabled="isBusy(detailUpstream.id, 'refresh')"
+                @click="refresh(detailUpstream)"
+              >
+                {{ isBusy(detailUpstream.id, 'refresh') ? '刷新中...' : '刷新工具' }}
+              </button>
+              <button
+                type="button"
+                class="rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-60 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+                :disabled="isBusy(detailUpstream.id, 'reconnect')"
+                @click="reconnect(detailUpstream)"
+              >
+                {{ isBusy(detailUpstream.id, 'reconnect') ? '重连中...' : '重连' }}
+              </button>
+              <button
+                type="button"
+                class="rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+                @click="openToolModal(detailUpstream)"
+              >
+                查看工具
+              </button>
+              <button
+                type="button"
+                class="rounded-lg bg-brand-500 px-3 py-2 text-sm font-medium text-white transition hover:bg-brand-600"
+                @click="editFromDetail(detailUpstream)"
+              >
+                编辑
+              </button>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </transition>
 
     <!-- 模板市场弹窗 -->
     <TemplateMarketModal
