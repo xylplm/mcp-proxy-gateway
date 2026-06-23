@@ -82,6 +82,15 @@ const router = createRouter({
       },
     },
     {
+      path: '/tools',
+      name: 'Tools',
+      component: () => import('../views/ToolsView.vue'),
+      meta: {
+        title: '工具目录',
+        requiresAuth: true,
+      },
+    },
+    {
       path: '/statistics',
       name: 'Statistics',
       component: () => import('../views/StatisticsView.vue'),

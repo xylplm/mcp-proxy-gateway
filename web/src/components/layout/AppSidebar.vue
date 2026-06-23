@@ -89,6 +89,7 @@ import {
   HorizontalDots,
   PlugInIcon,
   ListIcon,
+  TableIcon,
   SettingsIcon,
   PieChartIcon,
   DocsIcon,
@@ -128,6 +129,11 @@ const menuGroups = [
         icon: PlugInIcon,
         name: '上游 MCP 管理',
         path: '/upstreams',
+      },
+      {
+        icon: TableIcon,
+        name: '工具目录',
+        path: '/tools',
       },
       {
         icon: ListIcon,
