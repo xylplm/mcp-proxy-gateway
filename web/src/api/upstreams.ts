@@ -9,6 +9,7 @@
  * 后端真实路由（已实现）：
  *   GET    /upstreams              列出全部上游及连接状态
  *   POST   /upstreams              创建上游
+ *   POST   /upstreams/test         临时测试连接并预览工具
  *   PUT    /upstreams/:id          更新上游
  *   DELETE /upstreams/:id          删除上游
  *   POST   /upstreams/:id/enable   启用上游
@@ -126,6 +127,15 @@ export interface UpstreamToolsResult {
   updatedAt?: string | null
 }
 
+export interface UpstreamTestResult {
+  ok: boolean
+  stage: string
+  durationMs: number
+  message?: string
+  count: number
+  tools: ToolDef[]
+}
+
 /**
  * 列出全部上游 MCP 及其连接状态（Req 2.3、2.8）。
  * 后端可能返回 null（空集合），此处归一化为空数组。
@@ -139,6 +149,19 @@ export async function listUpstreams(): Promise<Upstream[]> {
 export async function createUpstream(payload: UpstreamConfigRequest): Promise<Upstream> {
   const res = await request.post<Upstream>('/upstreams', payload)
   return res.data
+}
+
+/** 基于未持久化配置临时测试连接并预览工具。 */
+export async function testUpstream(payload: UpstreamConfigRequest): Promise<UpstreamTestResult> {
+  const res = await request.post<UpstreamTestResult>('/upstreams/test', payload, { timeout: 50000 })
+  return {
+    ok: res.data?.ok ?? false,
+    stage: res.data?.stage ?? 'connect',
+    durationMs: res.data?.durationMs ?? 0,
+    message: res.data?.message ?? '',
+    count: res.data?.count ?? 0,
+    tools: res.data?.tools ?? [],
+  }
 }
 
 /** 更新指定上游 MCP（Req 2.4）。 */

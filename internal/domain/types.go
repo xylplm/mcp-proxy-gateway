@@ -106,6 +106,22 @@ type UpstreamConfig struct {
 	RateLimits UpstreamRateLimits `json:"rateLimits,omitempty"`
 }
 
+// UpstreamTestResult 表示对一份未持久化上游配置做临时连通性测试的结果。
+type UpstreamTestResult struct {
+	// OK 表示连接与工具列表拉取是否都成功。
+	OK bool `json:"ok"`
+	// Stage 表示测试结束所在阶段：ok、connect 或 list_tools。
+	Stage string `json:"stage"`
+	// DurationMS 为本次测试耗时，单位毫秒。
+	DurationMS int64 `json:"durationMs"`
+	// Message 为失败原因或补充说明；成功时可为空。
+	Message string `json:"message,omitempty"`
+	// Count 为上游实际返回的工具总数。
+	Count int `json:"count"`
+	// Tools 为前端预览用的工具列表子集。
+	Tools []ToolDef `json:"tools"`
+}
+
 // UpstreamRateLimits 表示上游 MCP 的本地调用频率与周期额度限制。
 //
 // 所有限额均为「单上游实例」维度；取值 <=0 表示该维度不限额。多个维度同时配置时需

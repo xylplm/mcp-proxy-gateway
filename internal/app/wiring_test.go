@@ -123,11 +123,16 @@ func TestResolveAPIKeyID(t *testing.T) {
 type fakeToolSession struct {
 	tools      []domain.ToolDef
 	closed     bool
+	connectErr error
+	listErr    error
 	callResult domain.ToolResult
 }
 
-func (f *fakeToolSession) Connect(ctx context.Context) error { return nil }
+func (f *fakeToolSession) Connect(ctx context.Context) error { return f.connectErr }
 func (f *fakeToolSession) ListTools(ctx context.Context) ([]domain.ToolDef, error) {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
 	return f.tools, nil
 }
 func (f *fakeToolSession) CallTool(ctx context.Context, name string, args json.RawMessage) (domain.ToolResult, error) {
@@ -194,5 +199,42 @@ func TestSessionDialerDialError(t *testing.T) {
 	}
 	if _, ok := d.Session("u1"); ok {
 		t.Fatal("Dial 失败不应登记会话")
+	}
+}
+
+func TestUpstreamTesterReturnsPreviewOnSuccess(t *testing.T) {
+	tools := []domain.ToolDef{
+		{Name: "tool_1", OriginalName: "tool_1"},
+		{Name: "tool_2", OriginalName: "tool_2"},
+		{Name: "tool_3", OriginalName: "tool_3"},
+	}
+	sess := &fakeToolSession{tools: tools}
+	tester := upstreamTester{factory: fakeFactory{sess: sess}, previewLimit: 2}
+
+	result, err := tester.Test(context.Background(), domain.UpstreamConfig{})
+	if err != nil {
+		t.Fatalf("测试成功路径不应返回 error：%v", err)
+	}
+	if !result.OK || result.Stage != "ok" || result.Count != 3 || len(result.Tools) != 2 {
+		t.Fatalf("测试结果不符合预期：%+v", result)
+	}
+	if !sess.closed {
+		t.Fatal("测试完成后应关闭临时会话")
+	}
+}
+
+func TestUpstreamTesterReturnsStructuredFailure(t *testing.T) {
+	sess := &fakeToolSession{connectErr: errors.New("dial failed")}
+	tester := upstreamTester{factory: fakeFactory{sess: sess}}
+
+	result, err := tester.Test(context.Background(), domain.UpstreamConfig{})
+	if err != nil {
+		t.Fatalf("连接失败应返回结构化结果而非 error：%v", err)
+	}
+	if result.OK || result.Stage != "connect" || result.Message == "" {
+		t.Fatalf("连接失败结果不符合预期：%+v", result)
+	}
+	if !sess.closed {
+		t.Fatal("连接失败后也应关闭临时会话")
 	}
 }

@@ -2,7 +2,9 @@ package app
 
 import (
 	"context"
+	"errors"
 	"sync"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
@@ -97,6 +99,84 @@ func (p pinger) PingPG(ctx context.Context) error {
 
 func (p pinger) PingRedis(ctx context.Context) error {
 	return store.PingRedis(ctx, p.rdb)
+}
+
+// --- 上游保存前测试适配器（transport → httpapi.UpstreamTester）---
+
+// upstreamTester 基于未持久化配置建立临时会话，验证连接并返回少量工具预览。
+type upstreamTester struct {
+	factory      transport.TransportFactory
+	previewLimit int
+}
+
+func (t upstreamTester) Test(ctx context.Context, cfg domain.UpstreamConfig) (domain.UpstreamTestResult, error) {
+	if t.factory == nil {
+		return domain.UpstreamTestResult{}, domain.NewError(domain.CodeInternal, "上游测试服务未就绪")
+	}
+
+	testCtx, cancel := upstreamTestContext(ctx)
+	defer cancel()
+
+	start := time.Now()
+	sess, err := t.factory.NewSession(cfg)
+	if err != nil {
+		return domain.UpstreamTestResult{}, err
+	}
+	defer func() { _ = sess.Close() }()
+
+	if err := sess.Connect(testCtx); err != nil {
+		return t.failedResult("connect", start, err), nil
+	}
+
+	tools, err := sess.ListTools(testCtx)
+	if err != nil {
+		return t.failedResult("list_tools", start, err), nil
+	}
+
+	previewLimit := t.previewLimit
+	if previewLimit <= 0 {
+		previewLimit = 8
+	}
+	preview := tools
+	if len(preview) > previewLimit {
+		preview = tools[:previewLimit]
+	}
+	if preview == nil {
+		preview = []domain.ToolDef{}
+	}
+
+	return domain.UpstreamTestResult{
+		OK:         true,
+		Stage:      "ok",
+		DurationMS: time.Since(start).Milliseconds(),
+		Count:      len(tools),
+		Tools:      preview,
+	}, nil
+}
+
+func upstreamTestContext(parent context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(parent, transport.DefaultConnectTimeout+15*time.Second)
+}
+
+func (t upstreamTester) failedResult(stage string, start time.Time, err error) domain.UpstreamTestResult {
+	return domain.UpstreamTestResult{
+		OK:         false,
+		Stage:      stage,
+		DurationMS: time.Since(start).Milliseconds(),
+		Message:    upstreamTestErrorMessage(err),
+		Tools:      []domain.ToolDef{},
+	}
+}
+
+func upstreamTestErrorMessage(err error) string {
+	var apiErr *domain.APIError
+	if errors.As(err, &apiErr) {
+		return apiErr.Message
+	}
+	if err != nil {
+		return err.Error()
+	}
+	return "测试失败"
 }
 
 // --- 连接拨号与会话注册（transport + manager → aggregation 调用路由）---

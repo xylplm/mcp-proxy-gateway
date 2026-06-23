@@ -2,17 +2,26 @@
 import { computed, reactive, ref, watch } from 'vue'
 import {
   createUpstream,
+  testUpstream,
   updateUpstream,
   TRANSPORT_OPTIONS,
   type ConnParams,
   type TransportType,
   type Upstream,
   type UpstreamConfigRequest,
+  type UpstreamTestResult,
 } from '@/api/upstreams'
 import { emptyRateLimits, type UpstreamRateLimits } from '@/api/rateLimits'
 import type { PrefillForm, Placeholder } from '@/api/templates'
 import { ApiError } from '@/api/request'
-import { CheckIcon, ChevronDownIcon, InfoCircleIcon } from '@/icons'
+import {
+  CheckIcon,
+  ChevronDownIcon,
+  ErrorIcon,
+  InfoCircleIcon,
+  RefreshIcon,
+  SuccessIcon,
+} from '@/icons'
 
 const props = defineProps<{
   open: boolean
@@ -155,6 +164,9 @@ const placeholderValues = reactive<Record<string, string>>({})
 const placeholders = ref<Placeholder[]>([])
 const presetParams = ref<ConnParams>({})
 const submitting = ref(false)
+const testingConnection = ref(false)
+const testResult = ref<UpstreamTestResult | null>(null)
+const testRequestToken = ref(0)
 const fieldErrors = reactive<Record<string, string>>({})
 const formError = ref('')
 
@@ -176,6 +188,16 @@ const shouldShowCredentialInput = computed(() => {
 function clearErrors(): void {
   for (const k of Object.keys(fieldErrors)) delete fieldErrors[k]
   formError.value = ''
+}
+
+function clearTestResult(): void {
+  testResult.value = null
+}
+
+function invalidateTestResult(): void {
+  testRequestToken.value += 1
+  testingConnection.value = false
+  clearTestResult()
 }
 
 function parseTags(raw: string): string[] {
@@ -399,6 +421,7 @@ function parseCustomParams(): ConnParams | null {
 
 function resetForm(): void {
   clearErrors()
+  invalidateTestResult()
   for (const k of Object.keys(placeholderValues)) delete placeholderValues[k]
 
   if (props.upstream !== null) {
@@ -452,6 +475,26 @@ watch(
     if (props.open) resetForm()
   },
   { immediate: true },
+)
+
+watch(
+  () => [
+    form.transport,
+    form.command,
+    form.args,
+    form.url,
+    form.credential,
+    form.remoteAuthMode,
+    form.stdioAuthMode,
+    form.apiKeyHeader,
+    form.envCredentialName,
+    form.headersText,
+    form.envText,
+    form.cwd,
+    form.customParamsJson,
+    JSON.stringify(placeholderValues),
+  ],
+  () => invalidateTestResult(),
 )
 
 function placeholderLabel(ph: Placeholder): string {
@@ -661,13 +704,10 @@ function validateCredential(connParams: ConnParams, credential: string): boolean
   return true
 }
 
-function buildPayload(): UpstreamConfigRequest | null {
-  clearErrors()
-  let ok = validateName()
-  ok = validateTags() && ok
-
-  let connParams: ConnParams
+function buildConnectionDraft(): { connParams: ConnParams; credential: string } | null {
+  let ok = true
   let credential = form.credential.trim()
+  let connParams: ConnParams
 
   if (fromTemplate.value) {
     const resolved: Record<string, string> = {}
@@ -695,8 +735,16 @@ function buildPayload(): UpstreamConfigRequest | null {
     if (!ok) return null
   }
 
+  return { connParams, credential }
+}
+
+function makePayload(
+  name: string,
+  connParams: ConnParams,
+  credential: string,
+): UpstreamConfigRequest {
   const payload: UpstreamConfigRequest = {
-    name: form.name.trim(),
+    name,
     tags: formTags.value,
     transport: form.transport,
     connParams,
@@ -713,6 +761,22 @@ function buildPayload(): UpstreamConfigRequest | null {
     payload.credential = credential
   }
   return payload
+}
+
+function buildPayload(): UpstreamConfigRequest | null {
+  clearErrors()
+  let ok = validateName()
+  ok = validateTags() && ok
+  const draft = buildConnectionDraft()
+  if (!ok || draft === null) return null
+  return makePayload(form.name.trim(), draft.connParams, draft.credential)
+}
+
+function buildConnectionTestPayload(): UpstreamConfigRequest | null {
+  clearErrors()
+  const draft = buildConnectionDraft()
+  if (draft === null) return null
+  return makePayload(form.name.trim() || '连接测试', draft.connParams, draft.credential)
 }
 
 function mapServerField(field: string): string {
@@ -736,13 +800,45 @@ function mapServerField(field: string): string {
   return map[local] ?? local
 }
 
-function applyServerError(err: unknown): void {
+function applyServerError(err: unknown, fallback = '保存失败，请稍后重试'): void {
   if (err instanceof ApiError) {
     for (const [k, v] of Object.entries(err.fields)) fieldErrors[mapServerField(k)] = v
-    formError.value = err.message || '保存失败，请稍后重试'
+    formError.value = err.message || fallback
     return
   }
-  formError.value = err instanceof Error ? err.message : '保存失败，请稍后重试'
+  formError.value = err instanceof Error ? err.message : fallback
+}
+
+function testStageLabel(stage: string): string {
+  switch (stage) {
+    case 'connect':
+      return '连接阶段'
+    case 'list_tools':
+      return '工具列表'
+    case 'ok':
+      return '测试完成'
+    default:
+      return stage
+  }
+}
+
+async function handleTestConnection(): Promise<void> {
+  if (testingConnection.value || submitting.value) return
+  clearTestResult()
+  const payload = buildConnectionTestPayload()
+  if (payload === null) return
+
+  const token = testRequestToken.value + 1
+  testRequestToken.value = token
+  testingConnection.value = true
+  try {
+    const result = await testUpstream(payload)
+    if (token === testRequestToken.value) testResult.value = result
+  } catch (err) {
+    if (token === testRequestToken.value) applyServerError(err, '测试失败，请检查配置')
+  } finally {
+    if (token === testRequestToken.value) testingConnection.value = false
+  }
 }
 
 async function handleSubmit(): Promise<void> {
@@ -1328,6 +1424,96 @@ const errorClass = 'mt-1.5 text-xs text-error-500'
               </div>
             </section>
 
+            <section
+              v-if="testResult !== null"
+              :class="[
+                'rounded-lg border p-4',
+                testResult.ok
+                  ? 'border-success-200 bg-success-50/70 dark:border-success-500/20 dark:bg-success-500/10'
+                  : 'border-error-200 bg-error-50/70 dark:border-error-500/20 dark:bg-error-500/10',
+              ]"
+              role="status"
+            >
+              <div class="flex items-start gap-3">
+                <SuccessIcon
+                  v-if="testResult.ok"
+                  class="text-success-500 mt-0.5 h-5 w-5 shrink-0"
+                  aria-hidden="true"
+                />
+                <ErrorIcon
+                  v-else
+                  class="text-error-500 mt-0.5 h-5 w-5 shrink-0"
+                  aria-hidden="true"
+                />
+                <div class="min-w-0 flex-1">
+                  <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <h4
+                      :class="[
+                        'text-sm font-semibold',
+                        testResult.ok
+                          ? 'text-success-700 dark:text-success-300'
+                          : 'text-error-700 dark:text-error-300',
+                      ]"
+                    >
+                      {{ testResult.ok ? '连接正常' : '测试未通过' }}
+                    </h4>
+                    <span class="text-xs text-gray-500 dark:text-gray-400">
+                      {{ testStageLabel(testResult.stage) }} · {{ testResult.durationMs }} ms
+                    </span>
+                  </div>
+
+                  <p
+                    :class="[
+                      'mt-1 text-sm',
+                      testResult.ok
+                        ? 'text-success-700 dark:text-success-300'
+                        : 'text-error-700 dark:text-error-300',
+                    ]"
+                  >
+                    <template v-if="testResult.ok">
+                      拉取到 {{ testResult.count }} 个工具。
+                    </template>
+                    <template v-else>
+                      {{ testResult.message || '上游未返回具体错误。' }}
+                    </template>
+                  </p>
+
+                  <div
+                    v-if="testResult.ok && testResult.tools.length > 0"
+                    class="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2"
+                  >
+                    <div
+                      v-for="tool in testResult.tools"
+                      :key="tool.originalName || tool.name"
+                      class="rounded-lg border border-success-200/70 bg-white/70 p-3 dark:border-success-500/20 dark:bg-white/[0.03]"
+                    >
+                      <p class="truncate text-sm font-medium text-gray-800 dark:text-white/90">
+                        {{ tool.name || tool.originalName }}
+                      </p>
+                      <p
+                        v-if="tool.description"
+                        class="mt-1 line-clamp-2 text-xs leading-5 text-gray-500 dark:text-gray-400"
+                      >
+                        {{ tool.description }}
+                      </p>
+                    </div>
+                  </div>
+                  <p
+                    v-else-if="testResult.ok"
+                    class="mt-2 text-xs text-gray-500 dark:text-gray-400"
+                  >
+                    上游连接正常，但当前未返回工具。
+                  </p>
+                  <p
+                    v-if="testResult.ok && testResult.count > testResult.tools.length"
+                    class="mt-2 text-xs text-gray-500 dark:text-gray-400"
+                  >
+                    已预览前 {{ testResult.tools.length }} 个工具。
+                  </p>
+                </div>
+              </div>
+            </section>
+
             <p
               v-if="formError !== ''"
               role="alert"
@@ -1339,7 +1525,7 @@ const errorClass = 'mt-1.5 text-xs text-error-500'
         </form>
 
         <div
-          class="flex items-center justify-end gap-3 border-t border-gray-200 px-4 py-4 sm:px-6 dark:border-gray-800"
+          class="flex flex-wrap items-center justify-end gap-3 border-t border-gray-200 px-4 py-4 sm:px-6 dark:border-gray-800"
         >
           <button
             type="button"
@@ -1347,6 +1533,19 @@ const errorClass = 'mt-1.5 text-xs text-error-500'
             @click="emit('close')"
           >
             取消
+          </button>
+          <button
+            type="button"
+            :disabled="testingConnection || submitting"
+            class="inline-flex items-center gap-2 rounded-lg border border-gray-300 px-4 py-2.5 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+            @click="handleTestConnection"
+          >
+            <RefreshIcon
+              class="h-4 w-4"
+              :class="testingConnection ? 'animate-spin' : ''"
+              aria-hidden="true"
+            />
+            {{ testingConnection ? '测试中...' : '测试连接' }}
           </button>
           <button
             type="button"

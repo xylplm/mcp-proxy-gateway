@@ -183,6 +183,7 @@ func (a *App) build(envCfg config.EnvConfig) error {
 		Refresher:       refresher,
 		ToolCache:       toolCache,
 		CacheEnsurer:    a.syncer,
+		UpstreamTester:  upstreamTester{factory: factory},
 		Aggregation:     agg,
 		RuleValidator:   ruleEngine,
 		AliasStore:      repos.Alias,

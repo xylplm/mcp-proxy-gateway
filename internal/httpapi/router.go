@@ -74,6 +74,11 @@ type ToolCacheEnsurer interface {
 	EnsureCached(ctx context.Context, upstreamID string) (ran bool, err error)
 }
 
+// UpstreamTester 是上游配置保存前的临时连通性测试依赖。
+type UpstreamTester interface {
+	Test(ctx context.Context, cfg domain.UpstreamConfig) (domain.UpstreamTestResult, error)
+}
+
 // AggregationToolService 是管理台读取聚合后工具列表的窄接口。
 type AggregationToolService interface {
 	BuildToolSet(ctx context.Context, apiKeyID string) ([]domain.ToolDef, error)
@@ -293,6 +298,8 @@ type Router struct {
 	toolCache ToolCacheStore
 	// cacheEnsurer 为工具缓存缺失时的按需补拉器。
 	cacheEnsurer ToolCacheEnsurer
+	// upstreamTester 为保存前临时测试上游连接的服务。
+	upstreamTester UpstreamTester
 	// aggregation 为管理台读取聚合后真实工具列表的服务。
 	aggregation AggregationToolService
 	// ruleValidator 为别名/屏蔽规则的保存前校验器（领域规则引擎）。
@@ -337,6 +344,7 @@ type Deps struct {
 	Refresher       ToolRefresher
 	ToolCache       ToolCacheStore
 	CacheEnsurer    ToolCacheEnsurer
+	UpstreamTester  UpstreamTester
 	Aggregation     AggregationToolService
 	RuleValidator   RuleValidator
 	AliasStore      AliasStore
@@ -364,6 +372,7 @@ func NewRouter(d Deps) *Router {
 		refresher:       d.Refresher,
 		toolCache:       d.ToolCache,
 		cacheEnsurer:    d.CacheEnsurer,
+		upstreamTester:  d.UpstreamTester,
 		aggregation:     d.Aggregation,
 		ruleValidator:   d.RuleValidator,
 		aliasStore:      d.AliasStore,

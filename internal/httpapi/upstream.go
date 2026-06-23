@@ -13,6 +13,7 @@ import (
 //
 //   GET    /api/admin/upstreams              列出全部上游及连接状态
 //   POST   /api/admin/upstreams              创建上游
+//   POST   /api/admin/upstreams/test         临时测试上游连接并预览工具
 //   PUT    /api/admin/upstreams/:id          更新上游
 //   DELETE /api/admin/upstreams/:id          删除上游
 //   POST   /api/admin/upstreams/:id/enable   启用上游
@@ -74,6 +75,7 @@ func (r *Router) registerUpstreamRoutes(g *gin.RouterGroup) {
 	ups := g.Group("/upstreams")
 	ups.GET("", r.listUpstreams)
 	ups.POST("", r.createUpstream)
+	ups.POST("/test", r.testUpstream)
 	ups.PUT("/:id", r.updateUpstream)
 	ups.DELETE("/:id", r.deleteUpstream)
 	ups.POST("/:id/enable", r.enableUpstream)
@@ -96,6 +98,24 @@ func (r *Router) listUpstreams(c *gin.Context) {
 		return
 	}
 	respondOK(c, gin.H{"upstreams": ups})
+}
+
+// testUpstream 对未落库配置建立临时会话并拉取工具列表，用于创建/编辑前排障。
+func (r *Router) testUpstream(c *gin.Context) {
+	if r.upstreamTester == nil {
+		respondServiceUnavailable(c, "上游测试服务未就绪")
+		return
+	}
+	var req upstreamConfigRequest
+	if !bindJSON(c, &req) {
+		return
+	}
+	result, err := r.upstreamTester.Test(c.Request.Context(), req.toConfig())
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	respondOK(c, result)
 }
 
 // createUpstream 创建上游 MCP 服务（Req 2.1）。
