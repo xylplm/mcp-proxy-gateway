@@ -441,4 +441,5 @@ func (r *Router) Register(router gin.IRouter, adminAuth gin.HandlerFunc) {
 	r.registerSystemLogRoutes(admin)
 	r.registerTemplateRoutes(admin)
 	r.registerProtectedAuthRoutes(admin)
+	r.registerDiagnosticsRoutes(admin)
 }

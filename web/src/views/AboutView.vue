@@ -1,12 +1,17 @@
 <script setup lang="ts">
 import type { Component } from 'vue'
+import { ref } from 'vue'
 import AdminLayout from '@/components/layout/AdminLayout.vue'
 import PageBreadcrumb from '@/components/common/PageBreadcrumb.vue'
-import { BarChartIcon, BoxCubeIcon, DocsIcon, InfoCircleIcon, PlugInIcon, UserGroupIcon } from '@/icons'
+import { ArchiveIcon, BarChartIcon, BoxCubeIcon, DocsIcon, InfoCircleIcon, PlugInIcon, UserGroupIcon } from '@/icons'
+import { exportDiagnostics } from '@/api/diagnostics'
+import { useToast } from '@/composables/useToast'
 
 const githubURL = 'https://github.com/xylplm/mcp-proxy-gateway'
 const dockerURL = 'https://hub.docker.com/r/xylplm/mcp-proxy-gateway'
 const version = __APP_VERSION__
+const toast = useToast()
+const exportingDiagnostics = ref(false)
 
 const capabilities: ReadonlyArray<{ title: string; desc: string; icon: Component }> = [
   {
@@ -28,6 +33,33 @@ const capabilities: ReadonlyArray<{ title: string; desc: string; icon: Component
 
 const cardClass =
   'rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03]'
+
+function diagnosticsFileNameNow(): string {
+  const d = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `mpg-diagnostics-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.json`
+}
+
+async function downloadDiagnostics(): Promise<void> {
+  if (exportingDiagnostics.value) return
+  exportingDiagnostics.value = true
+  try {
+    const blob = await exportDiagnostics()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = diagnosticsFileNameNow()
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+    toast.success('诊断包已导出')
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : '导出诊断包失败')
+  } finally {
+    exportingDiagnostics.value = false
+  }
+}
 </script>
 
 <template>
@@ -56,6 +88,15 @@ const cardClass =
         </div>
 
         <div class="flex flex-wrap gap-3 xl:justify-end">
+          <button
+            type="button"
+            class="inline-flex items-center justify-center gap-2 rounded-lg border border-gray-200 px-4 py-2.5 text-sm font-medium text-gray-700 transition hover:border-brand-300 hover:bg-brand-50 hover:text-brand-600 disabled:opacity-60 dark:border-gray-800 dark:text-gray-300 dark:hover:border-brand-500/40 dark:hover:bg-brand-500/[0.08] dark:hover:text-brand-400"
+            :disabled="exportingDiagnostics"
+            @click="downloadDiagnostics"
+          >
+            <ArchiveIcon class="h-4 w-4" />
+            {{ exportingDiagnostics ? '导出中...' : '下载诊断包' }}
+          </button>
           <a
             :href="githubURL"
             target="_blank"
