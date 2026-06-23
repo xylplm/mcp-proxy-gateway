@@ -83,9 +83,16 @@ func (a *StoreAdapter) ExportBusiness(ctx context.Context) (BusinessConfig, erro
 
 // ImportBusiness 以备份内容整体替换库中现有业务配置（Req 23.5）。
 //
-// 注意：当前实现非单一事务，逐条写入；若中途失败可能产生部分应用。调用方应在
-// 调用前完成全部校验（Service.Import 已保证仅在校验通过后才进入本方法）。
+// 整个替换过程在数据库事务内完成；若任一步失败，删除和重建都会回滚，避免半导入状态。
+// 调用方应在调用前完成全部校验（Service.Import 已保证仅在校验通过后才进入本方法）。
 func (a *StoreAdapter) ImportBusiness(ctx context.Context, bc BusinessConfig) error {
+	return a.repos.WithTransaction(ctx, func(repos *store.Repositories) error {
+		txAdapter := &StoreAdapter{repos: repos}
+		return txAdapter.importBusiness(ctx, bc)
+	})
+}
+
+func (a *StoreAdapter) importBusiness(ctx context.Context, bc BusinessConfig) error {
 	// 1. 清空现有业务配置：删除全部独立规则、上游与 API Key。
 	existingAliases, err := a.repos.Alias.List(ctx)
 	if err != nil {

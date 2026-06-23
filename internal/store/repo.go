@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"crypto/rand"
 	"errors"
 	"fmt"
@@ -23,6 +24,8 @@ const (
 //
 // 各仓储均持有同一个 GORM 数据库句柄，底层连接由调用方在程序退出前关闭。
 type Repositories struct {
+	db *gorm.DB
+
 	// Upstream 为上游 MCP 服务仓储。
 	Upstream *UpstreamRepo
 	// Alias 为别名规则仓储。
@@ -48,6 +51,7 @@ type Repositories struct {
 // NewRepositories 基于 GORM 数据库句柄构造所有仓储。
 func NewRepositories(db *gorm.DB) *Repositories {
 	return &Repositories{
+		db:           db,
 		Upstream:     NewUpstreamRepo(db),
 		Alias:        NewAliasRepo(db),
 		FilterMCP:    NewFilterMCPRepo(db),
@@ -59,6 +63,18 @@ func NewRepositories(db *gorm.DB) *Repositories {
 		Audit:        NewAuditRepo(db),
 		Security:     NewSecurityRepo(db),
 	}
+}
+
+// WithTransaction 在同一个数据库事务内执行一组仓储操作。
+//
+// 回调收到的是绑定到事务句柄的新仓储集合；回调返回错误时整体回滚，返回 nil 时提交。
+func (r *Repositories) WithTransaction(ctx context.Context, fn func(*Repositories) error) error {
+	if r == nil || r.db == nil {
+		return domain.NewError(domain.CodeValidation, "仓储集合未初始化")
+	}
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		return fn(NewRepositories(tx))
+	})
 }
 
 // newUUID 生成一个版本 4 的随机 UUID 字符串。
