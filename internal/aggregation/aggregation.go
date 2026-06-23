@@ -149,7 +149,7 @@ func NewService(
 		mcpFilters:      mcpFilters,
 		apiKeyFilters:   apiKeyFilters,
 		upstreamConfigs: make(map[string]domain.UpstreamConfig),
-		routingStrategy: domain.ToolRoutingPriorityFill,
+		routingStrategy: domain.ToolRoutingRoundRobin,
 		roundRobin:      make(map[string]uint64),
 		log:             slog.Default(),
 	}
@@ -192,7 +192,7 @@ func (s *Service) SetLogger(l *slog.Logger) *Service {
 // SetRoutingStrategy 更新同名工具多来源时的内部调用选择策略。
 func (s *Service) SetRoutingStrategy(strategy domain.ToolRoutingStrategy) *Service {
 	if !domain.ValidToolRoutingStrategy(strategy) {
-		strategy = domain.ToolRoutingPriorityFill
+		strategy = domain.ToolRoutingRoundRobin
 	}
 	s.routingMu.Lock()
 	s.routingStrategy = strategy
@@ -212,7 +212,7 @@ func (s *Service) currentRoutingStrategy() domain.ToolRoutingStrategy {
 	if domain.ValidToolRoutingStrategy(s.routingStrategy) {
 		return s.routingStrategy
 	}
-	return domain.ToolRoutingPriorityFill
+	return domain.ToolRoutingRoundRobin
 }
 
 // logger 返回已注入的日志器（保证非 nil）。

@@ -295,11 +295,11 @@ onUnmounted(() => {
           <section class="mt-5 grid grid-cols-1 gap-5 xl:grid-cols-2">
             <article class="min-w-0">
               <h4 class="mb-3 text-sm font-semibold text-gray-800 dark:text-white/90">入参</h4>
-              <pre class="custom-scrollbar max-h-[420px] overflow-auto rounded-xl bg-gray-950 p-4 text-xs leading-5 text-gray-100"><code>{{ prettify(detail.RequestArgs) }}</code></pre>
+              <pre class="custom-scrollbar h-80 overflow-auto rounded-xl bg-gray-950 p-4 text-xs leading-5 text-gray-100 xl:h-[420px]"><code>{{ prettify(detail.RequestArgs) }}</code></pre>
             </article>
             <article class="min-w-0">
               <h4 class="mb-3 text-sm font-semibold text-gray-800 dark:text-white/90">{{ responseTitle(detail) }}</h4>
-              <pre class="custom-scrollbar max-h-[420px] overflow-auto rounded-xl bg-gray-950 p-4 text-xs leading-5 text-gray-100"><code>{{ prettify(detail.ResponseResult) }}</code></pre>
+              <pre class="custom-scrollbar h-80 overflow-auto rounded-xl bg-gray-950 p-4 text-xs leading-5 text-gray-100 xl:h-[420px]"><code>{{ prettify(detail.ResponseResult) }}</code></pre>
             </article>
           </section>
 

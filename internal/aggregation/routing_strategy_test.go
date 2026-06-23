@@ -139,6 +139,30 @@ func TestRoundRobinAlternatesCompatibleSources(t *testing.T) {
 	}
 }
 
+func TestDefaultRoutingStrategyIsRoundRobin(t *testing.T) {
+	invoker := &routeRecordingInvoker{available: map[string]bool{"up-a": true, "up-b": true}}
+	svc := routeService(
+		map[string][]domain.ToolDef{
+			"up-a": {{OriginalName: "read", Name: "read", InputSchema: []byte("{}")}},
+			"up-b": {{OriginalName: "read", Name: "read", InputSchema: []byte("{}")}},
+		},
+		[]domain.Upstream{invEnabledUpstream("up-a", 0), invEnabledUpstream("up-b", 1)},
+		invoker,
+	)
+
+	for i := 0; i < 2; i++ {
+		if _, err := svc.InvokeTool(context.Background(), "", "read", json.RawMessage(`{}`)); err != nil {
+			t.Fatalf("第 %d 次默认策略调用失败：%v", i+1, err)
+		}
+	}
+	if got := invoker.callAt(0); got != "up-a:read" {
+		t.Fatalf("默认策略首次调用路由错误：got=%q", got)
+	}
+	if got := invoker.callAt(1); got != "up-b:read" {
+		t.Fatalf("默认策略应轮询到第二个来源：got=%q", got)
+	}
+}
+
 func TestSchemaConflictDoesNotRouteToIncompatibleSource(t *testing.T) {
 	invoker := &routeRecordingInvoker{available: map[string]bool{"up-a": false, "up-b": true}}
 	svc := routeService(

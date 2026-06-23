@@ -77,6 +77,7 @@ const aggregatedTools = ref<ToolDef[]>([])
 const aggregatedToolDetails = ref<ToolDetail[]>([])
 const gatewayTools = ref<GatewayTool[]>([])
 const selectedAggregatedToolName = ref('')
+const toolDetailOpen = ref(false)
 
 const xiaozhiEnabled = ref(false)
 const xiaozhiEndpoint = ref('')
@@ -106,22 +107,29 @@ const mcpPortSecurityText = computed(() => {
   if (effectiveServer.value === null) return '加载监听配置中'
   if (listenerPendingRestart.value) return '监听配置已保存，网关重启完成后会按新配置生效。'
   if (listenerReused.value) return '当前对外 MCP 与管理台共用监听端口。公网暴露时建议启用独立 MCP 端口，并关闭管理端口 MCP 入口。'
-  if (effectiveServer.value.expose_mcp_on_admin_addr) return '独立 MCP 端口已运行，但管理端口仍保留 /mcp/* 兼容入口。公网部署建议关闭兼容入口。'
+  if (effectiveServer.value.expose_mcp_on_admin_addr) return '独立 MCP 端口已运行；管理端口仍保留 /mcp/* 兼容入口，可在确认客户端迁移后关闭。'
   return '独立 MCP 端口已运行，管理端口不暴露 /mcp/*。'
 })
 
 const mcpPortNoticeClass = computed(() => {
-  if (listenerReused.value || listenerPendingRestart.value || effectiveServer.value?.expose_mcp_on_admin_addr) {
+  if (listenerReused.value || listenerPendingRestart.value) {
     return 'mt-5 rounded-xl border border-warning-200 bg-warning-50/80 p-4 dark:border-warning-500/30 dark:bg-warning-500/10'
   }
   return 'mt-5 rounded-xl border border-success-200 bg-success-50/70 p-4 dark:border-success-500/30 dark:bg-success-500/10'
 })
 
 const mcpPortBadgeClass = computed(() => {
-  if (listenerReused.value || listenerPendingRestart.value || effectiveServer.value?.expose_mcp_on_admin_addr) {
+  if (listenerReused.value || listenerPendingRestart.value) {
     return 'shrink-0 rounded-full bg-white px-2.5 py-1 text-xs font-medium text-warning-700 dark:bg-white/10 dark:text-warning-300'
   }
   return 'shrink-0 rounded-full bg-white px-2.5 py-1 text-xs font-medium text-success-700 dark:bg-white/10 dark:text-success-300'
+})
+
+const mcpPortSettingsLinkClass = computed(() => {
+  if (listenerReused.value || listenerPendingRestart.value) {
+    return 'inline-flex h-8 items-center rounded-lg border border-warning-200 bg-white px-3 text-xs font-medium text-warning-700 transition hover:bg-warning-100 dark:border-warning-500/30 dark:bg-white/10 dark:text-warning-300 dark:hover:bg-warning-500/10'
+  }
+  return 'inline-flex h-8 items-center rounded-lg border border-success-200 bg-white px-3 text-xs font-medium text-success-700 transition hover:bg-success-100 dark:border-success-500/30 dark:bg-white/10 dark:text-success-300 dark:hover:bg-success-500/10'
 })
 
 const endpoints = computed<EndpointItem[]>(() => [
@@ -236,7 +244,7 @@ const selectedToolDetail = computed<ToolDetail | null>(() => {
     const detail = toolDetailsByName.value.get(selectedAggregatedToolName.value)
     if (detail) return detail
   }
-  return aggregatedToolDetails.value[0] ?? null
+  return null
 })
 const activeEndpoints = computed(() => endpointTab.value === 'smart' ? smartEndpoints.value : endpoints.value)
 const guideEndpoints = computed(() => guideMode.value === 'smart' ? smartEndpoints.value : endpoints.value)
@@ -575,26 +583,29 @@ function toolDescription(tool: ToolDef): string {
 }
 
 function ensureSelectedAggregatedTool(): void {
-  if (aggregatedTools.value.length === 0) {
+  if (aggregatedTools.value.length === 0 || selectedAggregatedToolName.value === '') {
     selectedAggregatedToolName.value = ''
-    return
-  }
-  if (selectedAggregatedToolName.value === '') {
-    selectedAggregatedToolName.value = aggregatedTools.value[0]?.name ?? ''
+    toolDetailOpen.value = false
     return
   }
   if (!aggregatedTools.value.some((tool) => tool.name === selectedAggregatedToolName.value)) {
-    selectedAggregatedToolName.value = aggregatedTools.value[0]?.name ?? ''
+    selectedAggregatedToolName.value = ''
+    toolDetailOpen.value = false
   }
 }
 
-function selectAggregatedTool(tool: ToolDef): void {
+function openToolDetail(tool: ToolDef): void {
   selectedAggregatedToolName.value = tool.name
+  toolDetailOpen.value = true
+}
+
+function closeToolDetail(): void {
+  toolDetailOpen.value = false
 }
 
 function sourceCountText(tool: ToolDef): string {
   const count = tool.sourceCount ?? 1
-  return count > 1 ? `${count} 个来源上游` : '1 个来源上游'
+  return `${count} 个来源上游`
 }
 
 function formatRateLimits(limits?: UpstreamRateLimits): string {
@@ -826,7 +837,7 @@ const errClass = 'mt-1 text-xs text-error-500'
               <span :class="mcpPortBadgeClass">{{ mcpPortModeLabel }}</span>
               <router-link
                 to="/settings"
-                class="inline-flex h-8 items-center rounded-lg border border-warning-200 bg-white px-3 text-xs font-medium text-warning-700 transition hover:bg-warning-100 dark:border-warning-500/30 dark:bg-white/10 dark:text-warning-300 dark:hover:bg-warning-500/10"
+                :class="mcpPortSettingsLinkClass"
               >
                 去设置
               </router-link>
@@ -852,22 +863,25 @@ const errClass = 'mt-1 text-xs text-error-500'
           </div>
         </div>
 
-        <div class="mt-5 grid grid-cols-1 gap-4 2xl:grid-cols-2">
-          <div class="rounded-xl border border-gray-100 bg-gray-50 p-4 dark:border-gray-800 dark:bg-white/[0.02]">
+        <div class="mt-5 space-y-4">
+          <div
+            v-if="endpointTab === 'smart'"
+            class="rounded-xl border border-gray-100 bg-gray-50 p-4 dark:border-gray-800 dark:bg-white/[0.02]"
+          >
             <div class="flex items-start justify-between gap-3">
               <div>
                 <h4 class="text-sm font-semibold text-gray-800 dark:text-white/90">客户端可见工具</h4>
                 <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
-                  当前为 {{ endpointTab === 'smart' ? '智能模式网关工具' : '全量模式真实聚合工具' }}。
+                  智能模式只向客户端暴露网关工具，真实工具按需发现和调用。
                 </p>
               </div>
               <span class="shrink-0 rounded-full bg-brand-50 px-2.5 py-1 text-xs font-medium text-brand-600 dark:bg-brand-500/10 dark:text-brand-400">
-                {{ endpointTab === 'smart' ? '智能模式' : '全量模式' }}
+                智能模式
               </span>
             </div>
-            <div class="custom-scrollbar mt-4 grid max-h-80 grid-cols-1 gap-2 overflow-y-auto pr-1">
+            <div class="custom-scrollbar mt-4 grid max-h-80 grid-cols-1 gap-2 overflow-y-auto pr-1 md:grid-cols-2">
               <div
-                v-for="tool in endpointTab === 'smart' ? gatewayTools : aggregatedTools"
+                v-for="tool in gatewayTools"
                 :key="tool.name"
                 class="rounded-lg bg-white p-3 dark:bg-gray-900/60"
               >
@@ -879,7 +893,7 @@ const errClass = 'mt-1 text-xs text-error-500'
                 </p>
               </div>
               <p
-                v-if="(endpointTab === 'smart' ? gatewayTools : aggregatedTools).length === 0"
+                v-if="gatewayTools.length === 0"
                 class="py-4 text-center text-sm text-gray-400"
               >
                 暂无工具
@@ -899,105 +913,39 @@ const errClass = 'mt-1 text-xs text-error-500'
                 {{ aggregatedToolCount }} 个
               </span>
             </div>
-            <div class="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-              <div class="custom-scrollbar grid max-h-96 grid-cols-1 gap-2 overflow-y-auto pr-1">
-                <button
-                  v-for="tool in aggregatedTools"
-                  :key="tool.name"
-                  type="button"
-                  class="rounded-lg border p-3 text-left transition"
-                  :class="
-                    selectedAggregatedToolName === tool.name
-                      ? 'border-brand-300 bg-brand-50/80 dark:border-brand-500/50 dark:bg-brand-500/[0.08]'
-                      : 'border-transparent bg-white hover:border-brand-200 hover:bg-brand-50/50 dark:bg-gray-900/60 dark:hover:border-brand-500/30 dark:hover:bg-brand-500/[0.06]'
-                  "
-                  @click="selectAggregatedTool(tool)"
-                >
-                  <span class="flex items-center justify-between gap-3">
-                    <span class="min-w-0 truncate font-mono text-xs font-medium text-gray-800 dark:text-white/90">
-                      {{ tool.name }}
-                    </span>
-                    <span class="shrink-0 rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-600 dark:bg-white/5 dark:text-gray-300">
-                      {{ sourceCountText(tool) }}
-                    </span>
-                  </span>
-                  <span class="mt-1 line-clamp-2 text-xs leading-5 text-gray-500 dark:text-gray-400">
-                    {{ toolDescription(tool) }}
+            <div class="custom-scrollbar mt-4 grid max-h-[30rem] grid-cols-1 gap-2 overflow-y-auto pr-1 md:grid-cols-2 2xl:grid-cols-3">
+              <button
+                v-for="tool in aggregatedTools"
+                :key="tool.name"
+                type="button"
+                class="rounded-lg border border-transparent bg-white p-3 text-left transition hover:border-brand-200 hover:bg-brand-50/50 focus:border-brand-300 focus:ring-2 focus:ring-brand-500/10 focus:outline-none dark:bg-gray-900/60 dark:hover:border-brand-500/30 dark:hover:bg-brand-500/[0.06]"
+                :aria-label="`查看 ${tool.name} 工具详情`"
+                @click="openToolDetail(tool)"
+              >
+                <span class="flex items-start justify-between gap-3">
+                  <span class="min-w-0 truncate font-mono text-xs font-medium text-gray-800 dark:text-white/90">
+                    {{ tool.name }}
                   </span>
                   <span
-                    v-if="tool.schemaConflict"
-                    class="mt-2 inline-flex rounded-full bg-warning-50 px-2 py-0.5 text-[11px] font-medium text-warning-700 dark:bg-warning-500/10 dark:text-warning-400"
+                    v-if="(tool.sourceCount ?? 1) > 1"
+                    class="shrink-0 rounded-full bg-brand-50 px-2 py-0.5 text-[11px] font-medium text-brand-600 dark:bg-brand-500/10 dark:text-brand-400"
                   >
-                    Schema 不一致
+                    {{ sourceCountText(tool) }}
                   </span>
-                </button>
-                <p v-if="aggregatedTools.length === 0" class="py-8 text-center text-sm text-gray-400">
-                  暂无可用工具
-                </p>
-              </div>
-
-              <div class="min-w-0 rounded-lg bg-white p-4 dark:bg-gray-900/60">
-                <template v-if="selectedToolDetail">
-                  <div class="flex flex-wrap items-start justify-between gap-3">
-                    <div class="min-w-0">
-                      <p class="truncate font-mono text-sm font-semibold text-gray-800 dark:text-white/90">
-                        {{ selectedToolDetail.tool.name }}
-                      </p>
-                      <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
-                        {{ toolDescription(selectedToolDetail.tool) }}
-                      </p>
-                    </div>
-                    <span class="rounded-full bg-success-50 px-2.5 py-1 text-xs font-medium text-success-700 dark:bg-success-500/10 dark:text-success-400">
-                      {{ selectedToolDetail.sources?.length ?? 0 }} 个来源上游
-                    </span>
-                  </div>
-
-                  <div
-                    v-if="selectedToolDetail.tool.schemaConflict"
-                    class="mt-4 rounded-lg border border-warning-200 bg-warning-50 px-3 py-2 text-xs leading-5 text-warning-700 dark:border-warning-500/30 dark:bg-warning-500/10 dark:text-warning-300"
-                  >
-                    同名来源的入参 Schema 不完全一致，调用时只会选择与当前展示 Schema 一致的来源。
-                  </div>
-
-                  <div class="custom-scrollbar mt-4 grid max-h-72 grid-cols-1 gap-3 overflow-y-auto pr-1">
-                    <div
-                      v-for="source in selectedToolDetail.sources ?? []"
-                      :key="`${source.upstreamId}:${source.originalName}`"
-                      class="rounded-lg border border-gray-100 p-3 dark:border-gray-800"
-                    >
-                      <div class="flex flex-wrap items-start justify-between gap-2">
-                        <div class="min-w-0">
-                          <p class="truncate text-sm font-medium text-gray-800 dark:text-white/90">
-                            {{ source.upstreamName || source.upstreamId }}
-                          </p>
-                          <p class="mt-1 truncate font-mono text-[11px] text-gray-400 dark:text-gray-500">
-                            {{ source.originalName }}
-                          </p>
-                        </div>
-                        <span class="rounded-full px-2 py-0.5 text-[11px] font-medium" :class="sourceStatusClass(source)">
-                          {{ source.compatible ? '可调用' : 'Schema 不一致' }}
-                        </span>
-                      </div>
-                      <p class="mt-2 line-clamp-2 text-xs leading-5 text-gray-500 dark:text-gray-400">
-                        {{ source.description || '上游未提供有效描述' }}
-                      </p>
-                      <p class="mt-2 text-[11px] leading-5 text-gray-400 dark:text-gray-500">
-                        限流额度：{{ formatRateLimits(source.rateLimits) }}
-                      </p>
-                    </div>
-                  </div>
-
-                  <details class="mt-4 rounded-lg bg-gray-50 p-3 dark:bg-white/[0.03]">
-                    <summary class="cursor-pointer text-xs font-medium text-gray-700 dark:text-gray-300">
-                      查看入参 Schema
-                    </summary>
-                    <pre class="custom-scrollbar mt-3 max-h-48 overflow-auto text-xs leading-5 text-gray-600 dark:text-gray-300">{{ schemaPreview(selectedToolDetail.tool.inputSchema) }}</pre>
-                  </details>
-                </template>
-                <p v-else class="py-10 text-center text-sm text-gray-400">
-                  选择左侧工具查看来源上游
-                </p>
-              </div>
+                </span>
+                <span class="mt-1 line-clamp-2 text-xs leading-5 text-gray-500 dark:text-gray-400">
+                  {{ toolDescription(tool) }}
+                </span>
+                <span
+                  v-if="tool.schemaConflict"
+                  class="mt-2 inline-flex rounded-full bg-warning-50 px-2 py-0.5 text-[11px] font-medium text-warning-700 dark:bg-warning-500/10 dark:text-warning-400"
+                >
+                  Schema 不一致
+                </span>
+              </button>
+              <p v-if="aggregatedTools.length === 0" class="py-8 text-center text-sm text-gray-400 md:col-span-2 2xl:col-span-3">
+                暂无可用工具
+              </p>
             </div>
           </div>
         </div>
@@ -1119,6 +1067,95 @@ const errClass = 'mt-1 text-xs text-error-500'
         </form>
       </section>
     </div>
+
+    <transition name="fade">
+      <div
+        v-if="toolDetailOpen && selectedToolDetail"
+        class="fixed inset-0 z-[100000] flex items-center justify-center bg-gray-900/40 p-4 backdrop-blur-[1px]"
+        @click.self="closeToolDetail"
+      >
+        <div
+          class="flex max-h-[88vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-xl dark:border-gray-800 dark:bg-gray-900"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div class="flex items-start justify-between gap-4 border-b border-gray-200 px-5 py-4 dark:border-gray-800">
+            <div class="min-w-0">
+              <p class="truncate font-mono text-base font-semibold text-gray-800 dark:text-white/90">
+                {{ selectedToolDetail.tool.name }}
+              </p>
+              <p class="mt-1 text-sm leading-6 text-gray-500 dark:text-gray-400">
+                {{ toolDescription(selectedToolDetail.tool) }}
+              </p>
+            </div>
+            <button
+              type="button"
+              class="shrink-0 rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-800"
+              aria-label="关闭工具详情"
+              @click="closeToolDetail"
+            >
+              <span class="block text-xl leading-none">×</span>
+            </button>
+          </div>
+
+          <div class="custom-scrollbar min-h-0 flex-1 overflow-y-auto p-5">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="rounded-full bg-success-50 px-2.5 py-1 text-xs font-medium text-success-700 dark:bg-success-500/10 dark:text-success-400">
+                {{ selectedToolDetail.sources?.length ?? 0 }} 个来源上游
+              </span>
+              <span
+                v-if="selectedToolDetail.tool.schemaConflict"
+                class="rounded-full bg-warning-50 px-2.5 py-1 text-xs font-medium text-warning-700 dark:bg-warning-500/10 dark:text-warning-400"
+              >
+                Schema 不一致
+              </span>
+            </div>
+
+            <div
+              v-if="selectedToolDetail.tool.schemaConflict"
+              class="mt-4 rounded-lg border border-warning-200 bg-warning-50 px-3 py-2 text-xs leading-5 text-warning-700 dark:border-warning-500/30 dark:bg-warning-500/10 dark:text-warning-300"
+            >
+              同名来源的入参 Schema 不完全一致，调用时只会选择与当前展示 Schema 一致的来源。
+            </div>
+
+            <div class="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+              <div
+                v-for="source in selectedToolDetail.sources ?? []"
+                :key="`${source.upstreamId}:${source.originalName}`"
+                class="rounded-lg border border-gray-100 bg-gray-50 p-3 dark:border-gray-800 dark:bg-white/[0.02]"
+              >
+                <div class="flex flex-wrap items-start justify-between gap-2">
+                  <div class="min-w-0">
+                    <p class="truncate text-sm font-medium text-gray-800 dark:text-white/90">
+                      {{ source.upstreamName || source.upstreamId }}
+                    </p>
+                    <p class="mt-1 truncate font-mono text-[11px] text-gray-400 dark:text-gray-500">
+                      {{ source.originalName }}
+                    </p>
+                  </div>
+                  <span class="rounded-full px-2 py-0.5 text-[11px] font-medium" :class="sourceStatusClass(source)">
+                    {{ source.compatible ? '可调用' : 'Schema 不一致' }}
+                  </span>
+                </div>
+                <p class="mt-2 line-clamp-3 text-xs leading-5 text-gray-500 dark:text-gray-400">
+                  {{ source.description || '上游未提供有效描述' }}
+                </p>
+                <p class="mt-2 text-[11px] leading-5 text-gray-400 dark:text-gray-500">
+                  限流额度：{{ formatRateLimits(source.rateLimits) }}
+                </p>
+              </div>
+            </div>
+
+            <details class="mt-4 rounded-lg bg-gray-50 p-3 dark:bg-white/[0.03]">
+              <summary class="cursor-pointer text-xs font-medium text-gray-700 dark:text-gray-300">
+                查看入参 Schema
+              </summary>
+              <pre class="custom-scrollbar mt-3 max-h-72 overflow-auto text-xs leading-5 text-gray-600 dark:text-gray-300">{{ schemaPreview(selectedToolDetail.tool.inputSchema) }}</pre>
+            </details>
+          </div>
+        </div>
+      </div>
+    </transition>
 
     <transition name="fade">
       <div

@@ -87,8 +87,8 @@ func TestLoadReadsExistingConfigAndAppliesDefaults(t *testing.T) {
 	if got.Connection.FailureThreshold != 10 {
 		t.Errorf("connection.failure_threshold 期望默认值 10，实际 %d", got.Connection.FailureThreshold)
 	}
-	if got.Aggregation.ToolRoutingStrategy != domain.ToolRoutingPriorityFill {
-		t.Errorf("aggregation.tool_routing_strategy 期望默认值 %q，实际 %q", domain.ToolRoutingPriorityFill, got.Aggregation.ToolRoutingStrategy)
+	if got.Aggregation.ToolRoutingStrategy != domain.ToolRoutingRoundRobin {
+		t.Errorf("aggregation.tool_routing_strategy 期望默认值 %q，实际 %q", domain.ToolRoutingRoundRobin, got.Aggregation.ToolRoutingStrategy)
 	}
 }
 
@@ -222,15 +222,15 @@ func TestSaveNormalizesDefaultableFields(t *testing.T) {
 	}
 
 	got := mgr.Config()
-	if got.Aggregation.ToolRoutingStrategy != domain.ToolRoutingPriorityFill {
-		t.Fatalf("保存后工具调用策略未归一化：got=%q want=%q", got.Aggregation.ToolRoutingStrategy, domain.ToolRoutingPriorityFill)
+	if got.Aggregation.ToolRoutingStrategy != domain.ToolRoutingRoundRobin {
+		t.Fatalf("保存后工具调用策略未归一化：got=%q want=%q", got.Aggregation.ToolRoutingStrategy, domain.ToolRoutingRoundRobin)
 	}
 
 	reloaded, err := Load(nil, dataDir)
 	if err != nil {
 		t.Fatalf("重新加载失败：%v", err)
 	}
-	if reloaded.Config().Aggregation.ToolRoutingStrategy != domain.ToolRoutingPriorityFill {
+	if reloaded.Config().Aggregation.ToolRoutingStrategy != domain.ToolRoutingRoundRobin {
 		t.Fatalf("落盘后的工具调用策略未归一化：got=%q", reloaded.Config().Aggregation.ToolRoutingStrategy)
 	}
 }
