@@ -504,6 +504,59 @@ func TestCreateRejectsInvalidTags(t *testing.T) {
 	}
 }
 
+func TestCreateIgnoresDisabledRateLimitStaleValues(t *testing.T) {
+	cfg := testValidConfig()
+	cfg.RateLimits = domain.UpstreamRateLimits{
+		Enabled:   false,
+		PerMinute: -1,
+		PerMonth:  1000,
+		Timezone:  "Not/AZone",
+	}
+	row := &store.UpstreamRow{}
+	row.ID = "up-rate-limit-disabled"
+	row.Config = cfg
+
+	repo := &testUpstreamRepo{createRow: row}
+	m := New(repo, &testToolCacheCleaner{}, nil, nil)
+
+	if _, err := m.Create(context.Background(), cfg); err != nil {
+		t.Fatalf("关闭限额时不应因隐藏的旧值或非法时区保存失败：%v", err)
+	}
+	want := domain.UpstreamRateLimits{Timezone: "UTC"}
+	if !reflect.DeepEqual(repo.lastCfg.RateLimits, want) {
+		t.Fatalf("关闭限额应归一化为零额度和 UTC 时区，got=%+v want=%+v", repo.lastCfg.RateLimits, want)
+	}
+}
+
+func TestCreateRejectsInvalidEnabledRateLimitsWithFieldErrors(t *testing.T) {
+	cfg := testValidConfig()
+	cfg.RateLimits = domain.UpstreamRateLimits{
+		Enabled:   true,
+		PerMinute: -1,
+		Timezone:  "Not/AZone",
+	}
+	repo := &testUpstreamRepo{}
+	m := New(repo, &testToolCacheCleaner{}, nil, nil)
+
+	_, err := m.Create(context.Background(), cfg)
+
+	apiErr := asAPIError(t, err)
+	if apiErr.Code != domain.CodeValidation {
+		t.Fatalf("期望错误码 %q，实际 %q", domain.CodeValidation, apiErr.Code)
+	}
+	for _, field := range []string{"rateLimits.timezone", "rateLimits.perMinute"} {
+		if _, ok := apiErr.Fields[field]; !ok {
+			t.Fatalf("期望字段级错误包含 %q，实际 Fields=%v", field, apiErr.Fields)
+		}
+	}
+	if _, ok := apiErr.Fields["rateLimits"]; ok {
+		t.Fatalf("限额错误应定位到具体字段，不应只返回 rateLimits：Fields=%v", apiErr.Fields)
+	}
+	if repo.createCalls != 0 {
+		t.Fatalf("限额校验失败时不应调用仓储 Create，实际调用 %d 次", repo.createCalls)
+	}
+}
+
 // TestUpdateNotFoundPassthrough 验证更新不存在的标识时透传 NOT_FOUND（Req 2.6）。
 func TestUpdateNotFoundPassthrough(t *testing.T) {
 	repo := &testUpstreamRepo{

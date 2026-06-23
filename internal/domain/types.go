@@ -51,7 +51,7 @@ type ToolDef struct {
 	UpstreamID string `json:"upstreamId"`
 	// Order 继承所属上游 MCP 的排序顺序。
 	Order int `json:"order"`
-	// SourceCount 表示该对外工具当前可路由的来源上游数量，仅用于管理台展示。
+	// SourceCount 表示该对外工具背后的来源上游数量，仅用于管理台展示。
 	SourceCount int `json:"sourceCount,omitempty"`
 	// SchemaConflict 表示同名来源中存在与对外展示 schema 不一致的工具，仅用于管理台提示。
 	SchemaConflict bool `json:"schemaConflict,omitempty"`

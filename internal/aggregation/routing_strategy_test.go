@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -51,18 +52,34 @@ type memoryQuotaCounter struct {
 	counts map[string]int64
 }
 
-func (c *memoryQuotaCounter) Incr(_ context.Context, key string) (int64, error) {
+func (c *memoryQuotaCounter) Reserve(_ context.Context, items []QuotaReservation) (bool, int, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.counts == nil {
 		c.counts = make(map[string]int64)
 	}
-	c.counts[key]++
-	return c.counts[key], nil
+	for i, item := range items {
+		if c.counts[item.Key] >= int64(item.Limit) {
+			return false, i + 1, nil
+		}
+	}
+	for _, item := range items {
+		c.counts[item.Key]++
+	}
+	return true, 0, nil
 }
 
-func (c *memoryQuotaCounter) Expire(_ context.Context, _ string, _ time.Duration) error {
-	return nil
+func (c *memoryQuotaCounter) totalForWindow(window string) int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var total int64
+	needle := ":" + window + ":"
+	for key, count := range c.counts {
+		if strings.Contains(key, needle) {
+			total += count
+		}
+	}
+	return total
 }
 
 func routeEnabledUpstream(id string, sortOrder int, limits domain.UpstreamRateLimits) domain.Upstream {
@@ -178,5 +195,35 @@ func TestQuotaExhaustionFallsThroughThenBlocks(t *testing.T) {
 	}
 	if invoker.callCount() != 2 {
 		t.Fatalf("第三次限流不应转发，calls=%v", invoker.calls)
+	}
+}
+
+func TestQuotaReservationDoesNotConsumeEarlierWindowsWhenLaterWindowIsExhausted(t *testing.T) {
+	counter := &memoryQuotaCounter{}
+	q := NewQuotaManager(counter, nil)
+	q.now = func() time.Time { return time.Date(2026, 6, 23, 10, 30, 0, 0, time.UTC) }
+	limits := domain.UpstreamRateLimits{
+		Enabled:   true,
+		PerMinute: 10,
+		PerMonth:  1,
+		Timezone:  "UTC",
+	}
+
+	allowed, reason := q.Allow(context.Background(), "up-a", limits)
+	if !allowed {
+		t.Fatalf("第一次额度预留应通过，reason=%q", reason)
+	}
+	allowed, reason = q.Allow(context.Background(), "up-a", limits)
+	if allowed {
+		t.Fatalf("第二次应因月度额度耗尽被拒绝")
+	}
+	if reason == "" {
+		t.Fatalf("额度耗尽时应返回可读原因")
+	}
+	if got := counter.totalForWindow("minute"); got != 1 {
+		t.Fatalf("月度额度已耗尽的拒绝请求不应消耗分钟额度，got=%d want=1", got)
+	}
+	if got := counter.totalForWindow("month"); got != 1 {
+		t.Fatalf("拒绝请求不应继续增加月度额度，got=%d want=1", got)
 	}
 }

@@ -33,3 +33,4 @@ coverage.*
 Thumbs.db
 .vscode/launch.json
 __debug_bin.exe*
+/.cache

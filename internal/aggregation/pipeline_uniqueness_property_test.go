@@ -192,4 +192,20 @@ func TestToolGroupingExamples(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("空 schema 与默认 object schema 视为兼容", func(t *testing.T) {
+		bundles := []upstreamBundle{
+			{upstreamID: "up-a", sortOrder: 0, tools: []domain.ToolDef{{OriginalName: "ping", Name: "ping", InputSchema: nil}}},
+			{upstreamID: "up-b", sortOrder: 1, tools: []domain.ToolDef{{OriginalName: "ping", Name: "ping", InputSchema: []byte(`{"type":"object"}`)}}},
+		}
+		out, reverse := runPipeline(e, bundles, nil)
+		if len(out) != 1 || out[0].SchemaConflict {
+			t.Fatalf("空 schema 与默认 object schema 不应标记冲突：out=%+v", out)
+		}
+		for _, c := range reverse["ping"].Candidates {
+			if !c.Compatible {
+				t.Fatalf("空 schema 与默认 object schema 来源均应可调用：%+v", reverse["ping"].Candidates)
+			}
+		}
+	})
 }

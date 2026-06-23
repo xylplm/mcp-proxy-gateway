@@ -610,7 +610,9 @@ function formatRateLimits(limits?: UpstreamRateLimits): string {
 }
 
 function schemaPreview(value: unknown): string {
-  if (value === null || value === undefined || value === '') return '{}'
+  if (value === null || value === undefined || value === '') {
+    return JSON.stringify({ type: 'object' }, null, 2)
+  }
   if (typeof value === 'string') return value
   try {
     return JSON.stringify(value, null, 2)

@@ -9,6 +9,8 @@ import (
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
 )
 
+var defaultCompatibleInputSchema = []byte(`{"type":"object"}`)
+
 // ToolCandidate 是某个对外工具名背后的一个真实来源。
 type ToolCandidate struct {
 	// UpstreamID 为该工具所属上游 MCP 的标识。
@@ -163,15 +165,20 @@ func groupToolsByName(tools []domain.ToolDef, upstreamNames map[string]string) (
 }
 
 func schemaCompatible(base, candidate []byte) bool {
-	if len(base) == 0 && len(candidate) == 0 {
-		return true
-	}
-	base = bytes.TrimSpace(base)
-	candidate = bytes.TrimSpace(candidate)
+	base = normalizeComparableSchema(base)
+	candidate = normalizeComparableSchema(candidate)
 	var baseJSON any
 	var candidateJSON any
 	if json.Unmarshal(base, &baseJSON) == nil && json.Unmarshal(candidate, &candidateJSON) == nil {
 		return reflect.DeepEqual(baseJSON, candidateJSON)
 	}
 	return bytes.Equal(base, candidate)
+}
+
+func normalizeComparableSchema(schema []byte) []byte {
+	schema = bytes.TrimSpace(schema)
+	if len(schema) == 0 {
+		return defaultCompatibleInputSchema
+	}
+	return schema
 }

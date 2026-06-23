@@ -401,8 +401,10 @@ func (m *Manager) validateConfig(cfg domain.UpstreamConfig) (domain.UpstreamConf
 	} else {
 		cfg.Tags = normalized
 	}
-	if normalized, err := normalizeRateLimits(cfg.RateLimits); err != nil {
-		fields["rateLimits"] = err.Error()
+	if normalized, rateLimitFields := normalizeRateLimits(cfg.RateLimits); len(rateLimitFields) > 0 {
+		for k, v := range rateLimitFields {
+			fields[k] = v
+		}
 	} else {
 		cfg.RateLimits = normalized
 	}
@@ -413,37 +415,37 @@ func (m *Manager) validateConfig(cfg domain.UpstreamConfig) (domain.UpstreamConf
 	return cfg, nil
 }
 
-func normalizeRateLimits(limits domain.UpstreamRateLimits) (domain.UpstreamRateLimits, error) {
+func normalizeRateLimits(limits domain.UpstreamRateLimits) (domain.UpstreamRateLimits, map[string]string) {
 	limits.Timezone = strings.TrimSpace(limits.Timezone)
+	if !limits.Enabled {
+		return domain.UpstreamRateLimits{Timezone: "UTC"}, nil
+	}
 	if limits.Timezone == "" {
 		limits.Timezone = "UTC"
 	}
+	fields := make(map[string]string)
 	if _, err := time.LoadLocation(limits.Timezone); err != nil {
-		return domain.UpstreamRateLimits{}, fmt.Errorf("限流时区不是合法 IANA 时区")
+		fields["rateLimits.timezone"] = "限流时区不是合法 IANA 时区"
 	}
 	values := []struct {
+		field string
 		name  string
 		value int
 	}{
-		{"每秒调用上限", limits.PerSecond},
-		{"每分钟调用上限", limits.PerMinute},
-		{"每小时调用上限", limits.PerHour},
-		{"每日调用上限", limits.PerDay},
-		{"每周调用上限", limits.PerWeek},
-		{"每月调用上限", limits.PerMonth},
+		{"rateLimits.perSecond", "每秒调用上限", limits.PerSecond},
+		{"rateLimits.perMinute", "每分钟调用上限", limits.PerMinute},
+		{"rateLimits.perHour", "每小时调用上限", limits.PerHour},
+		{"rateLimits.perDay", "每日调用上限", limits.PerDay},
+		{"rateLimits.perWeek", "每周调用上限", limits.PerWeek},
+		{"rateLimits.perMonth", "每月调用上限", limits.PerMonth},
 	}
 	for _, item := range values {
 		if item.value < 0 {
-			return domain.UpstreamRateLimits{}, fmt.Errorf("%s不能为负数", item.name)
+			fields[item.field] = fmt.Sprintf("%s不能为负数", item.name)
 		}
 	}
-	if !limits.Enabled {
-		limits.PerSecond = 0
-		limits.PerMinute = 0
-		limits.PerHour = 0
-		limits.PerDay = 0
-		limits.PerWeek = 0
-		limits.PerMonth = 0
+	if len(fields) > 0 {
+		return domain.UpstreamRateLimits{}, fields
 	}
 	return limits, nil
 }
