@@ -5,6 +5,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/myGithub/mcp-proxy-gateway/internal/audit"
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
 	"github.com/myGithub/mcp-proxy-gateway/internal/syslog"
 )
@@ -62,5 +63,6 @@ func (r *Router) clearSystemLogs(c *gin.Context) {
 		return
 	}
 	deleted := r.systemLogs.Clear()
+	r.recordUpdate(c, audit.ResourceSetting, "system-logs:clear")
 	respondOK(c, gin.H{"deleted": deleted})
 }

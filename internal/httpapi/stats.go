@@ -8,6 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/myGithub/mcp-proxy-gateway/internal/audit"
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
 	"github.com/myGithub/mcp-proxy-gateway/internal/store"
 )
@@ -300,6 +301,7 @@ func (r *Router) clearStatsCallRecords(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
+	r.recordUpdate(c, audit.ResourceSetting, "stats:calls:clear")
 	respondOK(c, gin.H{"deleted": deleted})
 }
 

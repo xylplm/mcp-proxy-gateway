@@ -31,7 +31,8 @@ func TestSystemLogsQueryFiltersByLevelAndCursor(t *testing.T) {
 func TestSystemLogsCanBeCleared(t *testing.T) {
 	store := syslog.NewStore(10)
 	store.Add("warn", "one", time.Now(), "", nil)
-	e := newTestEngine(Deps{SystemLogs: store})
+	rec := &fakeAuditRecorder{}
+	e := newTestEngine(Deps{SystemLogs: store, AuditRecorder: rec})
 
 	w := doJSON(e, http.MethodDelete, "/api/admin/system-logs", "")
 	if w.Code != http.StatusOK {
@@ -43,6 +44,9 @@ func TestSystemLogsCanBeCleared(t *testing.T) {
 	unmarshalData(t, w, &got)
 	if got.Deleted != 1 || len(store.List(0, "", 10)) != 0 {
 		t.Fatalf("系统日志未清空：deleted=%d left=%d", got.Deleted, len(store.List(0, "", 10)))
+	}
+	if len(rec.events) != 1 || rec.events[0].method != "update" || rec.events[0].target != "system-logs:clear" {
+		t.Fatalf("应记录清空系统日志审计，实际 %+v", rec.events)
 	}
 }
 

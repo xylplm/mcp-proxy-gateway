@@ -302,7 +302,8 @@ func TestStatsCallRecordDetailParsesID(t *testing.T) {
 
 func TestStatsCallRecordsCanBeCleared(t *testing.T) {
 	st := &fakeStats{}
-	e := newTestEngine(Deps{Stats: st})
+	rec := &fakeAuditRecorder{}
+	e := newTestEngine(Deps{Stats: st, AuditRecorder: rec})
 
 	w := doJSON(e, http.MethodDelete, "/api/admin/stats/calls", "")
 	if w.Code != http.StatusOK {
@@ -317,6 +318,9 @@ func TestStatsCallRecordsCanBeCleared(t *testing.T) {
 	unmarshalData(t, w, &got)
 	if got.Deleted != 12 {
 		t.Fatalf("删除条数未回填，got=%d", got.Deleted)
+	}
+	if len(rec.events) != 1 || rec.events[0].method != "update" || rec.events[0].target != "stats:calls:clear" {
+		t.Fatalf("应记录清空调用记录审计，实际 %+v", rec.events)
 	}
 }
 
