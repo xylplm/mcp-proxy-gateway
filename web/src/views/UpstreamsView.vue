@@ -70,6 +70,7 @@ const toolModalTools = ref<ToolDef[]>([])
 const toolModalUpdatedAt = ref<string | null>(null)
 const toolModalLoading = ref(false)
 const toolModalError = ref('')
+const toolModalSearchKeyword = ref('')
 
 let statusPollTimer: number | undefined
 let statusPollingUntil = 0
@@ -100,6 +101,17 @@ const nextSortOrder = computed(
   () => upstreams.value.reduce((max, up) => Math.max(max, up.config.sortOrder), -1) + 1,
 )
 const hasConnectingUpstream = computed(() => upstreams.value.some((up) => up.state === 'connecting'))
+const normalizedToolModalSearchKeyword = computed(() => toolModalSearchKeyword.value.trim().toLowerCase())
+const hasToolModalSearchKeyword = computed(() => normalizedToolModalSearchKeyword.value !== '')
+const filteredToolModalTools = computed(() => {
+  const keyword = normalizedToolModalSearchKeyword.value
+  if (keyword === '') return toolModalTools.value
+  return toolModalTools.value.filter((tool) => toolSearchText(tool).includes(keyword))
+})
+const toolModalCountLabel = computed(() => {
+  if (!hasToolModalSearchKeyword.value) return `共 ${toolModalTools.value.length} 个`
+  return `匹配 ${filteredToolModalTools.value.length} / 共 ${toolModalTools.value.length} 个`
+})
 
 function normalizeTags(tags: string[]): string[] {
   const seen = new Set<string>()
@@ -321,12 +333,24 @@ function schemaPreview(schema: unknown): string {
   }
 }
 
+function toolSearchText(tool: ToolDef): string {
+  return [
+    tool.name,
+    tool.originalName,
+    tool.description,
+    tool.upstreamId,
+  ]
+    .join(' ')
+    .toLowerCase()
+}
+
 async function openToolModal(up: Upstream): Promise<void> {
   toolModalOpen.value = true
   toolModalUpstream.value = up
   toolModalTools.value = []
   toolModalUpdatedAt.value = null
   toolModalError.value = ''
+  toolModalSearchKeyword.value = ''
   toolModalLoading.value = true
   try {
     const result = await listUpstreamTools(up.id)
@@ -789,7 +813,7 @@ function goPage(p: number): void {
                 {{ toolModalUpstream.config.name }} 的工具
               </h3>
               <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                {{ formatToolUpdatedAt(toolModalUpdatedAt) }} · 共 {{ toolModalTools.length }} 个
+                {{ formatToolUpdatedAt(toolModalUpdatedAt) }} · {{ toolModalCountLabel }}
               </p>
             </div>
             <button
@@ -817,6 +841,23 @@ function goPage(p: number): void {
             >
               {{ toolModalError }}
             </p>
+            <label v-if="toolModalTools.length > 0" class="relative mb-4 block">
+              <span class="sr-only">搜索工具</span>
+              <input
+                v-model="toolModalSearchKeyword"
+                type="search"
+                placeholder="搜索工具名称、原始名或描述"
+                class="h-10 w-full rounded-lg border border-gray-300 bg-white px-3 pr-12 text-sm text-gray-800 shadow-sm transition placeholder:text-gray-400 focus:border-brand-300 focus:ring-3 focus:ring-brand-500/10 focus:outline-none dark:border-gray-700 dark:bg-gray-900 dark:text-white/90"
+              />
+              <button
+                v-if="hasToolModalSearchKeyword"
+                type="button"
+                class="absolute top-1/2 right-2 -translate-y-1/2 rounded-md px-2 py-1 text-xs text-gray-500 transition hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+                @click="toolModalSearchKeyword = ''"
+              >
+                清空
+              </button>
+            </label>
             <div v-if="toolModalLoading" class="py-12 text-center text-sm text-gray-400">
               加载中…
             </div>
@@ -826,9 +867,15 @@ function goPage(p: number): void {
             >
               暂无工具缓存，可先刷新工具列表
             </div>
+            <div
+              v-else-if="filteredToolModalTools.length === 0"
+              class="rounded-xl border border-dashed border-gray-300 px-4 py-10 text-center text-sm text-gray-400 dark:border-gray-700"
+            >
+              没有匹配的工具
+            </div>
             <div v-else class="grid grid-cols-1 gap-3 md:grid-cols-2">
               <article
-                v-for="tool in toolModalTools"
+                v-for="tool in filteredToolModalTools"
                 :key="`${tool.upstreamId}:${tool.originalName}:${tool.name}`"
                 class="rounded-xl border border-gray-200 p-4 dark:border-gray-800 dark:bg-white/[0.03]"
               >
