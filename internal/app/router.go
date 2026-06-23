@@ -44,7 +44,7 @@ func (a *App) buildRouter(w routerWiring) *gin.Engine {
 // /mcp 组，避免两套鉴权互相污染（Req 11.8）。当 exposeMCP 为 false 时，管理端口完全不注册
 // /mcp/*，便于把对外 MCP 服务迁移到独立端口后收紧公网暴露面。
 func (a *App) buildAdminRouter(w routerWiring, exposeMCP bool) *gin.Engine {
-	engine := newBaseEngine()
+	engine := a.newBaseEngine()
 	a.configureTrustedProxies(engine)
 
 	// 公开存活探针（无鉴权，Req 20.6）。
@@ -79,7 +79,7 @@ func (a *App) buildAdminRouter(w routerWiring, exposeMCP bool) *gin.Engine {
 // buildMCPRouter 装配独立对外 MCP 端口。该端口只注册 /mcp/* 与可选 /healthz，不包含管理 API
 // 与 SPA 兜底，适合直接暴露到公网并在反向代理层叠加更严格的安全策略。
 func (a *App) buildMCPRouter(w routerWiring, exposeHealthz bool) *gin.Engine {
-	engine := newBaseEngine()
+	engine := a.newBaseEngine()
 	a.configureTrustedProxies(engine)
 	if exposeHealthz {
 		engine.GET("/healthz", health.LivenessHandler())
@@ -88,10 +88,11 @@ func (a *App) buildMCPRouter(w routerWiring, exposeHealthz bool) *gin.Engine {
 	return engine
 }
 
-func newBaseEngine() *gin.Engine {
+func (a *App) newBaseEngine() *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	engine := gin.New()
 	engine.Use(gin.Recovery())
+	engine.Use(requestIDMiddleware(a.logger))
 	return engine
 }
 
