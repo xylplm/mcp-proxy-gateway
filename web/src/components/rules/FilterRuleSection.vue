@@ -16,9 +16,14 @@ import {
   type FilterRule,
   type FilterRuleRequest,
 } from '@/api/rules'
-import { listUpstreamTools, type Upstream } from '@/api/upstreams'
+import type { Upstream } from '@/api/upstreams'
 import type { ToolDef } from '@/api/tools'
 import { useConfirm } from '@/composables/useConfirm'
+import {
+  createOriginalNameMatcher,
+  loadCachedToolsForEnabledUpstreams,
+  scopedEnabledUpstreamIDs,
+} from './rulePreview'
 
 const props = defineProps<{
   upstreams: Upstream[]
@@ -112,26 +117,7 @@ async function reload(): Promise<void> {
 }
 
 async function loadToolPreview(): Promise<void> {
-  const previewUpstreams = props.upstreams.filter((up) => up.config.enabled)
-  if (previewUpstreams.length === 0) {
-    toolsByUpstream.value = {}
-    return
-  }
-
-  const entries = await Promise.allSettled(
-    previewUpstreams.map(async (up) => {
-      const result = await listUpstreamTools(up.id, { ensure: false })
-      return [up.id, result.tools] as const
-    }),
-  )
-
-  const next: Record<string, ToolDef[]> = {}
-  for (const entry of entries) {
-    if (entry.status !== 'fulfilled') continue
-    const [upstreamID, tools] = entry.value
-    next[upstreamID] = tools
-  }
-  toolsByUpstream.value = next
+  toolsByUpstream.value = await loadCachedToolsForEnabledUpstreams(props.upstreams)
 }
 
 onMounted(reload)
@@ -332,12 +318,12 @@ function buildRulePreviewSummary(rule: FilterRule): RulePreviewSummary {
     return { label: '规则未启用', items: [], hiddenCount: 0 }
   }
 
-  const ids = scopedEnabledUpstreamIDs(rule)
+  const ids = scopedEnabledUpstreamIDs(rule, props.upstreams)
   if (ids.length === 0) {
     return { label: '作用范围内暂无启用上游', items: [], hiddenCount: 0 }
   }
 
-  const matcher = createToolMatcher(rule)
+  const matcher = createOriginalNameMatcher(rule.pattern, rule.isRegex)
   if (matcher === null) {
     return { label: '当前缓存未命中工具', items: [], hiddenCount: 0 }
   }
@@ -360,31 +346,6 @@ function buildRulePreviewSummary(rule: FilterRule): RulePreviewSummary {
     label: hits.length > 0 ? `当前缓存命中 ${hits.length} 个工具` : '当前缓存未命中工具',
     items: hits.slice(0, 3),
     hiddenCount: Math.max(0, hits.length - 3),
-  }
-}
-
-function scopedEnabledUpstreamIDs(rule: FilterRule): string[] {
-  const enabledUpstreamIDs = new Set(
-    props.upstreams.filter((up) => up.config.enabled).map((up) => up.id),
-  )
-  const ids = (rule.scopeType ?? 'all') === 'all'
-    ? props.upstreams.map((up) => up.id)
-    : rule.upstreamIds ?? []
-  return ids.filter((id) => enabledUpstreamIDs.has(id))
-}
-
-function createToolMatcher(
-  rule: Pick<FilterRule, 'pattern' | 'isRegex'>,
-): ((originalName: string) => boolean) | null {
-  const pattern = rule.pattern.trim()
-  if (pattern === '') return null
-  if (!rule.isRegex) return (originalName: string) => originalName === pattern
-
-  try {
-    const re = new RegExp(`^(?:${pattern})$`)
-    return (originalName: string) => re.test(originalName)
-  } catch {
-    return null
   }
 }
 

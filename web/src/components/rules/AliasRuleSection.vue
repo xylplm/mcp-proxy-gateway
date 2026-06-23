@@ -6,7 +6,7 @@
  * 别名规则不支持独立启停；排序通过交换相邻规则 sortOrder 后经 PUT 持久化实现。
  * 风格：Tailwind 工具类 + TailAdmin（卡片 rounded-2xl border、徽章、按钮、模态框）。
  */
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import {
   listAliases,
   createAlias,
@@ -16,7 +16,14 @@ import {
   type AliasRuleRequest,
 } from '@/api/rules'
 import type { Upstream } from '@/api/upstreams'
+import type { ToolDef } from '@/api/tools'
 import { useConfirm } from '@/composables/useConfirm'
+import {
+  createOriginalNameMatcher,
+  enabledUpstreamIDs,
+  loadCachedToolsForEnabledUpstreams,
+  scopedEnabledUpstreamIDs,
+} from './rulePreview'
 
 const props = defineProps<{
   upstreams: Upstream[]
@@ -53,6 +60,31 @@ const form = ref<AliasRuleRequest>({
 
 const isEdit = computed(() => editing.value !== null)
 
+interface AliasPreviewItem {
+  key: string
+  upstreamName: string
+  originalName: string
+  displayName?: string
+  changeLabel: string
+}
+
+interface AliasPreviewSummary {
+  label: string
+  items: AliasPreviewItem[]
+  hiddenCount: number
+}
+
+interface AliasPreviewAccumulator extends AliasPreviewSummary {
+  directCount: number
+  effectiveCount: number
+}
+
+const toolsByUpstream = ref<Record<string, ToolDef[]>>({})
+
+const previewSummaries = computed<Record<string, AliasPreviewSummary>>(() => {
+  return buildAliasPreviewSummaries()
+})
+
 /** 加载别名规则（按 sortOrder 升序）。 */
 async function load(): Promise<void> {
   loading.value = true
@@ -68,7 +100,22 @@ async function load(): Promise<void> {
   }
 }
 
-onMounted(load)
+async function reload(): Promise<void> {
+  await Promise.all([load(), loadToolPreview()])
+}
+
+async function loadToolPreview(): Promise<void> {
+  toolsByUpstream.value = await loadCachedToolsForEnabledUpstreams(props.upstreams)
+}
+
+onMounted(reload)
+
+watch(
+  () => props.upstreams.map((up) => `${up.id}:${up.config.enabled}`).join('|'),
+  () => {
+    void loadToolPreview()
+  },
+)
 
 /** 打开新建模态框（sortOrder 追加到末尾）。 */
 function openCreate(): void {
@@ -250,7 +297,97 @@ function scopeLabel(rule: AliasRule): string {
   return `${names.slice(0, 3).join('、')} 等 ${names.length} 个`
 }
 
-defineExpose({ reload: load })
+function previewSummary(rule: AliasRule): AliasPreviewSummary {
+  return previewSummaries.value[rule.id] ?? emptyAliasPreviewSummary(rule)
+}
+
+function buildAliasPreviewSummaries(): Record<string, AliasPreviewSummary> {
+  const summaries: Record<string, AliasPreviewAccumulator> = {}
+  const plans = rules.value.map((rule) => {
+    summaries[rule.id] = emptyAliasPreviewAccumulator(rule)
+    return {
+      rule,
+      matcher: createOriginalNameMatcher(rule.pattern, rule.isRegex),
+      scopedIDs: new Set(scopedEnabledUpstreamIDs(rule, props.upstreams)),
+    }
+  })
+
+  for (const upstreamID of enabledUpstreamIDs(props.upstreams)) {
+    const tools = toolsByUpstream.value[upstreamID] ?? []
+    for (const tool of tools) {
+      let firstMatchID = ''
+      for (const plan of plans) {
+        if (!plan.scopedIDs.has(upstreamID) || plan.matcher === null) continue
+        if (!plan.matcher(tool.originalName)) continue
+
+        const summary = summaries[plan.rule.id]
+        summary.directCount += 1
+        if (firstMatchID !== '') continue
+
+        firstMatchID = plan.rule.id
+        summary.effectiveCount += 1
+        if (summary.items.length < 3) {
+          summary.items.push(aliasPreviewItem(plan.rule, tool, upstreamID, summary.effectiveCount))
+        }
+      }
+    }
+  }
+
+  const out: Record<string, AliasPreviewSummary> = {}
+  for (const rule of rules.value) {
+    const summary = summaries[rule.id] ?? emptyAliasPreviewAccumulator(rule)
+    out[rule.id] = {
+      label: aliasPreviewLabel(rule, summary),
+      items: summary.items,
+      hiddenCount: Math.max(0, summary.effectiveCount - summary.items.length),
+    }
+  }
+  return out
+}
+
+function emptyAliasPreviewAccumulator(rule: AliasRule): AliasPreviewAccumulator {
+  const base = emptyAliasPreviewSummary(rule)
+  return { ...base, directCount: 0, effectiveCount: 0 }
+}
+
+function emptyAliasPreviewSummary(rule: AliasRule): AliasPreviewSummary {
+  if (scopedEnabledUpstreamIDs(rule, props.upstreams).length === 0) {
+    return { label: '作用范围内暂无启用上游', items: [], hiddenCount: 0 }
+  }
+  return { label: '当前缓存未命中工具', items: [], hiddenCount: 0 }
+}
+
+function aliasPreviewLabel(rule: AliasRule, summary: AliasPreviewAccumulator): string {
+  if (scopedEnabledUpstreamIDs(rule, props.upstreams).length === 0) return '作用范围内暂无启用上游'
+  if (summary.effectiveCount > 0) return `当前缓存首条命中 ${summary.effectiveCount} 个工具`
+  if (summary.directCount > 0) return `当前缓存命中 ${summary.directCount} 个，前序规则已覆盖`
+  return '当前缓存未命中工具'
+}
+
+function aliasPreviewItem(
+  rule: AliasRule,
+  tool: ToolDef,
+  upstreamID: string,
+  index: number,
+): AliasPreviewItem {
+  return {
+    key: `${upstreamID}:${tool.originalName}:${index}`,
+    upstreamName: upstreamName(upstreamID),
+    originalName: tool.originalName,
+    displayName: rule.targetName?.trim() || undefined,
+    changeLabel: aliasChangeLabel(rule),
+  }
+}
+
+function aliasChangeLabel(rule: AliasRule): string {
+  const hasName = (rule.targetName ?? '').trim() !== ''
+  const hasDesc = (rule.targetDesc ?? '').trim() !== ''
+  if (hasName && hasDesc) return '改名并重写描述'
+  if (hasName) return '改名'
+  return '重写描述'
+}
+
+defineExpose({ reload })
 </script>
 
 <template>
@@ -319,6 +456,35 @@ defineExpose({ reload: load })
           </AppTooltip>
           <div class="mt-2 rounded-lg bg-gray-50 px-2.5 py-2 text-xs text-gray-500 dark:bg-gray-800/60 dark:text-gray-400">
             作用范围：{{ scopeLabel(rule) }}
+          </div>
+        </div>
+        <div
+          class="mb-3 rounded-lg border border-brand-100 bg-brand-50 px-2.5 py-2 text-xs text-brand-700 dark:border-brand-500/20 dark:bg-brand-500/10 dark:text-brand-300"
+        >
+          <div class="flex items-center justify-between gap-2">
+            <span>{{ previewSummary(rule).label }}</span>
+            <span v-if="previewSummary(rule).hiddenCount > 0" class="shrink-0 text-brand-600 dark:text-brand-300">
+              +{{ previewSummary(rule).hiddenCount }}
+            </span>
+          </div>
+          <div v-if="previewSummary(rule).items.length > 0" class="mt-2 flex flex-wrap gap-1.5">
+            <AppTooltip
+              v-for="item in previewSummary(rule).items"
+              :key="item.key"
+              :content="item.displayName
+                ? `${item.upstreamName} / ${item.originalName} → ${item.displayName}`
+                : `${item.upstreamName} / ${item.originalName}`"
+              placement="bottom"
+            >
+              <span
+                class="inline-flex max-w-full items-center rounded-md bg-white px-1.5 py-0.5 text-[11px] text-brand-700 ring-1 ring-brand-100 dark:bg-white/5 dark:text-brand-200 dark:ring-brand-500/20"
+              >
+                <span class="truncate">
+                  {{ item.originalName }}<template v-if="item.displayName"> → {{ item.displayName }}</template>
+                </span>
+                <span class="ml-1 shrink-0 text-brand-500 dark:text-brand-300">{{ item.changeLabel }}</span>
+              </span>
+            </AppTooltip>
           </div>
         </div>
         <div class="mt-auto flex items-center justify-between border-t border-gray-100 pt-2.5 dark:border-gray-800">
