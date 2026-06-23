@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"testing"
 	"time"
@@ -280,6 +281,37 @@ func TestStatsCallRecordsParsesRealtimeCursor(t *testing.T) {
 	}
 }
 
+func TestStatsCallRecordsExportReturnsDownload(t *testing.T) {
+	calledAt := time.Date(2024, 5, 1, 10, 1, 0, 0, time.UTC)
+	st := &fakeStats{callRecords: []store.CallRecordView{{
+		ID:           12,
+		UpstreamName: "mcp",
+		ExposedName:  "tool",
+		CalledAt:     calledAt,
+		Status:       store.CallStatusSuccess,
+	}}}
+	e := newTestEngine(Deps{Stats: st})
+
+	w := doJSON(e, http.MethodGet, "/api/admin/stats/calls/export?limit=12&afterId=3&afterAt=2024-05-01T10:00:00Z", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("期望 HTTP 200，实际 %d，响应体 %s", w.Code, w.Body.String())
+	}
+	if st.gotLimit != 12 || st.gotAfterID != 3 {
+		t.Fatalf("调用记录导出参数未透传：limit=%d afterID=%d", st.gotLimit, st.gotAfterID)
+	}
+	if !st.gotAfterAt.Equal(time.Date(2024, 5, 1, 10, 0, 0, 0, time.UTC)) {
+		t.Fatalf("调用记录导出时间游标未透传：afterAt=%s", st.gotAfterAt.Format(timeLayout))
+	}
+	var got []callRecordResponseView
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("导出响应应为 JSON 数组：%v", err)
+	}
+	if len(got) != 1 || got[0].ID != 12 || got[0].ExposedName != "tool" {
+		t.Fatalf("导出调用记录不符合预期：%+v", got)
+	}
+	assertDownloadHeaders(t, w, "mpg-call-records-")
+}
+
 func TestStatsCallRecordDetailParsesID(t *testing.T) {
 	st := &fakeStats{callRecord: store.CallRecordView{ID: 42, ExposedName: "search"}}
 	e := newTestEngine(Deps{Stats: st})
@@ -343,6 +375,11 @@ func TestStatsInvalidLimitMapsTo400(t *testing.T) {
 	w := doJSON(e, http.MethodGet, "/api/admin/stats/tools?limit=abc", "")
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("非法 limit 期望 HTTP 400，实际 %d", w.Code)
+	}
+
+	w = doJSON(e, http.MethodGet, "/api/admin/stats/calls/export?limit=abc", "")
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("调用记录导出非法 limit 期望 HTTP 400，实际 %d", w.Code)
 	}
 }
 

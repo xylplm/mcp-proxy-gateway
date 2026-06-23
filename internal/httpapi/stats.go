@@ -71,6 +71,7 @@ func (r *Router) registerStatsRoutes(g *gin.RouterGroup) {
 	st.GET("/daily", r.statsDaily)
 	st.GET("/tool-errors", r.statsTopToolErrors)
 	st.GET("/calls", r.statsCallRecords)
+	st.GET("/calls/export", r.exportStatsCallRecords)
 	st.DELETE("/calls", r.clearStatsCallRecords)
 	st.GET("/calls/:id", r.statsCallRecordDetail)
 }
@@ -222,38 +223,9 @@ func (r *Router) statsCallRecords(c *gin.Context) {
 		respondServiceUnavailable(c, "统计查询服务未就绪")
 		return
 	}
-	limit := 30
-	if l := c.Query("limit"); l != "" {
-		n, perr := strconv.Atoi(l)
-		if perr != nil {
-			respondError(c, domain.NewValidationError("调用记录条数参数非法", map[string]string{
-				"limit": "需为整数",
-			}))
-			return
-		}
-		limit = n
-	}
-	var afterID int64
-	if v := c.Query("afterId"); v != "" {
-		n, perr := strconv.ParseInt(v, 10, 64)
-		if perr != nil || n < 0 {
-			respondError(c, domain.NewValidationError("调用记录游标参数非法", map[string]string{
-				"afterId": "需为非负整数",
-			}))
-			return
-		}
-		afterID = n
-	}
-	var afterAt time.Time
-	if v := c.Query("afterAt"); v != "" {
-		t, perr := time.Parse(timeLayout, v)
-		if perr != nil {
-			respondError(c, domain.NewValidationError("调用记录时间游标参数非法", map[string]string{
-				"afterAt": "时间格式需为 RFC3339",
-			}))
-			return
-		}
-		afterAt = t
+	limit, afterID, afterAt, ok := parseCallRecordQuery(c, 30)
+	if !ok {
+		return
 	}
 	records, err := r.stats.ListRecords(c.Request.Context(), limit, afterID, afterAt)
 	if err != nil {
@@ -266,6 +238,28 @@ func (r *Router) statsCallRecords(c *gin.Context) {
 		views = append(views, toCallRecordResponseView(rec, descMap))
 	}
 	respondOK(c, gin.H{"records": views})
+}
+
+func (r *Router) exportStatsCallRecords(c *gin.Context) {
+	if r.stats == nil {
+		respondServiceUnavailable(c, "统计查询服务未就绪")
+		return
+	}
+	limit, afterID, afterAt, ok := parseCallRecordQuery(c, 100)
+	if !ok {
+		return
+	}
+	records, err := r.stats.ListRecords(c.Request.Context(), limit, afterID, afterAt)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	descMap := r.buildDescriptionMap(c.Request.Context())
+	views := make([]callRecordResponseView, 0, len(records))
+	for _, rec := range records {
+		views = append(views, toCallRecordResponseView(rec, descMap))
+	}
+	respondJSONDownload(c, "mpg-call-records-"+time.Now().Format("20060102-150405")+".json", views)
 }
 
 // statsCallRecordDetail 返回单条调用记录详情。
@@ -303,6 +297,41 @@ func (r *Router) clearStatsCallRecords(c *gin.Context) {
 	}
 	r.recordUpdate(c, audit.ResourceSetting, "stats:calls:clear")
 	respondOK(c, gin.H{"deleted": deleted})
+}
+
+func parseCallRecordQuery(c *gin.Context, defaultLimit int) (limit int, afterID int64, afterAt time.Time, ok bool) {
+	limit = defaultLimit
+	if l := c.Query("limit"); l != "" {
+		n, perr := strconv.Atoi(l)
+		if perr != nil {
+			respondError(c, domain.NewValidationError("调用记录条数参数非法", map[string]string{
+				"limit": "需为整数",
+			}))
+			return 0, 0, time.Time{}, false
+		}
+		limit = n
+	}
+	if v := c.Query("afterId"); v != "" {
+		n, perr := strconv.ParseInt(v, 10, 64)
+		if perr != nil || n < 0 {
+			respondError(c, domain.NewValidationError("调用记录游标参数非法", map[string]string{
+				"afterId": "需为非负整数",
+			}))
+			return 0, 0, time.Time{}, false
+		}
+		afterID = n
+	}
+	if v := c.Query("afterAt"); v != "" {
+		t, perr := time.Parse(timeLayout, v)
+		if perr != nil {
+			respondError(c, domain.NewValidationError("调用记录时间游标参数非法", map[string]string{
+				"afterAt": "时间格式需为 RFC3339",
+			}))
+			return 0, 0, time.Time{}, false
+		}
+		afterAt = t
+	}
+	return limit, afterID, afterAt, true
 }
 
 // callRecordResponseView 是调用记录的管理台响应视图，在 store.CallRecordView 基础上

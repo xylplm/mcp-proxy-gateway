@@ -242,11 +242,13 @@ export async function topToolErrors(
   return res.data?.tools ?? []
 }
 
-export async function listCallRecords(query: {
+export interface CallRecordsQuery {
   limit?: number
   afterId?: number
   afterAt?: string
-} = {}): Promise<CallRecord[]> {
+}
+
+function buildCallRecordsParams(query: CallRecordsQuery): Record<string, string> {
   const params: Record<string, string> = {}
   if (query.limit !== undefined && query.limit > 0) {
     params.limit = String(query.limit)
@@ -257,8 +259,19 @@ export async function listCallRecords(query: {
   if (query.afterAt !== undefined && query.afterAt !== '') {
     params.afterAt = query.afterAt
   }
+  return params
+}
+
+export async function listCallRecords(query: CallRecordsQuery = {}): Promise<CallRecord[]> {
+  const params = buildCallRecordsParams(query)
   const res = await request.get<CallRecordsResponse>('/stats/calls', { params })
   return res.data?.records ?? []
+}
+
+export async function exportCallRecords(query: CallRecordsQuery = {}): Promise<Blob> {
+  const params = buildCallRecordsParams(query)
+  const res = await request.get<Blob>('/stats/calls/export', { params, responseType: 'blob' })
+  return res.data
 }
 
 export async function getCallRecord(id: number | string): Promise<CallRecord> {

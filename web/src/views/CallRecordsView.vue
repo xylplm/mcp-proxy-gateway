@@ -4,8 +4,8 @@ import AdminLayout from '@/components/layout/AdminLayout.vue'
 import PageBreadcrumb from '@/components/common/PageBreadcrumb.vue'
 import AppTooltip from '@/components/common/AppTooltip.vue'
 import CallRecordDetailModal from '@/components/call-records/CallRecordDetailModal.vue'
-import { clearCallRecords, listCallRecords, type CallRecord } from '@/api/stats'
-import { RefreshIcon, TrashIcon } from '@/icons'
+import { clearCallRecords, exportCallRecords, listCallRecords, type CallRecord } from '@/api/stats'
+import { ArchiveIcon, RefreshIcon, TrashIcon } from '@/icons'
 import { useConfirm } from '@/composables/useConfirm'
 import { useToast } from '@/composables/useToast'
 
@@ -15,6 +15,7 @@ const { confirm } = useConfirm()
 const records = ref<CallRecord[]>([])
 const loading = ref(false)
 const refreshing = ref(false)
+const exporting = ref(false)
 const errorMessage = ref('')
 const newCount = ref(0)
 const autoRefresh = ref(true)
@@ -212,6 +213,34 @@ async function clearRecords(): Promise<void> {
   }
 }
 
+function callRecordsFileNameNow(): string {
+  const d = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `mpg-call-records-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.json`
+}
+
+async function downloadRecords(): Promise<void> {
+  if (exporting.value) return
+  exporting.value = true
+  errorMessage.value = ''
+  try {
+    const blob = await exportCallRecords({ limit: maxLocalRecords })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = callRecordsFileNameNow()
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+    toast.success('调用记录已导出')
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : '导出调用记录失败')
+  } finally {
+    exporting.value = false
+  }
+}
+
 function startPolling(): void {
   stopPolling()
   if (!autoRefresh.value) return
@@ -291,6 +320,16 @@ const cardClass =
           @click="refreshNow"
         >
           <RefreshIcon class="h-5 w-5" :class="refreshing ? 'animate-spin' : ''" />
+        </button>
+        <button
+          v-tooltip:bottom-end="'导出最近调用记录'"
+          type="button"
+          class="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-gray-200 text-gray-600 transition hover:border-brand-300 hover:bg-brand-50 hover:text-brand-600 disabled:opacity-60 dark:border-gray-800 dark:text-gray-400 dark:hover:border-brand-500/40 dark:hover:bg-brand-500/[0.08] dark:hover:text-brand-400"
+          :disabled="loading || exporting || records.length === 0"
+          aria-label="导出最近调用记录"
+          @click="downloadRecords"
+        >
+          <ArchiveIcon class="h-5 w-5" />
         </button>
         <button
           v-tooltip:bottom-end="'清空调用记录'"
