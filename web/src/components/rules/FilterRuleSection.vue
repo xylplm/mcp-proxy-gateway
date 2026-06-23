@@ -23,7 +23,7 @@ import {
   createOriginalNameMatcher,
   loadCachedToolsForEnabledUpstreams,
   scopedEnabledUpstreamIDs,
-} from './rulePreview'
+} from '@/utils/rulePreview'
 
 const props = defineProps<{
   upstreams: Upstream[]
