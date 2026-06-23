@@ -32,6 +32,23 @@ func TestStoreClear(t *testing.T) {
 	}
 }
 
+func TestStoreExportFiltersAllBufferedEntries(t *testing.T) {
+	store := NewStore(3)
+	store.Add("info", "one", time.Unix(1, 0), "", nil)
+	store.Add("warn", "two", time.Unix(2, 0), "", nil)
+	store.Add("warn", "three", time.Unix(3, 0), "", map[string]any{"code": "w3"})
+
+	got := store.Export("warn")
+	if len(got) != 2 || got[0].Message != "two" || got[1].Message != "three" {
+		t.Fatalf("导出级别过滤结果不符合预期：%+v", got)
+	}
+	got[1].Attrs["code"] = "changed"
+	again := store.Export("warn")
+	if again[1].Attrs["code"] != "w3" {
+		t.Fatalf("导出结果应为副本，实际 attrs=%+v", again[1].Attrs)
+	}
+}
+
 func TestStorePreservesSource(t *testing.T) {
 	store := NewStore(10)
 	store.Add("info", "one", time.Unix(1, 0), "service/subscribe_service.go:196", nil)

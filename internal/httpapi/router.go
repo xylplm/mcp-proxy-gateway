@@ -291,6 +291,7 @@ type SecurityService interface {
 // SystemLogService 是进程运行日志查询依赖的窄接口。
 type SystemLogService interface {
 	List(afterID int64, level string, limit int) []syslog.Entry
+	Export(level string) []syslog.Entry
 	Clear() int
 }
 

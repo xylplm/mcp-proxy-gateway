@@ -4,11 +4,12 @@ import AdminLayout from '@/components/layout/AdminLayout.vue'
 import PageBreadcrumb from '@/components/common/PageBreadcrumb.vue'
 import {
   clearSystemLogs,
+  exportSystemLogs,
   listSystemLogs,
   type SystemLogEntry,
   type SystemLogLevel,
 } from '@/api/systemLogs'
-import { RefreshIcon, TrashIcon } from '@/icons'
+import { ArchiveIcon, RefreshIcon, TrashIcon } from '@/icons'
 import { useConfirm } from '@/composables/useConfirm'
 import { useToast } from '@/composables/useToast'
 
@@ -19,6 +20,7 @@ const logs = ref<SystemLogEntry[]>([])
 const loading = ref(false)
 const refreshing = ref(false)
 const clearing = ref(false)
+const exporting = ref(false)
 const errorMessage = ref('')
 const autoRefresh = ref(true)
 const level = ref<SystemLogLevel>('')
@@ -84,6 +86,35 @@ function attrsText(entry: SystemLogEntry): string {
     return JSON.stringify(entry.attrs, null, 2)
   } catch {
     return String(entry.attrs)
+  }
+}
+
+function logFileNameNow(): string {
+  const d = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const suffix = level.value === '' ? '' : `-${level.value}`
+  return `mpg-system-logs${suffix}-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.json`
+}
+
+async function downloadLogs(): Promise<void> {
+  if (exporting.value) return
+  exporting.value = true
+  errorMessage.value = ''
+  try {
+    const blob = await exportSystemLogs({ level: level.value })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = logFileNameNow()
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+    toast.success('系统日志已导出')
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : '导出系统日志失败')
+  } finally {
+    exporting.value = false
   }
 }
 
@@ -256,6 +287,16 @@ const controlClass =
           @click="refreshNow"
         >
           <RefreshIcon class="h-5 w-5" :class="refreshing ? 'animate-spin' : ''" />
+        </button>
+        <button
+          v-tooltip:bottom-end="'导出当前级别日志'"
+          type="button"
+          class="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-gray-200 text-gray-600 transition hover:border-brand-300 hover:bg-brand-50 hover:text-brand-600 disabled:opacity-60 dark:border-gray-800 dark:text-gray-400 dark:hover:border-brand-500/40 dark:hover:bg-brand-500/[0.08] dark:hover:text-brand-400"
+          :disabled="loading || exporting"
+          aria-label="导出当前级别系统日志"
+          @click="downloadLogs"
+        >
+          <ArchiveIcon class="h-5 w-5" />
         </button>
         <button
           v-tooltip:bottom-end="'清空系统日志'"

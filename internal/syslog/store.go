@@ -104,6 +104,23 @@ func (s *Store) List(afterID int64, level string, limit int) []Entry {
 	return out
 }
 
+// Export returns all currently buffered entries matching level.
+func (s *Store) Export(level string) []Entry {
+	level = NormalizeLevel(level)
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	out := make([]Entry, 0, len(s.entries))
+	for _, entry := range s.entries {
+		if level != "" && entry.Level != level {
+			continue
+		}
+		out = append(out, cloneEntry(entry))
+	}
+	return out
+}
+
 func (s *Store) Clear() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()

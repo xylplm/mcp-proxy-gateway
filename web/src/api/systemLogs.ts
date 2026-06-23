@@ -40,6 +40,15 @@ export async function listSystemLogs(query: SystemLogQuery = {}): Promise<System
   return res.data?.logs ?? []
 }
 
+export async function exportSystemLogs(query: Pick<SystemLogQuery, 'level'> = {}): Promise<Blob> {
+  const params: Record<string, string> = {}
+  if (query.level !== undefined && query.level !== '') {
+    params.level = query.level
+  }
+  const res = await request.get<Blob>('/system-logs/export', { params, responseType: 'blob' })
+  return res.data
+}
+
 export async function clearSystemLogs(): Promise<number> {
   const res = await request.delete<ClearSystemLogsResponse>('/system-logs')
   return res.data?.deleted ?? 0
