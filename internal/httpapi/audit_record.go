@@ -1,8 +1,6 @@
 package httpapi
 
 import (
-	"context"
-
 	"github.com/gin-gonic/gin"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/audit"
@@ -43,7 +41,7 @@ func (r *Router) recordUpdate(c *gin.Context, kind audit.ResourceKind, target st
 	if r.auditRecorder == nil {
 		return
 	}
-	_ = r.auditRecorder.RecordUpdate(context.Background(), kind, target)
+	_ = r.auditRecorder.RecordUpdate(c.Request.Context(), kind, target)
 }
 
 // recordDelete 记录一次资源删除事件。

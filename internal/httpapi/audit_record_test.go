@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -20,7 +21,8 @@ import (
 
 // fakeAuditRecorder 是 AuditRecorder 的内存实现，按调用顺序记录全部审计事件。
 type fakeAuditRecorder struct {
-	events []recordedAuditEvent
+	events     []recordedAuditEvent
+	updateCtxs []context.Context
 }
 
 // recordedAuditEvent 记录一次审计调用的方法名与入参，便于断言。
@@ -43,8 +45,9 @@ func (f *fakeAuditRecorder) RecordCreate(_ context.Context, kind audit.ResourceK
 	return nil
 }
 
-func (f *fakeAuditRecorder) RecordUpdate(_ context.Context, kind audit.ResourceKind, target string) error {
+func (f *fakeAuditRecorder) RecordUpdate(ctx context.Context, kind audit.ResourceKind, target string) error {
 	f.events = append(f.events, recordedAuditEvent{method: "update", kind: kind, target: target})
+	f.updateCtxs = append(f.updateCtxs, ctx)
 	return nil
 }
 
@@ -144,5 +147,26 @@ func TestLoginFailure_RecordsFailedLoginAudit(t *testing.T) {
 	}
 	if len(rec.events) != 1 || rec.events[0].success {
 		t.Fatalf("应记录 1 条 success=false 登录审计，实际 %+v", rec.events)
+	}
+}
+
+func TestRecordUpdateUsesRequestContext(t *testing.T) {
+	rec := &fakeAuditRecorder{}
+	e := gin.New()
+	e.GET("/touch", func(c *gin.Context) {
+		NewRouter(Deps{AuditRecorder: rec}).recordUpdate(c, audit.ResourceSetting, "touch")
+		c.Status(http.StatusNoContent)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/touch", nil)
+	reqCtx := req.Context()
+	w := httptest.NewRecorder()
+	e.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("期望 HTTP 204，实际 %d", w.Code)
+	}
+	if len(rec.updateCtxs) != 1 || rec.updateCtxs[0] != reqCtx {
+		t.Fatalf("recordUpdate 应透传请求上下文，实际 %+v", rec.updateCtxs)
 	}
 }
