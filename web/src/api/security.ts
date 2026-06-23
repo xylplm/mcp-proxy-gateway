@@ -68,9 +68,25 @@ export async function listSecurityEvents(params?: ListSecurityEventsParams): Pro
   return res.data.events
 }
 
+export async function exportSecurityEvents(params?: ListSecurityEventsParams): Promise<Blob> {
+  const res = await request.get<Blob>('/security/events/export', {
+    params,
+    responseType: 'blob',
+  })
+  return res.data
+}
+
 export async function listSecurityBlocks(params?: ListSecurityBlocksParams): Promise<SecurityBlock[]> {
   const res = await request.get<{ blocks: SecurityBlock[] }>('/security/blocks', { params })
   return res.data.blocks
+}
+
+export async function exportSecurityBlocks(params?: ListSecurityBlocksParams): Promise<Blob> {
+  const res = await request.get<Blob>('/security/blocks/export', {
+    params,
+    responseType: 'blob',
+  })
+  return res.data
 }
 
 export async function releaseSecurityBlock(id: string): Promise<SecurityBlock> {

@@ -2,8 +2,10 @@
 import { computed, onMounted, ref } from 'vue'
 import AdminLayout from '@/components/layout/AdminLayout.vue'
 import PageBreadcrumb from '@/components/common/PageBreadcrumb.vue'
-import { RefreshIcon } from '@/icons'
+import { ArchiveIcon, RefreshIcon } from '@/icons'
 import {
+  exportSecurityBlocks,
+  exportSecurityEvents,
   getSecuritySummary,
   listSecurityBlocks,
   listSecurityEvents,
@@ -29,6 +31,8 @@ const blockStatus = ref<SecurityBlockStatus>('active')
 const eventType = ref<SecurityEventType | ''>('')
 const loading = ref(false)
 const releasingId = ref('')
+const exportingBlocks = ref(false)
+const exportingEvents = ref(false)
 const loadError = ref('')
 
 const eventTypes = [
@@ -110,6 +114,51 @@ async function releaseBlock(block: SecurityBlock): Promise<void> {
     toast.error(err instanceof Error ? err.message : '解除封禁失败')
   } finally {
     releasingId.value = ''
+  }
+}
+
+function exportFileName(prefix: string): string {
+  const d = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${prefix}-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.json`
+}
+
+function downloadBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
+
+async function downloadBlocks(): Promise<void> {
+  if (exportingBlocks.value) return
+  exportingBlocks.value = true
+  try {
+    const blob = await exportSecurityBlocks({ status: blockStatus.value, limit: 200 })
+    downloadBlob(blob, exportFileName('mpg-security-blocks'))
+    toast.success('封禁记录已导出')
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : '导出封禁记录失败')
+  } finally {
+    exportingBlocks.value = false
+  }
+}
+
+async function downloadEvents(): Promise<void> {
+  if (exportingEvents.value) return
+  exportingEvents.value = true
+  try {
+    const blob = await exportSecurityEvents({ eventType: eventType.value, limit: 200 })
+    downloadBlob(blob, exportFileName('mpg-security-events'))
+    toast.success('安全事件已导出')
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : '导出安全事件失败')
+  } finally {
+    exportingEvents.value = false
   }
 }
 
@@ -302,9 +351,21 @@ const iconButtonClass = 'inline-flex h-10 w-10 items-center justify-center round
             <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">访问封禁</h3>
             <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">临时封禁记录，可手动解除当前封禁。</p>
           </div>
-          <select v-model="blockStatus" :class="selectClass" aria-label="封禁状态" @change="load">
-            <option v-for="item in blockStatusOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
-          </select>
+          <div class="flex items-center gap-2">
+            <select v-model="blockStatus" :class="selectClass" aria-label="封禁状态" @change="load">
+              <option v-for="item in blockStatusOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
+            </select>
+            <button
+              v-tooltip:bottom-end="'导出当前封禁记录'"
+              type="button"
+              :class="iconButtonClass"
+              :disabled="loading || exportingBlocks"
+              aria-label="导出当前封禁记录"
+              @click="downloadBlocks"
+            >
+              <ArchiveIcon class="h-5 w-5" />
+            </button>
+          </div>
         </div>
 
         <div v-if="loading && blocks.length === 0" class="py-10 text-center text-sm text-gray-400">加载中...</div>
@@ -356,9 +417,21 @@ const iconButtonClass = 'inline-flex h-10 w-10 items-center justify-center round
             <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">安全事件</h3>
             <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">按时间倒序展示最近的异常访问与处置动作。</p>
           </div>
-          <select v-model="eventType" :class="selectClass" aria-label="安全事件类型" @change="load">
-            <option v-for="item in eventTypes" :key="item.value" :value="item.value">{{ item.label }}</option>
-          </select>
+          <div class="flex items-center gap-2">
+            <select v-model="eventType" :class="selectClass" aria-label="安全事件类型" @change="load">
+              <option v-for="item in eventTypes" :key="item.value" :value="item.value">{{ item.label }}</option>
+            </select>
+            <button
+              v-tooltip:bottom-end="'导出当前安全事件'"
+              type="button"
+              :class="iconButtonClass"
+              :disabled="loading || exportingEvents"
+              aria-label="导出当前安全事件"
+              @click="downloadEvents"
+            >
+              <ArchiveIcon class="h-5 w-5" />
+            </button>
+          </div>
         </div>
 
         <div v-if="loading && events.length === 0" class="py-10 text-center text-sm text-gray-400">加载中...</div>
