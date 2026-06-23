@@ -86,7 +86,9 @@ const endpointTab = ref<'full' | 'smart'>('full')
 const fieldErrors = reactive<Record<string, string>>({})
 
 const effectiveServer = computed<ServerConfig | null>(() => runtimeServer.value ?? settings.value?.server ?? null)
+const targetServer = computed<ServerConfig | null>(() => settings.value?.server ?? runtimeServer.value ?? null)
 const listenerReused = computed(() => (effectiveServer.value?.public_mcp_addr.trim() ?? '') === '')
+const targetListenerReused = computed(() => (targetServer.value?.public_mcp_addr.trim() ?? '') === '')
 const listenerPendingRestart = computed(
   () => settings.value !== null && runtimeServer.value !== null && JSON.stringify(settings.value.server) !== JSON.stringify(runtimeServer.value),
 )
@@ -98,35 +100,41 @@ const HTTP_ORIGIN = 'http(s)://<your-host>:<port>'
 const WS_ORIGIN = 'ws(s)://<your-host>:<port>'
 
 const mcpPortModeLabel = computed(() => {
-  if (effectiveServer.value === null) return '加载中'
-  if (!listenerReused.value) return '独立 MCP 端口'
+  if (targetServer.value === null) return '加载中'
+  if (!targetListenerReused.value) return '独立 MCP 端口'
   return '管理端口复用'
 })
 
 const mcpPortSecurityText = computed(() => {
   if (effectiveServer.value === null) return '加载监听配置中'
-  if (listenerPendingRestart.value) return '监听配置已保存，网关重启完成后会按新配置生效。'
+  if (listenerPendingRestart.value) {
+    if (!targetListenerReused.value) {
+      if (targetServer.value?.expose_mcp_on_admin_addr) return '监听配置已保存，网关重启完成后会启用独立 MCP 端口；管理端口仍保留 /mcp/* 兼容入口。'
+      return '监听配置已保存，网关重启完成后会启用独立 MCP 端口，管理端口不暴露 /mcp/*。'
+    }
+    return '监听配置已保存，网关重启完成后会复用管理端口。公网暴露时建议启用独立 MCP 端口。'
+  }
   if (listenerReused.value) return '当前对外 MCP 与管理台共用监听端口。公网暴露时建议启用独立 MCP 端口，并关闭管理端口 MCP 入口。'
   if (effectiveServer.value.expose_mcp_on_admin_addr) return '独立 MCP 端口已运行；管理端口仍保留 /mcp/* 兼容入口，可在确认客户端迁移后关闭。'
   return '独立 MCP 端口已运行，管理端口不暴露 /mcp/*。'
 })
 
 const mcpPortNoticeClass = computed(() => {
-  if (listenerReused.value || listenerPendingRestart.value) {
+  if (targetListenerReused.value) {
     return 'mt-5 rounded-xl border border-warning-200 bg-warning-50/80 p-4 dark:border-warning-500/30 dark:bg-warning-500/10'
   }
   return 'mt-5 rounded-xl border border-success-200 bg-success-50/70 p-4 dark:border-success-500/30 dark:bg-success-500/10'
 })
 
 const mcpPortBadgeClass = computed(() => {
-  if (listenerReused.value || listenerPendingRestart.value) {
+  if (targetListenerReused.value) {
     return 'shrink-0 rounded-full bg-white px-2.5 py-1 text-xs font-medium text-warning-700 dark:bg-white/10 dark:text-warning-300'
   }
   return 'shrink-0 rounded-full bg-white px-2.5 py-1 text-xs font-medium text-success-700 dark:bg-white/10 dark:text-success-300'
 })
 
 const mcpPortSettingsLinkClass = computed(() => {
-  if (listenerReused.value || listenerPendingRestart.value) {
+  if (targetListenerReused.value) {
     return 'inline-flex h-8 items-center rounded-lg border border-warning-200 bg-white px-3 text-xs font-medium text-warning-700 transition hover:bg-warning-100 dark:border-warning-500/30 dark:bg-white/10 dark:text-warning-300 dark:hover:bg-warning-500/10'
   }
   return 'inline-flex h-8 items-center rounded-lg border border-success-200 bg-white px-3 text-xs font-medium text-success-700 transition hover:bg-success-100 dark:border-success-500/30 dark:bg-white/10 dark:text-success-300 dark:hover:bg-success-500/10'
