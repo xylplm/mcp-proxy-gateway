@@ -35,6 +35,11 @@ const failureSummaryItems = computed(() => {
   return items
 })
 
+const diagnosticInsight = computed(() => {
+  if (detail.value === null || statusOf(detail.value) === 'success') return null
+  return buildDiagnosticInsight(detail.value)
+})
+
 function formatDateTime(value: string): string {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return '-'
@@ -78,6 +83,63 @@ function statusClass(item: CallRecord): string {
 
 function responseTitle(item: CallRecord): string {
   return statusOf(item) === 'success' ? '出参' : '失败响应'
+}
+
+function buildDiagnosticInsight(item: CallRecord): { title: string; description: string; actions: string[] } {
+  const d = item.FailureDetail
+  const status = statusOf(item)
+  const code = (d?.code ?? '').toLowerCase()
+  const message = d?.message || item.ErrorMessage || ''
+  const httpStatus = d?.httpStatus ?? 0
+  const businessCode = d?.businessCode ?? 0
+
+  if (d?.timeout === true || code.includes('timeout') || message.toLowerCase().includes('timeout')) {
+    return {
+      title: '上游响应超时',
+      description: '请求已经到达网关，但上游没有在超时时间内返回结果。',
+      actions: ['检查上游服务是否可用', '查看上游网络与鉴权配置', '确认超时设置是否匹配该工具耗时'],
+    }
+  }
+  if (httpStatus === 401 || httpStatus === 403 || code.includes('unauthorized') || code.includes('forbidden')) {
+    return {
+      title: '上游鉴权失败',
+      description: '上游返回了鉴权或权限相关错误，通常与凭证、请求头或上游账号权限有关。',
+      actions: ['检查上游 MCP 凭证是否过期', '确认模板参数或自定义请求头是否正确', '用上游管理页的连接测试重新验证配置'],
+    }
+  }
+  if (httpStatus === 404 || code.includes('not_found')) {
+    return {
+      title: '工具或上游资源不存在',
+      description: '上游返回不存在，可能是工具缓存已过期、工具名变化，或目标资源已删除。',
+      actions: ['刷新该上游工具列表', '确认规则别名后的工具名仍然存在', '检查调用入参里的目标资源标识'],
+    }
+  }
+  if (httpStatus === 429 || code.includes('rate')) {
+    return {
+      title: '请求被限流',
+      description: '调用频率超过上游或网关配置的限制。',
+      actions: ['检查 API Key 或上游限流配置', '降低客户端并发或重试频率', '必要时提高对应限额'],
+    }
+  }
+  if (httpStatus >= 500 || status === 'upstream_error') {
+    return {
+      title: '上游服务异常',
+      description: '网关已完成路由，但上游返回异常或连接失败。',
+      actions: ['查看上游最近错误和服务日志', '尝试重连或刷新工具列表', '确认上游运行环境和依赖服务正常'],
+    }
+  }
+  if (businessCode > 0 || code !== '') {
+    return {
+      title: '业务校验未通过',
+      description: '调用到达目标工具，但工具返回了业务错误码或校验错误。',
+      actions: ['检查入参字段和值是否符合工具 Schema', '查看失败响应里的字段级错误', '必要时在工具目录确认该工具的入参定义'],
+    }
+  }
+  return {
+    title: '调用未成功',
+    description: '当前记录没有足够明确的错误分类，可结合入参、失败响应和系统日志继续排查。',
+    actions: ['确认调用来源和目标工具是否正确', '检查网关系统日志中的同时间错误', '必要时重新发起一次调用复现问题'],
+  }
 }
 
 // 耗时分级：<1s 正常、1-3s 较慢、>3s 很慢。
@@ -287,6 +349,31 @@ onUnmounted(() => {
               >
                 <p class="text-xs text-error-400 dark:text-error-300/80">{{ item.label }}</p>
                 <p class="mt-1 break-all text-sm font-medium text-error-700 dark:text-error-200">{{ item.value }}</p>
+              </div>
+            </div>
+          </section>
+
+          <section
+            v-if="diagnosticInsight !== null"
+            class="mt-5 rounded-xl border border-warning-200 bg-warning-50/80 p-4 dark:border-warning-500/30 dark:bg-warning-500/10"
+          >
+            <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+              <div class="min-w-0">
+                <h4 class="text-sm font-semibold text-warning-800 dark:text-warning-200">
+                  {{ diagnosticInsight.title }}
+                </h4>
+                <p class="mt-1 text-sm leading-6 text-warning-700 dark:text-warning-300">
+                  {{ diagnosticInsight.description }}
+                </p>
+              </div>
+              <div class="grid min-w-0 gap-2 text-xs text-warning-700 dark:text-warning-300">
+                <span
+                  v-for="action in diagnosticInsight.actions"
+                  :key="action"
+                  class="rounded-lg bg-white/70 px-3 py-2 dark:bg-gray-950/20"
+                >
+                  {{ action }}
+                </span>
               </div>
             </div>
           </section>
