@@ -41,8 +41,8 @@ type UpstreamRepository interface {
 	Update(ctx context.Context, id string, cfg domain.UpstreamConfig) (*store.UpstreamRow, error)
 	// SetEnabled 仅更新启停状态。
 	SetEnabled(ctx context.Context, id string, enabled bool) error
-	// SetSortOrder 仅更新单个上游的排序值。
-	SetSortOrder(ctx context.Context, id string, sortOrder int) error
+	// Reorder 原子更新全部上游的排序值。
+	Reorder(ctx context.Context, orderedIDs []string) error
 	// Delete 删除指定上游，其从属规则与缓存持久副本由 DB 外键级联清理。
 	Delete(ctx context.Context, id string) error
 }
@@ -167,6 +167,10 @@ func (m *Manager) Create(ctx context.Context, cfg domain.UpstreamConfig) (domain
 	if err != nil {
 		return domain.Upstream{}, err
 	}
+	cfg.SortOrder, err = m.nextSortOrder(ctx)
+	if err != nil {
+		return domain.Upstream{}, err
+	}
 
 	row, err := m.repo.Create(ctx, cfg)
 	if err != nil {
@@ -178,6 +182,20 @@ func (m *Manager) Create(ctx context.Context, cfg domain.UpstreamConfig) (domain
 	cfg.SortOrder = row.Config.SortOrder
 	m.rebuildConnection(row.ID, cfg)
 	return m.toUpstream(row), nil
+}
+
+func (m *Manager) nextSortOrder(ctx context.Context) (int, error) {
+	rows, err := m.repo.List(ctx)
+	if err != nil {
+		return 0, err
+	}
+	maxOrder := -1
+	for i := range rows {
+		if rows[i].Config.SortOrder > maxOrder {
+			maxOrder = rows[i].Config.SortOrder
+		}
+	}
+	return maxOrder + 1, nil
 }
 
 // Update 更新某个已存在的上游 MCP 服务配置（Req 2.4、2.6、2.7）。
@@ -235,20 +253,20 @@ func (m *Manager) restoreConnectionFromStore(ctx context.Context, id string, ena
 
 // Delete 删除某个已存在的上游 MCP 服务并级联清理（Req 2.5、2.6、6.6）。
 //
-// 流程：关闭并移除连接（停止重试循环、断开活跃连接）→ 删除上游记录（其从属别名/屏蔽
-// 规则、ACL 与工具缓存 PG 持久副本由 DB 外键 ON DELETE CASCADE 级联清理）→ 清理
-// 工具缓存（清除 Redis 热路径键）。标识不存在返回 NOT_FOUND（Req 2.6）。
+// 流程：删除上游记录（其从属别名/屏蔽规则、ACL 与工具缓存 PG 持久副本由 DB 外键
+// ON DELETE CASCADE 级联清理）→ 关闭并移除连接（停止重试循环、断开活跃连接）→
+// 清理工具缓存（清除 Redis 热路径键）。标识不存在返回 NOT_FOUND（Req 2.6）。
 //
 // 工具缓存清理为尽力而为：DB 删除是真相来源，Redis 仅为热路径，清理失败仅记录
 // 告警而不令整体删除失败。
 func (m *Manager) Delete(ctx context.Context, id string) error {
-	// 关闭该上游的活跃连接、停止重试循环并从连接池移除。
-	m.removeConnection(id)
-
 	// 删除上游记录；不存在返回 NOT_FOUND，从属规则由 DB 级联清理。
 	if err := m.repo.Delete(ctx, id); err != nil {
 		return err
 	}
+
+	// DB 删除成功后再关闭运行态连接，避免删除失败时留下“配置仍存在但连接已停”的半状态。
+	m.removeConnection(id)
 
 	// 级联清理工具缓存（主要用于清除 Redis 热路径键）。
 	if err := m.cache.Delete(ctx, id); err != nil {
@@ -267,19 +285,28 @@ func (m *Manager) Delete(ctx context.Context, id string) error {
 //
 // 同时同步连接生命周期：启用时启动重试退避循环建立连接，停用时停止循环并置为不可用。
 func (m *Manager) SetEnabled(ctx context.Context, id string, enabled bool) error {
+	m.connsMu.Lock()
+	c := m.conns[id]
+	m.connsMu.Unlock()
+
+	var cfg domain.UpstreamConfig
+	if c != nil {
+		// 同步连接状态：复用连接已持有的配置（含凭证），仅切换启停。
+		cfg = c.config()
+	} else {
+		// 内存连接缺失时先读取持久化配置，避免启停写入成功后因回查失败留下半状态。
+		row, err := m.repo.Get(ctx, id)
+		if err != nil {
+			return err
+		}
+		cfg = row.Config
+	}
+	cfg.Enabled = enabled
+
 	if err := m.repo.SetEnabled(ctx, id, enabled); err != nil {
 		return err
 	}
 
-	// 同步连接状态：复用连接已持有的配置（含凭证），仅切换启停。
-	m.connsMu.Lock()
-	c := m.conns[id]
-	m.connsMu.Unlock()
-	if c == nil {
-		return m.restoreConnectionFromStore(ctx, id, enabled)
-	}
-	cfg := c.config()
-	cfg.Enabled = enabled
 	m.rebuildConnection(id, cfg)
 	return nil
 }
@@ -308,9 +335,9 @@ func (m *Manager) List(ctx context.Context) ([]domain.Upstream, error) {
 // 则在写库前即返回携带具体原因的 VALIDATION 错误，已持久化的排序状态保持不变
 // （Req 3.5）。
 //
-// 持久化采用「校验后写入」次序：因合法排序是已注册标识的双射，逐条 SetSortOrder
-// 不会改变上游集合，仅重排其顺序；排序生效后聚合管线据 sort_order 由前到后合并
-// （Req 3.4、10.1）。
+// 持久化采用「校验后原子写入」次序：合法排序是已注册标识的双射，仓储层以事务一次性
+// 更新全部 sort_order，避免部分写入成功后返回错误导致管理台状态与用户反馈不一致；
+// 排序生效后聚合管线据 sort_order 由前到后合并（Req 3.4、10.1）。
 func (m *Manager) Reorder(ctx context.Context, orderedIDs []string) error {
 	rows, err := m.repo.List(ctx)
 	if err != nil {
@@ -328,13 +355,8 @@ func (m *Manager) Reorder(ctx context.Context, orderedIDs []string) error {
 		return err
 	}
 
-	// 校验通过：按提交顺序逐个写入排序值（位置即排序），由前到后递增（Req 3.4）。
-	for sortOrder, id := range orderedIDs {
-		if err := m.repo.SetSortOrder(ctx, id, sortOrder); err != nil {
-			return err
-		}
-	}
-	return nil
+	// 校验通过：交由仓储层事务更新全部排序值，保证成功整体生效、失败整体不变。
+	return m.repo.Reorder(ctx, orderedIDs)
 }
 
 // GetState 返回连接状态与最近一次失败原因（Req 5.4）。

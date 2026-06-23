@@ -147,22 +147,26 @@ func (r *UpstreamRepo) SetEnabled(ctx context.Context, id string, enabled bool) 
 	return nil
 }
 
-// SetSortOrder 仅更新单个上游的排序值，供排序持久化复用（Req 3.4）。
-func (r *UpstreamRepo) SetSortOrder(ctx context.Context, id string, sortOrder int) error {
-	uid, err := parseUUID(id)
-	if err != nil {
-		return err
-	}
-	res := r.db.WithContext(ctx).Model(&upstreamMCPModel{}).
-		Where("id = ?", uid).
-		Updates(map[string]any{"sort_order": sortOrder, "updated_at": gorm.Expr("now()")})
-	if res.Error != nil {
-		return res.Error
-	}
-	if res.RowsAffected == 0 {
-		return domain.NewError(domain.CodeNotFound, "上游 MCP 不存在")
-	}
-	return nil
+// Reorder 在一个事务内更新全部上游排序值；任一写入失败则整体回滚（Req 3.4、3.5）。
+func (r *UpstreamRepo) Reorder(ctx context.Context, orderedIDs []string) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		for sortOrder, id := range orderedIDs {
+			uid, err := parseUUID(id)
+			if err != nil {
+				return err
+			}
+			res := tx.Model(&upstreamMCPModel{}).
+				Where("id = ?", uid).
+				Updates(map[string]any{"sort_order": sortOrder, "updated_at": gorm.Expr("now()")})
+			if res.Error != nil {
+				return res.Error
+			}
+			if res.RowsAffected == 0 {
+				return domain.NewError(domain.CodeNotFound, "上游 MCP 不存在")
+			}
+		}
+		return nil
+	})
 }
 
 // Delete 删除指定上游 MCP；其从属规则、ACL 与工具缓存通过外键 ON DELETE CASCADE 级联清理（Req 2.5、6.6）。

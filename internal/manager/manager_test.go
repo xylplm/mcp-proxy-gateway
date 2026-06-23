@@ -24,7 +24,7 @@ import (
 // 不触及 Reorder/GetState/Reconnect 等占位方法。所有替身类型均以 test 前缀命名，
 // 避免与实现文件或并行任务可能新增的类型重名。
 
-// sortOrderCall 记录一次 SetSortOrder 调用的入参，用于断言 Reorder 的持久化行为。
+// sortOrderCall 记录一次排序写入的入参，用于断言 Reorder 的持久化行为。
 type sortOrderCall struct {
 	id        string
 	sortOrder int
@@ -123,11 +123,11 @@ type testUpstreamRepo struct {
 	lastEnabledID string
 	lastEnabled   bool
 
-	// setSortOrderCalls 记录每次 SetSortOrder 的入参（id→sortOrder 的有序列表），
+	// setSortOrderCalls 记录 Reorder 原子排序请求内的 id→sortOrder 有序列表，
 	// 用于断言 Reorder 持久化次数与位置即排序的语义（Req 3.4）。
 	setSortOrderCalls []sortOrderCall
-	// setSortOrderErr 注入 SetSortOrder 的返回错误。
-	setSortOrderErr error
+	// reorderErr 注入 Reorder 的返回错误。
+	reorderErr error
 
 	// 最近一次 Create/Update 收到的入参，用于断言凭证已明文透传。
 	lastCfg domain.UpstreamConfig
@@ -188,11 +188,13 @@ func (r *testUpstreamRepo) SetEnabled(_ context.Context, id string, enabled bool
 	return r.setEnabled
 }
 
-func (r *testUpstreamRepo) SetSortOrder(_ context.Context, id string, sortOrder int) error {
-	if r.setSortOrderErr != nil {
-		return r.setSortOrderErr
+func (r *testUpstreamRepo) Reorder(_ context.Context, orderedIDs []string) error {
+	if r.reorderErr != nil {
+		return r.reorderErr
 	}
-	r.setSortOrderCalls = append(r.setSortOrderCalls, sortOrderCall{id: id, sortOrder: sortOrder})
+	for sortOrder, id := range orderedIDs {
+		r.setSortOrderCalls = append(r.setSortOrderCalls, sortOrderCall{id: id, sortOrder: sortOrder})
+	}
 	return nil
 }
 
@@ -427,6 +429,54 @@ func TestCreateSuccessPersistsPlaintextCredential(t *testing.T) {
 	}
 	if up.ID != "up-1" {
 		t.Errorf("期望返回 ID 为 up-1，实际 %q", up.ID)
+	}
+}
+
+func TestCreateAppendsSortOrderAfterExistingUpstreams(t *testing.T) {
+	cfg := testValidConfig()
+	cfg.SortOrder = 0
+	row := &store.UpstreamRow{}
+	row.ID = "up-sort-new"
+	row.Config = cfg
+
+	existingA := testUpstreamRowWithID("up-sort-a")
+	existingA.Config.SortOrder = 0
+	existingB := testUpstreamRowWithID("up-sort-b")
+	existingB.Config.SortOrder = 9
+	existingC := testUpstreamRowWithID("up-sort-c")
+	existingC.Config.SortOrder = 4
+
+	repo := &testUpstreamRepo{
+		createRow: row,
+		listRows:  []store.UpstreamRow{existingA, existingB, existingC},
+	}
+	m := New(repo, &testToolCacheCleaner{}, nil, nil)
+
+	if _, err := m.Create(context.Background(), cfg); err != nil {
+		t.Fatalf("create should not fail: %v", err)
+	}
+	if repo.lastCfg.SortOrder != 10 {
+		t.Fatalf("new upstream should append after max sort order, got=%d want=10", repo.lastCfg.SortOrder)
+	}
+	if repo.createCalls != 1 {
+		t.Fatalf("create should be persisted once, got=%d", repo.createCalls)
+	}
+}
+
+func TestCreateListErrorDoesNotPersist(t *testing.T) {
+	repo := &testUpstreamRepo{listErr: errors.New("list failed")}
+	m := New(repo, &testToolCacheCleaner{}, nil, nil)
+
+	err := func() error {
+		_, err := m.Create(context.Background(), testValidConfig())
+		return err
+	}()
+
+	if err == nil {
+		t.Fatal("create should return list error")
+	}
+	if repo.createCalls != 0 {
+		t.Fatalf("create should not persist when sort order lookup fails, got createCalls=%d", repo.createCalls)
 	}
 }
 
@@ -684,10 +734,41 @@ func TestDeleteCacheCleanupBestEffort(t *testing.T) {
 	}
 }
 
+func TestDeletePersistErrorKeepsRunningConnection(t *testing.T) {
+	cfg := testValidConfig()
+	row := store.UpstreamRow{}
+	row.ID = "up-delete-keep-conn"
+	row.Config = cfg
+	repo := &testUpstreamRepo{createRow: &row}
+	dialer := newReconnectTestDialer()
+	m := New(repo, &testToolCacheCleaner{}, nil, nil, WithDialer(dialer))
+	defer m.Shutdown()
+
+	if _, err := m.Create(context.Background(), cfg); err != nil {
+		t.Fatalf("创建上游不应失败：%v", err)
+	}
+	conn := waitReconnectDial(t, dialer, "删除前")
+	waitManagerState(t, m, "up-delete-keep-conn", domain.ConnAvailable)
+
+	repo.deleteErr = errors.New("数据库删除失败")
+	if err := m.Delete(context.Background(), "up-delete-keep-conn"); err == nil {
+		t.Fatal("删除持久化失败时应返回错误")
+	}
+	select {
+	case <-conn.closed:
+		t.Fatal("删除持久化失败时不应关闭仍存在的上游连接")
+	case <-time.After(50 * time.Millisecond):
+	}
+	state, _ := m.GetState("up-delete-keep-conn")
+	if state != domain.ConnAvailable {
+		t.Fatalf("删除失败后连接状态应保持可用，got=%s", state)
+	}
+}
+
 // TestSetEnabledNotFoundPassthrough 验证启停不存在的标识时透传 NOT_FOUND（Req 2.6）。
 func TestSetEnabledNotFoundPassthrough(t *testing.T) {
 	repo := &testUpstreamRepo{
-		setEnabled: domain.NewError(domain.CodeNotFound, "上游 MCP 不存在"),
+		getErr: domain.NewError(domain.CodeNotFound, "上游 MCP 不存在"),
 	}
 	m := New(repo, &testToolCacheCleaner{}, nil, nil)
 
@@ -696,6 +777,9 @@ func TestSetEnabledNotFoundPassthrough(t *testing.T) {
 	apiErr := asAPIError(t, err)
 	if apiErr.Code != domain.CodeNotFound {
 		t.Errorf("期望透传错误码 %q，实际 %q", domain.CodeNotFound, apiErr.Code)
+	}
+	if repo.setEnabledCall != 0 {
+		t.Fatalf("未找到持久化配置时不应写入启停状态，实际调用 %d 次", repo.setEnabledCall)
 	}
 }
 
@@ -867,6 +951,27 @@ func TestReorderListErrorPassthrough(t *testing.T) {
 	}
 	if len(repo.setSortOrderCalls) != 0 {
 		t.Errorf("列举失败时不应持久化排序，实际 %d 次", len(repo.setSortOrderCalls))
+	}
+}
+
+func TestReorderPersistErrorReturnsWithoutPartialManagerWrites(t *testing.T) {
+	repo := &testUpstreamRepo{
+		listRows: []store.UpstreamRow{
+			testUpstreamRowWithID("a"),
+			testUpstreamRowWithID("b"),
+			testUpstreamRowWithID("c"),
+		},
+		reorderErr: errors.New("事务提交失败"),
+	}
+	m := New(repo, &testToolCacheCleaner{}, nil, nil)
+
+	err := m.Reorder(context.Background(), []string{"c", "a", "b"})
+
+	if err == nil {
+		t.Fatal("排序持久化失败时应返回错误")
+	}
+	if len(repo.setSortOrderCalls) != 0 {
+		t.Fatalf("Manager 不应逐条写入排序，避免失败半状态；实际写入 %d 次", len(repo.setSortOrderCalls))
 	}
 }
 

@@ -36,7 +36,14 @@ if #KEYS == 0 then
 end
 for i = 1, #KEYS do
 	local limit = tonumber(ARGV[(i - 1) * 2 + 1])
-	local current = tonumber(redis.call("GET", KEYS[i]) or "0") or 0
+	local raw = redis.call("GET", KEYS[i])
+	local current = 0
+	if raw then
+		current = tonumber(raw)
+		if current == nil then
+			return redis.error_reply("quota counter is not an integer")
+		end
+	end
 	if current >= limit then
 		return {0, i}
 	end
