@@ -243,6 +243,7 @@ func (r *Router) refreshUpstream(c *gin.Context) {
 }
 
 // listUpstreamTools 返回某上游当前缓存的工具列表；缓存缺失时按需补拉一次。
+// 追加 ensure=false 可只读缓存，避免预览类页面触发上游拉取。
 func (r *Router) listUpstreamTools(c *gin.Context) {
 	if r.toolCache == nil {
 		respondServiceUnavailable(c, "工具缓存服务未就绪")
@@ -251,6 +252,14 @@ func (r *Router) listUpstreamTools(c *gin.Context) {
 	id := c.Param("id")
 	tools, updatedAt, found := r.toolCache.Get(c.Request.Context(), id)
 	if !found {
+		ensureCache := true
+		if raw, ok := c.GetQuery("ensure"); ok {
+			ensureCache = raw != "false" && raw != "0"
+		}
+		if !ensureCache {
+			respondOK(c, gin.H{"id": id, "tools": []domain.ToolDef{}, "count": 0, "updatedAt": nil})
+			return
+		}
 		if r.cacheEnsurer == nil {
 			respondOK(c, gin.H{"id": id, "tools": []domain.ToolDef{}, "count": 0, "updatedAt": nil})
 			return

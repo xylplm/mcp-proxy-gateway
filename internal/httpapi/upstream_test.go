@@ -177,3 +177,32 @@ func TestListUpstreamToolsCacheMissEnsuresAndReturnsTools(t *testing.T) {
 		t.Fatalf("updatedAt 期望 %s，实际 %s", updatedAt, got.UpdatedAt)
 	}
 }
+
+func TestListUpstreamToolsCacheMissCanSkipEnsure(t *testing.T) {
+	cache := &fakeToolCacheStore{}
+	ensurer := &fakeToolCacheEnsurer{}
+	e := newTestEngine(Deps{ToolCache: cache, CacheEnsurer: ensurer})
+
+	w := doJSON(e, http.MethodGet, "/api/admin/upstreams/up-1/tools?ensure=false", "")
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("缓存缺失且跳过补拉时期望 HTTP 200，实际 %d，响应体 %s", w.Code, w.Body.String())
+	}
+	if ensurer.calls != 0 {
+		t.Fatalf("ensure=false 不应触发缓存补拉，实际调用 %d 次", ensurer.calls)
+	}
+	if cache.getCalls != 1 {
+		t.Fatalf("期望只读取一次缓存，实际 %d 次", cache.getCalls)
+	}
+
+	var got struct {
+		ID        string           `json:"id"`
+		Count     int              `json:"count"`
+		Tools     []domain.ToolDef `json:"tools"`
+		UpdatedAt *time.Time       `json:"updatedAt"`
+	}
+	unmarshalData(t, w, &got)
+	if got.ID != "up-1" || got.Count != 0 || len(got.Tools) != 0 || got.UpdatedAt != nil {
+		t.Fatalf("跳过补拉时应返回空缓存视图，实际：%+v", got)
+	}
+}

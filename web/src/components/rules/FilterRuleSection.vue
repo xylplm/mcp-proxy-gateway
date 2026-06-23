@@ -6,7 +6,7 @@
  * 屏蔽规则支持独立启停（enable/disable 端点）；排序通过交换相邻规则 sortOrder 后经 PUT 持久化实现。
  * 风格：Tailwind 工具类 + TailAdmin（卡片 rounded-2xl border、徽章、开关、模态框）。
  */
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import {
   listFilters,
   createFilter,
@@ -16,7 +16,8 @@ import {
   type FilterRule,
   type FilterRuleRequest,
 } from '@/api/rules'
-import type { Upstream } from '@/api/upstreams'
+import { listUpstreamTools, type Upstream } from '@/api/upstreams'
+import type { ToolDef } from '@/api/tools'
 import { useConfirm } from '@/composables/useConfirm'
 
 const props = defineProps<{
@@ -55,6 +56,29 @@ const form = ref<FilterRuleRequest>({
 
 const isEdit = computed(() => editing.value !== null)
 
+interface ToolPreviewItem {
+  key: string
+  upstreamName: string
+  originalName: string
+  exposedName: string
+}
+
+interface RulePreviewSummary {
+  label: string
+  items: ToolPreviewItem[]
+  hiddenCount: number
+}
+
+const toolsByUpstream = ref<Record<string, ToolDef[]>>({})
+
+const previewSummaries = computed<Record<string, RulePreviewSummary>>(() => {
+  const summaries: Record<string, RulePreviewSummary> = {}
+  for (const rule of rules.value) {
+    summaries[rule.id] = buildRulePreviewSummary(rule)
+  }
+  return summaries
+})
+
 /** 标记/解除行级繁忙态。 */
 function setBusy(key: string, on: boolean): void {
   const next = new Set(busy.value)
@@ -83,7 +107,41 @@ async function load(): Promise<void> {
   }
 }
 
-onMounted(load)
+async function reload(): Promise<void> {
+  await Promise.all([load(), loadToolPreview()])
+}
+
+async function loadToolPreview(): Promise<void> {
+  const previewUpstreams = props.upstreams.filter((up) => up.config.enabled)
+  if (previewUpstreams.length === 0) {
+    toolsByUpstream.value = {}
+    return
+  }
+
+  const entries = await Promise.allSettled(
+    previewUpstreams.map(async (up) => {
+      const result = await listUpstreamTools(up.id, { ensure: false })
+      return [up.id, result.tools] as const
+    }),
+  )
+
+  const next: Record<string, ToolDef[]> = {}
+  for (const entry of entries) {
+    if (entry.status !== 'fulfilled') continue
+    const [upstreamID, tools] = entry.value
+    next[upstreamID] = tools
+  }
+  toolsByUpstream.value = next
+}
+
+onMounted(reload)
+
+watch(
+  () => props.upstreams.map((up) => `${up.id}:${up.config.enabled}`).join('|'),
+  () => {
+    void loadToolPreview()
+  },
+)
 
 /** 打开新建模态框（sortOrder 追加到末尾）。 */
 function openCreate(): void {
@@ -265,7 +323,72 @@ function scopeLabel(rule: FilterRule): string {
   return `${names.slice(0, 3).join('、')} 等 ${names.length} 个`
 }
 
-defineExpose({ reload: load })
+function previewSummary(rule: FilterRule): RulePreviewSummary {
+  return previewSummaries.value[rule.id] ?? buildRulePreviewSummary(rule)
+}
+
+function buildRulePreviewSummary(rule: FilterRule): RulePreviewSummary {
+  if (!rule.enabled) {
+    return { label: '规则未启用', items: [], hiddenCount: 0 }
+  }
+
+  const ids = scopedEnabledUpstreamIDs(rule)
+  if (ids.length === 0) {
+    return { label: '作用范围内暂无启用上游', items: [], hiddenCount: 0 }
+  }
+
+  const matcher = createToolMatcher(rule)
+  if (matcher === null) {
+    return { label: '当前缓存未命中工具', items: [], hiddenCount: 0 }
+  }
+
+  const hits: ToolPreviewItem[] = []
+  for (const upstreamID of ids) {
+    const tools = toolsByUpstream.value[upstreamID] ?? []
+    for (const tool of tools) {
+      if (!matcher(tool.originalName)) continue
+      hits.push({
+        key: `${upstreamID}:${tool.originalName}:${hits.length}`,
+        upstreamName: upstreamName(upstreamID),
+        originalName: tool.originalName,
+        exposedName: tool.name,
+      })
+    }
+  }
+
+  return {
+    label: hits.length > 0 ? `当前缓存命中 ${hits.length} 个工具` : '当前缓存未命中工具',
+    items: hits.slice(0, 3),
+    hiddenCount: Math.max(0, hits.length - 3),
+  }
+}
+
+function scopedEnabledUpstreamIDs(rule: FilterRule): string[] {
+  const enabledUpstreamIDs = new Set(
+    props.upstreams.filter((up) => up.config.enabled).map((up) => up.id),
+  )
+  const ids = (rule.scopeType ?? 'all') === 'all'
+    ? props.upstreams.map((up) => up.id)
+    : rule.upstreamIds ?? []
+  return ids.filter((id) => enabledUpstreamIDs.has(id))
+}
+
+function createToolMatcher(
+  rule: Pick<FilterRule, 'pattern' | 'isRegex'>,
+): ((originalName: string) => boolean) | null {
+  const pattern = rule.pattern.trim()
+  if (pattern === '') return null
+  if (!rule.isRegex) return (originalName: string) => originalName === pattern
+
+  try {
+    const re = new RegExp(`^(?:${pattern})$`)
+    return (originalName: string) => re.test(originalName)
+  } catch {
+    return null
+  }
+}
+
+defineExpose({ reload })
 </script>
 
 <template>
@@ -343,6 +466,30 @@ defineExpose({ reload: load })
         </div>
         <div class="mb-3 rounded-lg bg-gray-50 px-2.5 py-2 text-xs text-gray-500 dark:bg-gray-800/60 dark:text-gray-400">
           作用范围：{{ scopeLabel(rule) }}
+        </div>
+        <div
+          class="mb-3 rounded-lg border border-warning-200 bg-warning-50 px-2.5 py-2 text-xs text-warning-700 dark:border-warning-500/20 dark:bg-warning-500/10 dark:text-warning-300"
+        >
+          <div class="flex items-center justify-between gap-2">
+            <span>{{ previewSummary(rule).label }}</span>
+            <span v-if="previewSummary(rule).hiddenCount > 0" class="shrink-0 text-warning-600 dark:text-warning-300">
+              +{{ previewSummary(rule).hiddenCount }}
+            </span>
+          </div>
+          <div v-if="previewSummary(rule).items.length > 0" class="mt-2 flex flex-wrap gap-1.5">
+            <AppTooltip
+              v-for="item in previewSummary(rule).items"
+              :key="item.key"
+              :content="item.exposedName !== item.originalName ? `对外名称：${item.exposedName}` : item.originalName"
+              placement="bottom"
+            >
+              <span
+                class="inline-flex max-w-full items-center rounded-md bg-white px-1.5 py-0.5 text-[11px] text-warning-700 ring-1 ring-warning-200 dark:bg-white/5 dark:text-warning-200 dark:ring-warning-500/20"
+              >
+                <span class="truncate">{{ item.upstreamName }} / {{ item.originalName }}</span>
+              </span>
+            </AppTooltip>
+          </div>
         </div>
         <div class="mt-auto flex items-center justify-between border-t border-gray-100 pt-2.5 dark:border-gray-800">
           <div class="flex items-center gap-1">

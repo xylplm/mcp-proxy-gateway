@@ -203,9 +203,14 @@ export async function refreshUpstream(id: string): Promise<number> {
 }
 
 /** 读取某个上游 MCP 当前缓存的工具列表。 */
-export async function listUpstreamTools(id: string): Promise<UpstreamToolsResult> {
+export async function listUpstreamTools(
+  id: string,
+  options?: { ensure?: boolean },
+): Promise<UpstreamToolsResult> {
+  const params = options?.ensure === undefined ? undefined : { ensure: options.ensure }
   const res = await request.get<UpstreamToolsResult>(
     `/upstreams/${encodeURIComponent(id)}/tools`,
+    { params },
   )
   return {
     id: res.data?.id ?? id,
