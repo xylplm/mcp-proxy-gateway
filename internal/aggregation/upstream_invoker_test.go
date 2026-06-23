@@ -67,6 +67,21 @@ func (s *siFakeSessions) Session(_ string) (ToolCaller, bool) {
 	return s.session, s.ok
 }
 
+type siEchoSession struct {
+	calls atomic.Int64
+}
+
+func (s *siEchoSession) CallTool(ctx context.Context, _ string, args json.RawMessage) (domain.ToolResult, error) {
+	select {
+	case <-time.After(time.Duration(len(args)%5) * time.Millisecond):
+	case <-ctx.Done():
+		return domain.ToolResult{}, ctx.Err()
+	}
+	s.calls.Add(1)
+	content := append(json.RawMessage(nil), args...)
+	return domain.ToolResult{Content: content}, nil
+}
+
 // assertUpstreamErrorCode 断言 err 是指定错误码的 *domain.APIError。
 func assertUpstreamErrorCode(t *testing.T, err error, want domain.ErrorCode) {
 	t.Helper()
@@ -204,7 +219,7 @@ func TestSessionInvokerDefaultTimeout(t *testing.T) {
 	invoker := NewSessionInvoker(
 		&siFakeStates{state: domain.ConnAvailable},
 		&siFakeSessions{session: session, ok: true},
-		0,    // 非正值回退到 DefaultUpstreamCallTimeout
+		0, // 非正值回退到 DefaultUpstreamCallTimeout
 		nil,
 	)
 	if invoker.callTimeout != DefaultUpstreamCallTimeout {

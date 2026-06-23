@@ -91,7 +91,7 @@ func (a *App) buildMCPRouter(w routerWiring, exposeHealthz bool) *gin.Engine {
 func (a *App) newBaseEngine() *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	engine := gin.New()
-	engine.Use(gin.Recovery())
+	engine.Use(safeRecoveryMiddleware(a.logger))
 	engine.Use(requestIDMiddleware(a.logger))
 	return engine
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"sync"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -114,12 +115,12 @@ func (s *Service) registerFullTools(ctx context.Context, srv *mcp.Server, apiKey
 
 // fullCallHandler 返回把指定对外工具名的调用经全量模式编排核心路由到上游的低层处理器。
 func (s *Service) fullCallHandler(apiKeyID, source, exposedName string, full *FullModeHandler) mcp.ToolHandler {
-	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return s.recoverToolHandler(ModeFull, exposedName, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		s.logger.Debug("全量模式工具调用", "apiKeyID", apiKeyID, "exposedName", exposedName)
 		ctx = aggregation.ContextWithMode(ctx, ModeFull)
 		ctx = aggregation.ContextWithSource(ctx, source)
 		return full.CallTool(ctx, apiKeyID, exposedName, callArguments(req))
-	}
+	})
 }
 
 // callArguments 从工具调用请求中安全提取原始入参字节；请求或参数缺失时返回 nil。
@@ -146,7 +147,7 @@ func (s *Service) registerGatewayTools(srv *mcp.Server, apiKeyID, source string,
 
 // gatewayHandler 返回处理指定网关工具调用的低层处理器，按网关工具名分派到智能模式编排核心。
 func (s *Service) gatewayHandler(apiKeyID, source, gatewayName string, smart *SmartModeHandler) mcp.ToolHandler {
-	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return s.recoverToolHandler(ModeSmart, gatewayName, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		s.logger.Debug("智能模式网关工具调用", "apiKeyID", apiKeyID, "gateway", gatewayName)
 		ctx = aggregation.ContextWithMode(ctx, ModeSmart)
 		ctx = aggregation.ContextWithSource(ctx, source)
@@ -164,6 +165,28 @@ func (s *Service) gatewayHandler(apiKeyID, source, gatewayName string, smart *Sm
 			// 仅注册了四个网关工具，正常不会到达此分支；防御性返回工具不存在。
 			return nil, domain.NewError(domain.CodeToolNotFound, "未知的网关工具")
 		}
+	})
+}
+
+func (s *Service) recoverToolHandler(mode, toolName string, next mcp.ToolHandler) mcp.ToolHandler {
+	return func(ctx context.Context, req *mcp.CallToolRequest) (result *mcp.CallToolResult, err error) {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				logger := slog.Default()
+				if s != nil && s.logger != nil {
+					logger = s.logger
+				}
+				logger.Error("MCP tool handler panic recovered",
+					"mode", mode,
+					"tool", toolName,
+					"panic", fmt.Sprint(recovered),
+					"stack", string(debug.Stack()),
+				)
+				result = nil
+				err = domain.NewError(domain.CodeInternal, "\u670d\u52a1\u5668\u5185\u90e8\u9519\u8bef")
+			}
+		}()
+		return next(ctx, req)
 	}
 }
 
