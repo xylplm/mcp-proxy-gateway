@@ -15,7 +15,22 @@ type gatewayToolView struct {
 // registerToolRoutes 注册管理台工具列表查询端点。
 func (r *Router) registerToolRoutes(g *gin.RouterGroup) {
 	t := g.Group("/tools")
+	t.GET("/summary", r.getAggregatedToolSummary)
 	t.GET("/aggregated", r.listAggregatedTools)
+}
+
+// getAggregatedToolSummary 返回当前全局视角下的聚合工具摘要，避免概览页拉取完整详情。
+func (r *Router) getAggregatedToolSummary(c *gin.Context) {
+	if r.aggregation == nil {
+		respondServiceUnavailable(c, "聚合工具服务未就绪")
+		return
+	}
+	tools, err := r.aggregation.BuildToolSet(c.Request.Context(), "")
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	respondOK(c, gin.H{"count": len(tools)})
 }
 
 // listAggregatedTools 返回当前全局视角下的真实聚合工具列表。

@@ -40,11 +40,26 @@ interface AggregatedToolsResponse {
   gatewayTools: GatewayTool[] | null
 }
 
+interface ToolSummaryResponse {
+  count: number
+}
+
 export interface AggregatedToolsResult {
   tools: ToolDef[]
   toolDetails: ToolDetail[]
   count: number
   gatewayTools: GatewayTool[]
+}
+
+export interface ToolSummary {
+  count: number
+}
+
+export async function getToolSummary(): Promise<ToolSummary> {
+  const res = await request.get<ToolSummaryResponse>('/tools/summary')
+  return {
+    count: res.data?.count ?? 0,
+  }
 }
 
 export async function getAggregatedTools(): Promise<AggregatedToolsResult> {

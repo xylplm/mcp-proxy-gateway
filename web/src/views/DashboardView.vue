@@ -12,7 +12,7 @@
  * - listUpstreams（@/api/upstreams）→ 上游卡片；
  * - listAPIKeys（@/api/apikeys）→ API Key 卡片；
  * - statsByUpstream（@/api/stats，最近 7 天）→ 调用量卡片；
- * - getAggregatedTools（@/api/tools）→ 有效工具卡片。
+ * - getToolSummary（@/api/tools）→ 有效工具卡片。
  *
  * 容错：统一 loading / error 状态；任一数据加载失败给出整体错误提示并支持重试。
  * 响应式：指标卡网格在手机 1 列、平板 2 列、大屏 4 列（Tailwind 断点）。
@@ -36,7 +36,7 @@ import {
 import { listUpstreams, type Upstream } from '@/api/upstreams'
 import { listAPIKeys, type APIKey } from '@/api/apikeys'
 import { statsByUpstream } from '@/api/stats'
-import { getAggregatedTools } from '@/api/tools'
+import { getToolSummary } from '@/api/tools'
 import { getSecuritySummary, type SecuritySummary } from '@/api/security'
 
 const loading = ref(true)
@@ -239,11 +239,11 @@ async function loadOverview(): Promise<void> {
   loading.value = true
   loadError.value = ''
   try {
-    const [upstreams, apiKeys, counts, aggregated, security] = await Promise.all([
+    const [upstreams, apiKeys, counts, tools, security] = await Promise.all([
       listUpstreams(),
       listAPIKeys(),
       statsByUpstream({ start: sevenDaysAgoRFC3339() }),
-      getAggregatedTools(),
+      getToolSummary(),
       getSecuritySummary().catch(() => null),
     ])
 
@@ -259,7 +259,7 @@ async function loadOverview(): Promise<void> {
     apiKeyEnabled.value = apiKeys.filter((k) => k.enabled).length
 
     recentCalls.value = counts.reduce((sum, c) => sum + c.Count, 0)
-    effectiveToolCount.value = aggregated.count
+    effectiveToolCount.value = tools.count
   } catch (err) {
     loadError.value = errorMessage(err)
   } finally {
