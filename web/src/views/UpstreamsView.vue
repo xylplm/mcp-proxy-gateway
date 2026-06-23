@@ -31,6 +31,7 @@ import {
 } from '@/api/upstreams'
 import type { ToolDef } from '@/api/tools'
 import type { PrefillForm } from '@/api/templates'
+import { buildToolCountSnapshot, toolCountLabel, type ToolCountSnapshot } from '@/utils/toolCountSnapshot'
 
 const { pageSize } = useBreakpoint()
 const toast = useToast()
@@ -38,7 +39,7 @@ const { confirm } = useConfirm()
 
 /** 全量上游列表（按 sortOrder 升序）。 */
 const upstreams = ref<Upstream[]>([])
-const toolCounts = ref<Record<string, number>>({})
+const toolCounts = ref<Record<string, ToolCountSnapshot>>({})
 /** 列表加载/错误状态。 */
 const loading = ref(false)
 const errorMessage = ref('')
@@ -203,8 +204,11 @@ async function loadToolCounts(list: Upstream[]): Promise<void> {
   const next = { ...toolCounts.value }
   const results = await Promise.allSettled(
     list.map(async (up) => {
-      const result = await listUpstreamTools(up.id)
-      return [up.id, result.count] as const
+      const result = await listUpstreamTools(up.id, { ensure: false })
+      return [
+        up.id,
+        buildToolCountSnapshot(result.count, result.updatedAt),
+      ] as const
     }),
   )
   for (const result of results) {
@@ -290,7 +294,7 @@ async function refresh(up: Upstream): Promise<void> {
   setBusy(key, true)
   try {
     const count = await refreshUpstream(up.id)
-    toolCounts.value = { ...toolCounts.value, [up.id]: count }
+    toolCounts.value = { ...toolCounts.value, [up.id]: buildToolCountSnapshot(count, new Date().toISOString()) }
     toast.success(`已刷新「${up.config.name}」，共 ${count} 个工具`)
     await loadUpstreams()
   } catch (err) {
@@ -356,7 +360,10 @@ async function openToolModal(up: Upstream): Promise<void> {
     const result = await listUpstreamTools(up.id)
     toolModalTools.value = result.tools
     toolModalUpdatedAt.value = result.updatedAt ?? null
-    toolCounts.value = { ...toolCounts.value, [up.id]: result.count }
+    toolCounts.value = {
+      ...toolCounts.value,
+      [up.id]: buildToolCountSnapshot(result.count, result.updatedAt),
+    }
   } catch (err) {
     toolModalError.value = err instanceof Error ? err.message : '加载工具列表失败'
   } finally {
@@ -713,7 +720,7 @@ function goPage(p: number): void {
               class="rounded-lg bg-gray-50 px-2.5 py-1.5 text-xs font-medium text-gray-600 transition hover:bg-brand-50 hover:text-brand-600 dark:bg-white/5 dark:text-gray-300 dark:hover:bg-brand-500/10 dark:hover:text-brand-400"
               @click="openToolModal(up)"
             >
-              工具 {{ toolCounts[up.id] ?? 0 }}
+              {{ toolCountLabel(toolCounts[up.id]) }}
             </button>
             <div class="flex flex-wrap items-center justify-end gap-1.5">
               <button
