@@ -21,6 +21,7 @@ import {
   listUpstreams,
   setUpstreamEnabled,
   deleteUpstream,
+  listUpstreamToolSummaries,
   listUpstreamTools,
   reorderUpstreams,
   refreshUpstream,
@@ -202,20 +203,15 @@ onUnmounted(stopStatusPolling)
 
 async function loadToolCounts(list: Upstream[]): Promise<void> {
   const next = { ...toolCounts.value }
-  const results = await Promise.allSettled(
-    list.map(async (up) => {
-      const result = await listUpstreamTools(up.id, { ensure: false })
-      return [
-        up.id,
-        buildToolCountSnapshot(result.count, result.updatedAt),
-      ] as const
-    }),
-  )
-  for (const result of results) {
-    if (result.status === 'fulfilled') {
-      const [id, count] = result.value
-      next[id] = count
+  try {
+    const summaries = await listUpstreamToolSummaries()
+    const visibleIDs = new Set(list.map((up) => up.id))
+    for (const item of summaries) {
+      if (!visibleIDs.has(item.id)) continue
+      next[item.id] = buildToolCountSnapshot(item.count, item.updatedAt)
     }
+  } catch {
+    // 工具摘要是列表辅助信息，失败时保留未知状态，不影响上游管理主流程。
   }
   toolCounts.value = next
 }

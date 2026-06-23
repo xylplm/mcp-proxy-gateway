@@ -14,12 +14,52 @@ type fakeToolCacheStore struct {
 	updatedAt time.Time
 	found     bool
 	getCalls  int
+	byID      map[string]struct {
+		tools     []domain.ToolDef
+		updatedAt time.Time
+		found     bool
+	}
 }
 
-func (s *fakeToolCacheStore) Get(_ context.Context, _ string) ([]domain.ToolDef, time.Time, bool) {
+func (s *fakeToolCacheStore) Get(_ context.Context, id string) ([]domain.ToolDef, time.Time, bool) {
 	s.getCalls++
+	if s.byID != nil {
+		entry, ok := s.byID[id]
+		if !ok {
+			return nil, time.Time{}, false
+		}
+		return entry.tools, entry.updatedAt, entry.found
+	}
 	return s.tools, s.updatedAt, s.found
 }
+
+type fakeUpstreamService struct {
+	list []domain.Upstream
+	err  error
+}
+
+func (s *fakeUpstreamService) Create(context.Context, domain.UpstreamConfig) (domain.Upstream, error) {
+	return domain.Upstream{}, nil
+}
+
+func (s *fakeUpstreamService) Update(context.Context, string, domain.UpstreamConfig) (domain.Upstream, error) {
+	return domain.Upstream{}, nil
+}
+
+func (s *fakeUpstreamService) Delete(context.Context, string) error { return nil }
+
+func (s *fakeUpstreamService) List(context.Context) ([]domain.Upstream, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.list, nil
+}
+
+func (s *fakeUpstreamService) SetEnabled(context.Context, string, bool) error { return nil }
+
+func (s *fakeUpstreamService) Reorder(context.Context, []string) error { return nil }
+
+func (s *fakeUpstreamService) Reconnect(context.Context, string) error { return nil }
 
 type fakeToolCacheEnsurer struct {
 	calls    int
@@ -204,5 +244,64 @@ func TestListUpstreamToolsCacheMissCanSkipEnsure(t *testing.T) {
 	unmarshalData(t, w, &got)
 	if got.ID != "up-1" || got.Count != 0 || len(got.Tools) != 0 || got.UpdatedAt != nil {
 		t.Fatalf("跳过补拉时应返回空缓存视图，实际：%+v", got)
+	}
+}
+
+func TestListUpstreamToolSummariesDoesNotEnsure(t *testing.T) {
+	updatedAt := time.Date(2026, 6, 23, 10, 0, 0, 0, time.UTC)
+	upstream := &fakeUpstreamService{
+		list: []domain.Upstream{
+			{ID: "up-cached"},
+			{ID: "up-missing"},
+		},
+	}
+	cache := &fakeToolCacheStore{byID: map[string]struct {
+		tools     []domain.ToolDef
+		updatedAt time.Time
+		found     bool
+	}{
+		"up-cached": {
+			tools: []domain.ToolDef{{
+				Name:       "search",
+				UpstreamID: "up-cached",
+			}},
+			updatedAt: updatedAt,
+			found:     true,
+		},
+	}}
+	ensurer := &fakeToolCacheEnsurer{}
+	e := newTestEngine(Deps{Upstream: upstream, ToolCache: cache, CacheEnsurer: ensurer})
+
+	w := doJSON(e, http.MethodGet, "/api/admin/upstreams/tool-summaries", "")
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("期望 HTTP 200，实际 %d，响应体 %s", w.Code, w.Body.String())
+	}
+	if ensurer.calls != 0 {
+		t.Fatalf("摘要接口不应触发缓存补拉，实际调用 %d 次", ensurer.calls)
+	}
+	if cache.getCalls != 2 {
+		t.Fatalf("应按上游数量读取缓存摘要，实际 %d 次", cache.getCalls)
+	}
+
+	var got struct {
+		Summaries []struct {
+			ID        string     `json:"id"`
+			Count     int        `json:"count"`
+			UpdatedAt *time.Time `json:"updatedAt"`
+		} `json:"summaries"`
+	}
+	unmarshalData(t, w, &got)
+	if len(got.Summaries) != 2 {
+		t.Fatalf("摘要数量不符合预期：%+v", got.Summaries)
+	}
+	if got.Summaries[0].ID != "up-cached" || got.Summaries[0].Count != 1 || got.Summaries[0].UpdatedAt == nil {
+		t.Fatalf("有缓存摘要不符合预期：%+v", got.Summaries[0])
+	}
+	if !got.Summaries[0].UpdatedAt.Equal(updatedAt) {
+		t.Fatalf("updatedAt 期望 %s，实际 %s", updatedAt, got.Summaries[0].UpdatedAt)
+	}
+	if got.Summaries[1].ID != "up-missing" || got.Summaries[1].Count != 0 || got.Summaries[1].UpdatedAt != nil {
+		t.Fatalf("缺失缓存摘要不符合预期：%+v", got.Summaries[1])
 	}
 }

@@ -17,6 +17,7 @@
  *   POST   /upstreams/reorder      重排序上游（body: { orderedIds: string[] }）
  *   POST   /upstreams/:id/reconnect 手动重连
  *   POST   /upstreams/:id/refresh  手动刷新工具列表
+ *   GET    /upstreams/tool-summaries 批量读取工具缓存摘要
  */
 import request from '@/api/request'
 import type { ToolDef } from '@/api/tools'
@@ -127,6 +128,12 @@ export interface UpstreamToolsResult {
   updatedAt?: string | null
 }
 
+export interface UpstreamToolSummary {
+  id: string
+  count: number
+  updatedAt?: string | null
+}
+
 export interface UpstreamTestResult {
   ok: boolean
   stage: string
@@ -200,6 +207,12 @@ export async function refreshUpstream(id: string): Promise<number> {
     `/upstreams/${encodeURIComponent(id)}/refresh`,
   )
   return res.data?.count ?? 0
+}
+
+/** 批量读取全部上游 MCP 的工具缓存摘要；只读缓存，不触发补拉。 */
+export async function listUpstreamToolSummaries(): Promise<UpstreamToolSummary[]> {
+  const res = await request.get<{ summaries: UpstreamToolSummary[] | null }>('/upstreams/tool-summaries')
+  return res.data?.summaries ?? []
 }
 
 /** 读取某个上游 MCP 当前缓存的工具列表。 */

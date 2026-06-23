@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -70,6 +71,12 @@ type reorderRequest struct {
 	OrderedIDs []string `json:"orderedIds"`
 }
 
+type upstreamToolSummary struct {
+	ID        string     `json:"id"`
+	Count     int        `json:"count"`
+	UpdatedAt *time.Time `json:"updatedAt"`
+}
+
 // registerUpstreamRoutes 在管理分组下注册上游 MCP 管理端点。
 func (r *Router) registerUpstreamRoutes(g *gin.RouterGroup) {
 	ups := g.Group("/upstreams")
@@ -83,6 +90,7 @@ func (r *Router) registerUpstreamRoutes(g *gin.RouterGroup) {
 	ups.POST("/reorder", r.reorderUpstreams)
 	ups.POST("/:id/reconnect", r.reconnectUpstream)
 	ups.POST("/:id/refresh", r.refreshUpstream)
+	ups.GET("/tool-summaries", r.listUpstreamToolSummaries)
 	ups.GET("/:id/tools", r.listUpstreamTools)
 }
 
@@ -240,6 +248,37 @@ func (r *Router) refreshUpstream(c *gin.Context) {
 		return
 	}
 	respondOK(c, gin.H{"id": c.Param("id"), "tools": tools, "count": len(tools)})
+}
+
+// listUpstreamToolSummaries 批量返回全部上游的工具缓存摘要，不触发缓存补拉。
+func (r *Router) listUpstreamToolSummaries(c *gin.Context) {
+	if r.upstream == nil {
+		respondServiceUnavailable(c, "上游管理服务未就绪")
+		return
+	}
+	if r.toolCache == nil {
+		respondServiceUnavailable(c, "工具缓存服务未就绪")
+		return
+	}
+	upstreams, err := r.upstream.List(c.Request.Context())
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	summaries := make([]upstreamToolSummary, 0, len(upstreams))
+	for _, up := range upstreams {
+		tools, updatedAt, found := r.toolCache.Get(c.Request.Context(), up.ID)
+		var updatedAtPtr *time.Time
+		if found {
+			updatedAtPtr = &updatedAt
+		}
+		summaries = append(summaries, upstreamToolSummary{
+			ID:        up.ID,
+			Count:     len(tools),
+			UpdatedAt: updatedAtPtr,
+		})
+	}
+	respondOK(c, gin.H{"summaries": summaries})
 }
 
 // listUpstreamTools 返回某上游当前缓存的工具列表；缓存缺失时按需补拉一次。
