@@ -34,12 +34,24 @@ func (s *fakeToolCacheStore) Get(_ context.Context, id string) ([]domain.ToolDef
 }
 
 type fakeUpstreamService struct {
-	list []domain.Upstream
-	err  error
+	list      []domain.Upstream
+	created   []domain.UpstreamConfig
+	createErr map[string]error
+	err       error
 }
 
-func (s *fakeUpstreamService) Create(context.Context, domain.UpstreamConfig) (domain.Upstream, error) {
-	return domain.Upstream{}, nil
+func (s *fakeUpstreamService) Create(_ context.Context, cfg domain.UpstreamConfig) (domain.Upstream, error) {
+	s.created = append(s.created, cfg)
+	if s.createErr != nil {
+		if err := s.createErr[cfg.Name]; err != nil {
+			return domain.Upstream{}, err
+		}
+	}
+	return domain.Upstream{
+		ID:     "up-" + cfg.Name,
+		Config: cfg,
+		State:  domain.ConnConnecting,
+	}, nil
 }
 
 func (s *fakeUpstreamService) Update(context.Context, string, domain.UpstreamConfig) (domain.Upstream, error) {
@@ -168,6 +180,82 @@ func TestUpstreamTestReturnsValidationErrors(t *testing.T) {
 	_, _, fields := parseErrorEnvelope(t, w)
 	if fields["connParams.url"] == "" {
 		t.Fatalf("期望返回 connParams.url 字段错误，实际 %+v", fields)
+	}
+}
+
+func TestPreviewUpstreamImportParsesMCPServers(t *testing.T) {
+	e := newTestEngine(Deps{})
+
+	w := doJSON(e, http.MethodPost, "/api/admin/upstreams/import/preview", `{
+		"content":"{\"mcpServers\":{\"local-files\":{\"command\":\"npx\",\"args\":[\"-y\",\"@modelcontextprotocol/server-filesystem\",\"D:/work\"],\"env\":{\"TOKEN\":\"abc\"}},\"remote\":{\"url\":\"https://example.com/mcp\",\"headers\":{\"Authorization\":\"Bearer token\"}}}}"
+	}`)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("期望 HTTP 200，实际 %d，响应体 %s", w.Code, w.Body.String())
+	}
+	var got upstreamImportPreview
+	unmarshalData(t, w, &got)
+	if got.Count != 2 || len(got.Items) != 2 {
+		t.Fatalf("导入预览数量不符合预期：%+v", got)
+	}
+	if got.Items[0].Config.Name != "local-files" || got.Items[0].Config.Transport != domain.TransportStdio {
+		t.Fatalf("stdio 配置解析错误：%+v", got.Items[0].Config)
+	}
+	if got.Items[0].Config.ConnParams["command"] != "npx" {
+		t.Fatalf("stdio command 未正确解析：%+v", got.Items[0].Config.ConnParams)
+	}
+	if got.Items[1].Config.Name != "remote" || got.Items[1].Config.Transport != domain.TransportStreamableHTTP {
+		t.Fatalf("远程配置解析错误：%+v", got.Items[1].Config)
+	}
+	if got.Items[1].Config.ConnParams["url"] != "https://example.com/mcp" {
+		t.Fatalf("远程 url 未正确解析：%+v", got.Items[1].Config.ConnParams)
+	}
+}
+
+func TestImportUpstreamsCreatesValidAndReportsFailures(t *testing.T) {
+	upstream := &fakeUpstreamService{
+		createErr: map[string]error{
+			"bad": domain.NewValidationError("上游 MCP 配置校验失败", map[string]string{
+				"connParams.url": "缺少必填连接参数 \"url\"",
+			}),
+		},
+	}
+	e := newTestEngine(Deps{Upstream: upstream})
+
+	w := doJSON(e, http.MethodPost, "/api/admin/upstreams/import", `{
+		"items":[
+			{"name":"ok","transport":"streamable-http","connParams":{"url":"https://example.com/mcp"},"enabled":true,"autoSync":true},
+			{"name":"bad","transport":"streamable-http","connParams":{},"enabled":true,"autoSync":true}
+		]
+	}`)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("期望 HTTP 200，实际 %d，响应体 %s", w.Code, w.Body.String())
+	}
+	if len(upstream.created) != 2 {
+		t.Fatalf("期望逐条尝试创建 2 个上游，实际 %d", len(upstream.created))
+	}
+	var got upstreamImportResult
+	unmarshalData(t, w, &got)
+	if len(got.Created) != 1 || got.Created[0].Name != "ok" || got.Created[0].Upstream == nil {
+		t.Fatalf("成功项不符合预期：%+v", got.Created)
+	}
+	if len(got.Failed) != 1 || got.Failed[0].Name != "bad" || got.Failed[0].Fields["connParams.url"] == "" {
+		t.Fatalf("失败项不符合预期：%+v", got.Failed)
+	}
+}
+
+func TestPreviewUpstreamImportRejectsEmptyContent(t *testing.T) {
+	e := newTestEngine(Deps{})
+
+	w := doJSON(e, http.MethodPost, "/api/admin/upstreams/import/preview", `{"content":"  "}`)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("期望 HTTP 400，实际 %d，响应体 %s", w.Code, w.Body.String())
+	}
+	_, _, fields := parseErrorEnvelope(t, w)
+	if fields["content"] == "" {
+		t.Fatalf("期望返回 content 字段错误，实际 %+v", fields)
 	}
 }
 

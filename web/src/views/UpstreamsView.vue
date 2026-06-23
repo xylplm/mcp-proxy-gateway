@@ -26,9 +26,13 @@ import {
   reorderUpstreams,
   refreshUpstream,
   reconnectUpstream,
+  previewUpstreamImport,
+  importUpstreamsFromJSON,
   CONN_STATE_LABELS,
   TRANSPORT_OPTIONS,
   type Upstream,
+  type UpstreamImportItem,
+  type UpstreamImportResultItem,
 } from '@/api/upstreams'
 import type { ToolDef } from '@/api/tools'
 import type { PrefillForm } from '@/api/templates'
@@ -54,9 +58,18 @@ const searchKeyword = ref('')
 /** 抽屉与弹窗开关。 */
 const drawerOpen = ref(false)
 const marketOpen = ref(false)
+const importOpen = ref(false)
 /** 当前编辑目标与模板预填充。 */
 const editing = ref<Upstream | null>(null)
 const prefill = ref<PrefillForm | null>(null)
+
+const importContent = ref('')
+const importPreviewItems = ref<UpstreamImportItem[]>([])
+const importCreated = ref<UpstreamImportResultItem[]>([])
+const importFailed = ref<UpstreamImportResultItem[]>([])
+const importLoading = ref(false)
+const importExecuting = ref(false)
+const importError = ref('')
 
 const sortingOpen = ref(false)
 const sortDraft = ref<Upstream[]>([])
@@ -114,6 +127,19 @@ const toolModalCountLabel = computed(() => {
   if (!hasToolModalSearchKeyword.value) return `共 ${toolModalTools.value.length} 个`
   return `匹配 ${filteredToolModalTools.value.length} / 共 ${toolModalTools.value.length} 个`
 })
+const importCanPreview = computed(
+  () => importContent.value.trim() !== '' && !importLoading.value && !importExecuting.value,
+)
+const importCanSubmit = computed(
+  () => importPreviewItems.value.length > 0 && !importLoading.value && !importExecuting.value,
+)
+const importResultLabel = computed(() => {
+  const created = importCreated.value.length
+  const failed = importFailed.value.length
+  if (created === 0 && failed === 0) return ''
+  if (failed === 0) return `已导入 ${created} 个上游`
+  return `已导入 ${created} 个，${failed} 个需要处理`
+})
 
 function normalizeTags(tags: string[]): string[] {
   const seen = new Set<string>()
@@ -161,6 +187,13 @@ watch(searchKeyword, () => {
 
 watch(totalPages, (next) => {
   if (currentPage.value > next) currentPage.value = next
+})
+
+watch(importContent, () => {
+  importPreviewItems.value = []
+  importCreated.value = []
+  importFailed.value = []
+  importError.value = ''
 })
 
 /** 标记/解除行级繁忙态。 */
@@ -242,6 +275,16 @@ function openCreate(): void {
   drawerOpen.value = true
 }
 
+function openImport(): void {
+  importOpen.value = true
+  importError.value = ''
+}
+
+function closeImport(): void {
+  if (importLoading.value || importExecuting.value) return
+  importOpen.value = false
+}
+
 /** 打开编辑抽屉。 */
 function openEdit(up: Upstream): void {
   editing.value = up
@@ -265,6 +308,51 @@ async function onSaved(): Promise<void> {
   toast.success('保存成功')
   await loadUpstreams()
   ensureStatusPolling(60_000)
+}
+
+async function previewImport(): Promise<void> {
+  if (!importCanPreview.value) {
+    importError.value = '请先粘贴 MCP JSON 配置'
+    return
+  }
+  importLoading.value = true
+  importError.value = ''
+  importCreated.value = []
+  importFailed.value = []
+  try {
+    const preview = await previewUpstreamImport(importContent.value)
+    importPreviewItems.value = preview.items
+    if (preview.count === 0) {
+      importError.value = '未识别到可导入的上游 MCP'
+    }
+  } catch (err) {
+    importError.value = err instanceof Error ? err.message : '解析导入内容失败'
+  } finally {
+    importLoading.value = false
+  }
+}
+
+async function submitImport(): Promise<void> {
+  if (!importCanSubmit.value) return
+  importExecuting.value = true
+  importError.value = ''
+  try {
+    const result = await importUpstreamsFromJSON(importContent.value)
+    importCreated.value = result.created
+    importFailed.value = result.failed
+    if (result.created.length > 0) {
+      toast.success(`已导入 ${result.created.length} 个上游 MCP`)
+      await loadUpstreams()
+      ensureStatusPolling(60_000)
+    }
+    if (result.failed.length > 0) {
+      toast.warning(`${result.failed.length} 个上游导入失败，可按提示调整后重试`, { duration: 3600 })
+    }
+  } catch (err) {
+    importError.value = err instanceof Error ? err.message : '导入失败'
+  } finally {
+    importExecuting.value = false
+  }
 }
 
 /** 启用/停用切换（Req 3.1、3.2）。 */
@@ -608,6 +696,22 @@ function goPage(p: number): void {
         </button>
         <button
           type="button"
+          class="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 px-3.5 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:opacity-60 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+          @click="openImport"
+        >
+          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none">
+            <path
+              d="M12 3v11M8 10l4 4 4-4M5 17v2a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-2"
+              stroke="currentColor"
+              stroke-width="1.8"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+          导入 JSON
+        </button>
+        <button
+          type="button"
           class="bg-brand-500 hover:bg-brand-600 inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-medium text-white transition"
           @click="openCreate"
         >
@@ -797,6 +901,191 @@ function goPage(p: number): void {
       @close="marketOpen = false"
       @select="onTemplateSelected"
     />
+
+    <!-- MCP JSON 批量导入 -->
+    <transition name="fade">
+      <div
+        v-if="importOpen"
+        class="fixed inset-0 z-[100001] flex items-center justify-center bg-gray-900/40 p-4 backdrop-blur-[1px]"
+        @click.self="closeImport"
+      >
+        <div
+          class="flex max-h-[88vh] w-full max-w-4xl flex-col rounded-2xl border border-gray-200 bg-white shadow-xl dark:border-gray-800 dark:bg-gray-900"
+        >
+          <div
+            class="flex items-center justify-between gap-3 border-b border-gray-200 px-5 py-4 dark:border-gray-800"
+          >
+            <div class="min-w-0">
+              <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">导入 MCP JSON</h3>
+              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                支持 mcpServers、upstreams 或上游数组，确认后会批量创建上游。
+              </p>
+            </div>
+            <button
+              v-tooltip:bottom-end="'关闭'"
+              type="button"
+              class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-600 disabled:opacity-50 dark:hover:bg-gray-800"
+              :disabled="importLoading || importExecuting"
+              aria-label="关闭"
+              @click="closeImport"
+            >
+              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none">
+                <path
+                  d="M6 6l12 12M6 18L18 6"
+                  stroke="currentColor"
+                  stroke-width="1.8"
+                  stroke-linecap="round"
+                />
+              </svg>
+            </button>
+          </div>
+
+          <div class="custom-scrollbar flex-1 overflow-y-auto p-5">
+            <label class="block">
+              <span class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                JSON 配置
+              </span>
+              <textarea
+                v-model="importContent"
+                class="min-h-64 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 font-mono text-sm text-gray-800 shadow-sm transition placeholder:text-gray-400 focus:border-brand-300 focus:ring-3 focus:ring-brand-500/10 focus:outline-none dark:border-gray-700 dark:bg-gray-950 dark:text-white/90"
+                spellcheck="false"
+                placeholder='{"mcpServers":{"filesystem":{"command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","D:/work"]}}}'
+              />
+            </label>
+
+            <p
+              v-if="importError !== ''"
+              class="mt-4 rounded-lg bg-error-50 px-4 py-2.5 text-sm text-error-600 dark:bg-error-500/10 dark:text-error-400"
+            >
+              {{ importError }}
+            </p>
+
+            <div
+              v-if="importPreviewItems.length > 0"
+              class="mt-5 rounded-xl border border-gray-200 dark:border-gray-800"
+            >
+              <div
+                class="flex items-center justify-between gap-3 border-b border-gray-200 px-4 py-3 dark:border-gray-800"
+              >
+                <p class="text-sm font-medium text-gray-800 dark:text-white/90">
+                  将导入 {{ importPreviewItems.length }} 个上游
+                </p>
+                <span class="text-xs text-gray-400">确认前可先核对名称和连接方式</span>
+              </div>
+              <div class="grid grid-cols-1 gap-3 p-4 md:grid-cols-2">
+                <article
+                  v-for="item in importPreviewItems"
+                  :key="item.index"
+                  class="rounded-lg border border-gray-200 p-3 dark:border-gray-800 dark:bg-white/[0.03]"
+                >
+                  <div class="flex items-start justify-between gap-3">
+                    <div class="min-w-0">
+                      <p class="truncate text-sm font-semibold text-gray-800 dark:text-white/90">
+                        {{ item.config.name || '未命名上游' }}
+                      </p>
+                      <p class="mt-1 truncate font-mono text-xs text-gray-400">
+                        {{ item.config.connParams.url || item.config.connParams.command || '待补全连接参数' }}
+                      </p>
+                    </div>
+                    <span
+                      class="shrink-0 rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-500 dark:bg-gray-800 dark:text-gray-400"
+                    >
+                      {{ transportLabel(item.config.transport) }}
+                    </span>
+                  </div>
+                  <div class="mt-3 flex flex-wrap gap-1.5">
+                    <span
+                      v-for="tag in item.config.tags ?? []"
+                      :key="tag"
+                      class="bg-brand-50 text-brand-600 dark:bg-brand-500/10 dark:text-brand-300 rounded-full px-2 py-0.5 text-xs"
+                    >
+                      {{ tag }}
+                    </span>
+                    <span
+                      class="rounded-full px-2 py-0.5 text-xs"
+                      :class="
+                        item.config.enabled
+                          ? 'bg-success-50 text-success-600 dark:bg-success-500/10 dark:text-success-400'
+                          : 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400'
+                      "
+                    >
+                      {{ item.config.enabled ? '启用' : '停用' }}
+                    </span>
+                  </div>
+                </article>
+              </div>
+            </div>
+
+            <div
+              v-if="importResultLabel !== ''"
+              class="mt-5 rounded-xl border border-gray-200 dark:border-gray-800"
+            >
+              <div class="border-b border-gray-200 px-4 py-3 dark:border-gray-800">
+                <p class="text-sm font-medium text-gray-800 dark:text-white/90">{{ importResultLabel }}</p>
+              </div>
+              <div class="space-y-3 p-4">
+                <div v-if="importCreated.length > 0">
+                  <p class="mb-2 text-xs font-medium text-success-600 dark:text-success-400">导入成功</p>
+                  <div class="flex flex-wrap gap-2">
+                    <span
+                      v-for="item in importCreated"
+                      :key="`created-${item.index}`"
+                      class="rounded-full bg-success-50 px-2.5 py-1 text-xs text-success-600 dark:bg-success-500/10 dark:text-success-400"
+                    >
+                      {{ item.name }}
+                    </span>
+                  </div>
+                </div>
+                <div v-if="importFailed.length > 0">
+                  <p class="mb-2 text-xs font-medium text-error-600 dark:text-error-400">需要处理</p>
+                  <div class="space-y-2">
+                    <div
+                      v-for="item in importFailed"
+                      :key="`failed-${item.index}`"
+                      class="rounded-lg bg-error-50 px-3 py-2 text-sm text-error-600 dark:bg-error-500/10 dark:text-error-400"
+                    >
+                      <p class="font-medium">{{ item.name || `第 ${item.index + 1} 项` }}</p>
+                      <p class="mt-1 text-xs leading-5">
+                        {{ item.fields ? Object.values(item.fields).join('；') : item.error }}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div
+            class="flex flex-col-reverse gap-3 border-t border-gray-200 px-5 py-4 dark:border-gray-800 sm:flex-row sm:items-center sm:justify-end"
+          >
+            <button
+              type="button"
+              class="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-60 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+              :disabled="importLoading || importExecuting"
+              @click="closeImport"
+            >
+              关闭
+            </button>
+            <button
+              type="button"
+              class="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-60 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+              :disabled="!importCanPreview"
+              @click="previewImport"
+            >
+              {{ importLoading ? '解析中...' : '预览' }}
+            </button>
+            <button
+              type="button"
+              class="bg-brand-500 hover:bg-brand-600 rounded-lg px-4 py-2 text-sm font-medium text-white transition disabled:opacity-60"
+              :disabled="!importCanSubmit"
+              @click="submitImport"
+            >
+              {{ importExecuting ? '导入中...' : '确认导入' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </transition>
 
     <!-- 工具列表 -->
     <transition name="fade">

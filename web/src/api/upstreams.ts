@@ -18,6 +18,8 @@
  *   POST   /upstreams/:id/reconnect 手动重连
  *   POST   /upstreams/:id/refresh  手动刷新工具列表
  *   GET    /upstreams/tool-summaries 批量读取工具缓存摘要
+ *   POST   /upstreams/import/preview 预览 MCP JSON 批量导入
+ *   POST   /upstreams/import         执行 MCP JSON 批量导入
  */
 import request from '@/api/request'
 import type { ToolDef } from '@/api/tools'
@@ -143,6 +145,29 @@ export interface UpstreamTestResult {
   tools: ToolDef[]
 }
 
+export interface UpstreamImportItem {
+  index: number
+  config: UpstreamConfig
+}
+
+export interface UpstreamImportPreview {
+  items: UpstreamImportItem[]
+  count: number
+}
+
+export interface UpstreamImportResultItem {
+  index: number
+  name: string
+  upstream?: Upstream
+  error?: string
+  fields?: Record<string, string>
+}
+
+export interface UpstreamImportResult {
+  created: UpstreamImportResultItem[]
+  failed: UpstreamImportResultItem[]
+}
+
 /**
  * 列出全部上游 MCP 及其连接状态（Req 2.3、2.8）。
  * 后端可能返回 null（空集合），此处归一化为空数组。
@@ -168,6 +193,26 @@ export async function testUpstream(payload: UpstreamConfigRequest): Promise<Upst
     message: res.data?.message ?? '',
     count: res.data?.count ?? 0,
     tools: res.data?.tools ?? [],
+  }
+}
+
+export async function previewUpstreamImport(content: string): Promise<UpstreamImportPreview> {
+  const res = await request.post<UpstreamImportPreview>('/upstreams/import/preview', { content })
+  return {
+    items: res.data?.items ?? [],
+    count: res.data?.count ?? 0,
+  }
+}
+
+export async function importUpstreamsFromJSON(content: string): Promise<UpstreamImportResult> {
+  const res = await request.post<UpstreamImportResult>(
+    '/upstreams/import',
+    { content },
+    { timeout: 60000 },
+  )
+  return {
+    created: res.data?.created ?? [],
+    failed: res.data?.failed ?? [],
   }
 }
 
