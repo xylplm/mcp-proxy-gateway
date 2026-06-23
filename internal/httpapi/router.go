@@ -215,6 +215,15 @@ type SettingsRuntimeApplier interface {
 	RequestRestart()
 }
 
+// BackupService 是配置备份导入导出依赖的窄接口。
+//
+// *backup.Service 满足该接口；预览只需解析文件内容，由 httpapi 组合层直接复用
+// backup.ParseAndValidate，不把预览职责沉入应用服务。
+type BackupService interface {
+	Export(ctx context.Context) ([]byte, error)
+	Import(ctx context.Context, data []byte) error
+}
+
 // CronValidator 是同步 cron 表达式保存前校验的窄接口（Req 7.3、7.4）。
 //
 // syncsvc.ValidateCron 满足该函数签名（以函数值注入，避免本包依赖 sync 包）。
@@ -322,6 +331,8 @@ type Router struct {
 	settings SettingsService
 	// settingsRuntime 在配置保存后同步更新当前进程内的运行时组件；可为空。
 	settingsRuntime SettingsRuntimeApplier
+	// backup 为配置备份导入导出服务。
+	backup BackupService
 	// validateCron 为同步 cron 表达式保存前校验函数；为 nil 时跳过 cron 专项校验。
 	validateCron CronValidator
 	// stats 为统计查询应用服务。
@@ -356,6 +367,7 @@ type Deps struct {
 	Auth            AuthService
 	Settings        SettingsService
 	SettingsRuntime SettingsRuntimeApplier
+	Backup          BackupService
 	ValidateCron    CronValidator
 	Stats           StatsService
 	Audit           AuditService
@@ -384,6 +396,7 @@ func NewRouter(d Deps) *Router {
 		auth:            d.Auth,
 		settings:        d.Settings,
 		settingsRuntime: d.SettingsRuntime,
+		backup:          d.Backup,
 		validateCron:    d.ValidateCron,
 		stats:           d.Stats,
 		audit:           d.Audit,
@@ -419,6 +432,7 @@ func (r *Router) Register(router gin.IRouter, adminAuth gin.HandlerFunc) {
 	r.registerRuleRoutes(admin)
 	r.registerAPIKeyRoutes(admin)
 	r.registerSettingsRoutes(admin)
+	r.registerBackupRoutes(admin)
 	r.registerToolRoutes(admin)
 	r.registerStatsRoutes(admin)
 	r.registerAuditRoutes(admin)

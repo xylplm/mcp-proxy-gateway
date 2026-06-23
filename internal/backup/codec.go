@@ -3,6 +3,7 @@ package backup
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/config"
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
@@ -31,7 +32,8 @@ func Unmarshal(data []byte) (Backup, error) {
 		return Backup{}, domain.NewError(domain.CodeBackupInvalid, "备份文件格式无效："+err.Error())
 	}
 	// 拒绝尾随多余内容（多个 JSON 文档），保证备份为单一对象。
-	if dec.More() {
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF {
 		return Backup{}, domain.NewError(domain.CodeBackupInvalid, "备份文件格式无效：包含多余的尾随内容")
 	}
 	return b, nil

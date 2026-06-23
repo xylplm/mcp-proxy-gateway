@@ -26,6 +26,12 @@ import {
   type ToolRoutingStrategy,
   type YAMLConfig,
 } from '@/api/settings'
+import {
+  exportBackup,
+  importBackup,
+  previewBackup,
+  type BackupPreview,
+} from '@/api/backup'
 
 const { isLargeScreen } = useBreakpoint()
 const toast = useToast()
@@ -64,6 +70,13 @@ function portToAddr(port: number|string): string {
 const loading = ref(false)
 const saving = ref(false)
 const loadError = ref('')
+const backupExporting = ref(false)
+const backupImporting = ref(false)
+const backupContent = ref('')
+const backupFileName = ref('')
+const backupPreview = ref<BackupPreview | null>(null)
+const backupError = ref('')
+const backupFileInput = ref<HTMLInputElement | null>(null)
 
 /** 保存表单（设置）的整体错误与字段级错误（键为后端字段路径，如 sync.cron）。 */
 const formError = ref('')
@@ -185,6 +198,86 @@ async function saveSettings(): Promise<void> {
   }
 }
 
+function backupFileNameNow(): string {
+  const d = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `mpg-backup-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.json`
+}
+
+async function downloadBackup(): Promise<void> {
+  if (backupExporting.value) return
+  backupExporting.value = true
+  backupError.value = ''
+  try {
+    const blob = await exportBackup()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = backupFileNameNow()
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+    toast.success('备份文件已导出')
+  } catch (err) {
+    backupError.value = err instanceof Error ? err.message : '导出备份失败'
+  } finally {
+    backupExporting.value = false
+  }
+}
+
+function chooseBackupFile(): void {
+  backupFileInput.value?.click()
+}
+
+async function onBackupFileSelected(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  backupPreview.value = null
+  backupContent.value = ''
+  backupFileName.value = ''
+  backupError.value = ''
+  if (!file) return
+
+  try {
+    const content = await file.text()
+    const preview = await previewBackup(content)
+    backupContent.value = content
+    backupFileName.value = file.name
+    backupPreview.value = preview
+    toast.success('备份文件已解析')
+  } catch (err) {
+    backupError.value = err instanceof Error ? err.message : '备份文件解析失败'
+  }
+}
+
+async function confirmImportBackup(): Promise<void> {
+  if (backupImporting.value || backupContent.value === '' || backupPreview.value === null) return
+  const ok = await confirm({
+    title: '确认导入备份',
+    message: '导入后会覆盖当前系统设置、上游、API Key、规则和白名单，并自动重启网关。建议先导出当前备份。',
+    confirmText: '导入并覆盖',
+    cancelText: '取消',
+    tone: 'warning',
+  })
+  if (!ok) return
+
+  backupImporting.value = true
+  backupError.value = ''
+  try {
+    await importBackup(backupContent.value)
+    toast.success('备份已导入，网关正在重启')
+    backupContent.value = ''
+    backupFileName.value = ''
+    backupPreview.value = null
+  } catch (err) {
+    backupError.value = err instanceof Error ? err.message : '导入备份失败'
+  } finally {
+    backupImporting.value = false
+  }
+}
+
 /** 通用样式类（TailAdmin 风格）。 */
 const inputClass =
   'h-11 w-full rounded-lg border border-gray-300 bg-transparent px-4 text-sm text-gray-800 shadow-sm placeholder:text-gray-400 focus:border-brand-300 focus:ring-3 focus:ring-brand-500/10 focus:outline-none dark:border-gray-700 dark:text-white/90 dark:placeholder:text-white/30'
@@ -220,6 +313,119 @@ const errClass = 'mt-1 text-xs text-error-500'
       </p>
 
       <form class="flex flex-col gap-6 pb-28" @submit.prevent="saveSettings">
+        <!-- 配置备份 -->
+        <section
+          class="rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03]"
+        >
+          <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div class="min-w-0">
+              <h3 class="mb-1 text-base font-semibold text-gray-800 dark:text-white/90">
+                配置备份
+              </h3>
+              <p class="text-sm text-gray-500 dark:text-gray-400">
+                导出或恢复系统设置、上游、API Key、规则和白名单。
+              </p>
+              <p class="mt-2 text-xs text-warning-600 dark:text-warning-400">
+                备份文件包含上游凭证和 API Key 明文，请按密钥文件保管。
+              </p>
+            </div>
+            <div class="flex flex-wrap gap-2">
+              <button
+                type="button"
+                class="rounded-lg border border-gray-300 px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-60 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+                :disabled="backupExporting || backupImporting"
+                @click="downloadBackup"
+              >
+                {{ backupExporting ? '导出中…' : '导出备份' }}
+              </button>
+              <button
+                type="button"
+                class="rounded-lg border border-gray-300 px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-60 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+                :disabled="backupImporting"
+                @click="chooseBackupFile"
+              >
+                选择备份文件
+              </button>
+              <input
+                ref="backupFileInput"
+                class="sr-only"
+                type="file"
+                accept=".json,application/json"
+                @change="onBackupFileSelected"
+              />
+            </div>
+          </div>
+
+          <p
+            v-if="backupError !== ''"
+            class="mt-4 rounded-lg bg-error-50 px-4 py-2.5 text-sm text-error-600 dark:bg-error-500/10 dark:text-error-400"
+          >
+            {{ backupError }}
+          </p>
+
+          <div
+            v-if="backupPreview !== null"
+            class="mt-5 rounded-xl border border-gray-100 bg-gray-50 p-4 dark:border-gray-800 dark:bg-white/[0.02]"
+          >
+            <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+              <div class="min-w-0">
+                <p class="truncate text-sm font-medium text-gray-800 dark:text-white/90">
+                  {{ backupFileName }}
+                </p>
+                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  格式 {{ backupPreview.version }}
+                </p>
+              </div>
+              <button
+                type="button"
+                class="rounded-lg bg-warning-500 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-warning-600 disabled:opacity-60"
+                :disabled="backupImporting"
+                @click="confirmImportBackup"
+              >
+                {{ backupImporting ? '导入中…' : '导入并覆盖' }}
+              </button>
+            </div>
+            <div class="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+              <div class="rounded-lg bg-white px-3 py-2 dark:bg-gray-900/40">
+                <p class="text-xs text-gray-500 dark:text-gray-400">上游</p>
+                <p class="mt-1 text-base font-semibold text-gray-800 dark:text-white/90">
+                  {{ backupPreview.upstreamCount }}
+                </p>
+              </div>
+              <div class="rounded-lg bg-white px-3 py-2 dark:bg-gray-900/40">
+                <p class="text-xs text-gray-500 dark:text-gray-400">API Key</p>
+                <p class="mt-1 text-base font-semibold text-gray-800 dark:text-white/90">
+                  {{ backupPreview.apiKeyCount }}
+                </p>
+              </div>
+              <div class="rounded-lg bg-white px-3 py-2 dark:bg-gray-900/40">
+                <p class="text-xs text-gray-500 dark:text-gray-400">别名规则</p>
+                <p class="mt-1 text-base font-semibold text-gray-800 dark:text-white/90">
+                  {{ backupPreview.aliasRuleCount }}
+                </p>
+              </div>
+              <div class="rounded-lg bg-white px-3 py-2 dark:bg-gray-900/40">
+                <p class="text-xs text-gray-500 dark:text-gray-400">上游屏蔽</p>
+                <p class="mt-1 text-base font-semibold text-gray-800 dark:text-white/90">
+                  {{ backupPreview.mcpFilterRuleCount }}
+                </p>
+              </div>
+              <div class="rounded-lg bg-white px-3 py-2 dark:bg-gray-900/40">
+                <p class="text-xs text-gray-500 dark:text-gray-400">Key 屏蔽</p>
+                <p class="mt-1 text-base font-semibold text-gray-800 dark:text-white/90">
+                  {{ backupPreview.apiKeyFilterRuleCount }}
+                </p>
+              </div>
+              <div class="rounded-lg bg-white px-3 py-2 dark:bg-gray-900/40">
+                <p class="text-xs text-gray-500 dark:text-gray-400">白名单</p>
+                <p class="mt-1 text-base font-semibold text-gray-800 dark:text-white/90">
+                  {{ backupPreview.aclCount }}
+                </p>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <!-- 同步 -->
         <section
           class="rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03]"

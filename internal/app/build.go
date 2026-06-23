@@ -11,6 +11,7 @@ import (
 	"github.com/myGithub/mcp-proxy-gateway/internal/apikey"
 	"github.com/myGithub/mcp-proxy-gateway/internal/audit"
 	"github.com/myGithub/mcp-proxy-gateway/internal/auth"
+	"github.com/myGithub/mcp-proxy-gateway/internal/backup"
 	"github.com/myGithub/mcp-proxy-gateway/internal/cache"
 	"github.com/myGithub/mcp-proxy-gateway/internal/config"
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
@@ -39,6 +40,7 @@ func (a *App) build(envCfg config.EnvConfig) error {
 
 	// --- 仓储层 ---
 	repos := store.NewRepositories(a.db)
+	backupSvc := backup.NewService(a.cfg, backup.NewStoreAdapter(repos))
 
 	// --- 出站适配：工具缓存、传输工厂、连接拨号/会话注册 ---
 	toolCache := cache.New(a.rdb, repos.ToolCache, a.logger)
@@ -195,6 +197,7 @@ func (a *App) build(envCfg config.EnvConfig) error {
 		Auth:            authSvc,
 		Settings:        a.cfg,
 		SettingsRuntime: a,
+		Backup:          backupSvc,
 		ValidateCron:    syncsvc.ValidateCron,
 		Stats:           statQuery,
 		Audit:           auditSvc,
