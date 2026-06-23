@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { nextTick, onUnmounted } from 'vue'
 import type { ApexOptions } from 'apexcharts'
+import ApexChart from 'vue3-apexcharts'
 import AdminLayout from '@/components/layout/AdminLayout.vue'
 import PageBreadcrumb from '@/components/common/PageBreadcrumb.vue'
 import {
@@ -424,7 +425,7 @@ onMounted(async () => {
             峰值 {{ formatFullDate(busiestDay.Day) }} · {{ formatInt(busiestDay.TotalCalls) }} 次
           </span>
         </div>
-        <apexchart
+        <ApexChart
           v-if="daily.length > 0"
           type="area"
           height="320"
