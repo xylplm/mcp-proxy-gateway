@@ -8,7 +8,7 @@
  * 风格：Tailwind 工具类 + TailAdmin 组件风格（卡片、徽章、按钮、分页）；
  * 响应式：分页条数来自 useBreakpoint，小屏单列，大屏提升卡片密度。
  */
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import AdminLayout from '@/components/layout/AdminLayout.vue'
 import PageBreadcrumb from '@/components/common/PageBreadcrumb.vue'
 import ConnStateBadge from '@/components/upstreams/ConnStateBadge.vue'
@@ -25,6 +25,7 @@ import {
   reorderUpstreams,
   refreshUpstream,
   reconnectUpstream,
+  CONN_STATE_LABELS,
   TRANSPORT_OPTIONS,
   type Upstream,
 } from '@/api/upstreams'
@@ -46,6 +47,7 @@ const busy = ref<Set<string>>(new Set())
 
 /** 分页：当前页（1 起）。 */
 const currentPage = ref(1)
+const searchKeyword = ref('')
 
 /** 抽屉与弹窗开关。 */
 const drawerOpen = ref(false)
@@ -72,13 +74,25 @@ const toolModalError = ref('')
 let statusPollTimer: number | undefined
 let statusPollingUntil = 0
 
+const normalizedSearchKeyword = computed(() => searchKeyword.value.trim().toLowerCase())
+const hasSearchKeyword = computed(() => normalizedSearchKeyword.value !== '')
+const filteredUpstreams = computed(() => {
+  const keyword = normalizedSearchKeyword.value
+  if (keyword === '') return upstreams.value
+  return upstreams.value.filter((up) => upstreamSearchText(up).includes(keyword))
+})
+const upstreamCountLabel = computed(() => {
+  if (!hasSearchKeyword.value) return `共 ${upstreams.value.length} 个上游 MCP 服务`
+  return `匹配 ${filteredUpstreams.value.length} / 共 ${upstreams.value.length} 个上游 MCP 服务`
+})
+
 /** 总页数。 */
-const totalPages = computed(() => Math.max(1, Math.ceil(upstreams.value.length / pageSize.value)))
+const totalPages = computed(() => Math.max(1, Math.ceil(filteredUpstreams.value.length / pageSize.value)))
 
 /** 当前页展示的上游切片。 */
 const pagedUpstreams = computed(() => {
   const start = (currentPage.value - 1) * pageSize.value
-  return upstreams.value.slice(start, start + pageSize.value)
+  return filteredUpstreams.value.slice(start, start + pageSize.value)
 })
 
 const allTags = computed(() => normalizeTags(upstreams.value.flatMap((up) => up.config.tags ?? [])))
@@ -105,6 +119,35 @@ function normalizeTags(tags: string[]): string[] {
 function transportLabel(value: string): string {
   return TRANSPORT_OPTIONS.find((o) => o.value === value)?.label ?? value
 }
+
+function upstreamSearchText(up: Upstream): string {
+  const connParams = up.config.connParams
+  return [
+    up.id,
+    up.config.name,
+    up.config.transport,
+    transportLabel(up.config.transport),
+    connParams.url,
+    connParams.command,
+    connParams.cwd,
+    ...(connParams.args ?? []),
+    ...(up.config.tags ?? []),
+    up.config.enabled ? '已启用 enabled' : '已停用 disabled',
+    up.state,
+    CONN_STATE_LABELS[up.state],
+    up.lastError ?? '',
+  ]
+    .join(' ')
+    .toLowerCase()
+}
+
+watch(searchKeyword, () => {
+  currentPage.value = 1
+})
+
+watch(totalPages, (next) => {
+  if (currentPage.value > next) currentPage.value = next
+})
 
 /** 标记/解除行级繁忙态。 */
 function setBusy(key: string, on: boolean): void {
@@ -469,10 +512,25 @@ function goPage(p: number): void {
 
     <!-- 工具栏 -->
     <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
-      <p class="text-sm text-gray-500 dark:text-gray-400">
-        共 {{ upstreams.length }} 个上游 MCP 服务
-      </p>
+      <p class="text-sm text-gray-500 dark:text-gray-400">{{ upstreamCountLabel }}</p>
       <div class="flex flex-wrap items-center gap-2">
+        <label class="relative block w-full sm:w-72">
+          <span class="sr-only">搜索上游 MCP</span>
+          <input
+            v-model="searchKeyword"
+            type="search"
+            placeholder="搜索名称、标签或状态"
+            class="h-10 w-full rounded-lg border border-gray-300 bg-white px-3 pr-12 text-sm text-gray-800 shadow-sm transition placeholder:text-gray-400 focus:border-brand-300 focus:ring-3 focus:ring-brand-500/10 focus:outline-none dark:border-gray-700 dark:bg-gray-900 dark:text-white/90"
+          />
+          <button
+            v-if="hasSearchKeyword"
+            type="button"
+            class="absolute top-1/2 right-2 -translate-y-1/2 rounded-md px-2 py-1 text-xs text-gray-500 transition hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+            @click="searchKeyword = ''"
+          >
+            清空
+          </button>
+        </label>
         <button
           type="button"
           class="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 px-3.5 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:opacity-60 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
@@ -559,6 +617,12 @@ function goPage(p: number): void {
         class="rounded-2xl border border-dashed border-gray-300 bg-white px-5 py-12 text-center text-sm text-gray-400 dark:border-gray-700 dark:bg-white/[0.03]"
       >
         暂无上游 MCP 服务，点击「新建上游」或「模板市场」开始接入
+      </div>
+      <div
+        v-else-if="filteredUpstreams.length === 0"
+        class="rounded-2xl border border-dashed border-gray-300 bg-white px-5 py-12 text-center text-sm text-gray-400 dark:border-gray-700 dark:bg-white/[0.03]"
+      >
+        没有匹配的上游 MCP 服务
       </div>
 
       <div v-else class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
