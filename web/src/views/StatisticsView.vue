@@ -1,8 +1,7 @@
 ﻿<script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, onMounted, ref, watch } from 'vue'
 import { nextTick, onUnmounted } from 'vue'
 import type { ApexOptions } from 'apexcharts'
-import ApexChart from 'vue3-apexcharts'
 import AdminLayout from '@/components/layout/AdminLayout.vue'
 import PageBreadcrumb from '@/components/common/PageBreadcrumb.vue'
 import {
@@ -22,6 +21,8 @@ import {
 import { listAPIKeys } from '@/api/apikeys'
 import { listUpstreams } from '@/api/upstreams'
 import { getAggregatedTools } from '@/api/tools'
+
+const ApexChart = defineAsyncComponent(() => import('vue3-apexcharts'))
 
 const startLocal = ref('')
 const endLocal = ref('')
