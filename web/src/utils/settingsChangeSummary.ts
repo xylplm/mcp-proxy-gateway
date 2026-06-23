@@ -1,0 +1,318 @@
+import type { YAMLConfig } from '@/api/settings'
+
+export interface SettingsChange {
+  label: string
+  before: string
+  after: string
+  impact: string
+  requiresRestart: boolean
+}
+
+export interface SettingsDraftInput {
+  adminAddr: string
+  publicMCPAddr: string
+  trustedProxyCIDRs: string[]
+  exemptCIDRs: string[]
+}
+
+type ValueFormatter = (value: unknown) => string
+
+const routingStrategyLabels: Record<string, string> = {
+  round_robin: '均衡分配',
+  priority_fill: '优先可用上游',
+}
+
+const securityModeLabels: Record<string, string> = {
+  monitor: '仅记录',
+  enforce: '自动封禁',
+  off: '关闭',
+}
+
+export function cloneSettingsConfig(value: YAMLConfig): YAMLConfig {
+  return JSON.parse(JSON.stringify(value)) as YAMLConfig
+}
+
+export function buildSettingsDraft(config: YAMLConfig, input: SettingsDraftInput): YAMLConfig {
+  const draft = cloneSettingsConfig(config)
+  draft.server.admin_addr = input.adminAddr
+  draft.server.public_mcp_addr = input.publicMCPAddr
+  draft.security.trusted_proxy_cidrs = input.trustedProxyCIDRs
+  draft.security.exempt_cidrs = input.exemptCIDRs
+  return draft
+}
+
+export function collectSettingsChanges(before: YAMLConfig, after: YAMLConfig): SettingsChange[] {
+  const changes: SettingsChange[] = []
+  const needsRestart = true
+  const runtimeOnly = false
+
+  addChange(changes, '同步 cron', before.sync.cron, after.sync.cron, needsRestart)
+  addChange(changes, '同步超时', before.sync.timeout_s, after.sync.timeout_s, needsRestart, secondsLabel)
+  addChange(
+    changes,
+    '连接建立超时',
+    before.connection.connect_timeout_s,
+    after.connection.connect_timeout_s,
+    needsRestart,
+    secondsLabel,
+  )
+  addChange(
+    changes,
+    '初始退避',
+    before.connection.retry_initial_backoff_s,
+    after.connection.retry_initial_backoff_s,
+    needsRestart,
+    secondsLabel,
+  )
+  addChange(
+    changes,
+    '退避倍数',
+    before.connection.retry_multiplier,
+    after.connection.retry_multiplier,
+    needsRestart,
+  )
+  addChange(
+    changes,
+    '退避上限',
+    before.connection.retry_max_backoff_s,
+    after.connection.retry_max_backoff_s,
+    needsRestart,
+    secondsLabel,
+  )
+  addChange(
+    changes,
+    '连续失败阈值',
+    before.connection.failure_threshold,
+    after.connection.failure_threshold,
+    needsRestart,
+  )
+  addChange(
+    changes,
+    '上游调用超时',
+    before.aggregation.upstream_call_timeout_s,
+    after.aggregation.upstream_call_timeout_s,
+    needsRestart,
+    secondsLabel,
+  )
+  addChange(
+    changes,
+    '工具调用策略',
+    before.aggregation.tool_routing_strategy,
+    after.aggregation.tool_routing_strategy,
+    runtimeOnly,
+    routingStrategyLabel,
+  )
+  addChange(
+    changes,
+    '管理监听端口',
+    before.server.admin_addr,
+    after.server.admin_addr,
+    needsRestart,
+    emptyLabel,
+  )
+  addChange(
+    changes,
+    '独立 MCP 监听端口',
+    before.server.public_mcp_addr,
+    after.server.public_mcp_addr,
+    needsRestart,
+    emptyLabel,
+  )
+  addChange(
+    changes,
+    '管理端口同时暴露 MCP',
+    before.server.expose_mcp_on_admin_addr,
+    after.server.expose_mcp_on_admin_addr,
+    needsRestart,
+    boolLabel,
+  )
+  addChange(changes, '日志级别', before.server.log_level, after.server.log_level, runtimeOnly)
+  addChange(
+    changes,
+    '智能模式默认返回工具数',
+    before.mcp_api.smart_discovery_limit,
+    after.mcp_api.smart_discovery_limit,
+    runtimeOnly,
+  )
+  addChange(changes, '安全防护模式', before.security.mode, after.security.mode, runtimeOnly, securityModeLabel)
+  addChange(
+    changes,
+    '失败统计窗口',
+    before.security.failure_window_s,
+    after.security.failure_window_s,
+    runtimeOnly,
+    secondsLabel,
+  )
+  addChange(
+    changes,
+    '单 IP 失败阈值',
+    before.security.max_failures_per_ip,
+    after.security.max_failures_per_ip,
+    runtimeOnly,
+  )
+  addChange(
+    changes,
+    '疑似 Key 失败阈值',
+    before.security.max_failures_per_key_fingerprint,
+    after.security.max_failures_per_key_fingerprint,
+    runtimeOnly,
+  )
+  addChange(
+    changes,
+    'ACL 拒绝阈值',
+    before.security.max_acl_denies_per_key_ip,
+    after.security.max_acl_denies_per_key_ip,
+    runtimeOnly,
+  )
+  addChange(
+    changes,
+    '首次封禁时长',
+    before.security.first_block_duration_s,
+    after.security.first_block_duration_s,
+    runtimeOnly,
+    secondsLabel,
+  )
+  addChange(
+    changes,
+    '最长自动封禁',
+    before.security.max_block_duration_s,
+    after.security.max_block_duration_s,
+    runtimeOnly,
+    secondsLabel,
+  )
+  addChange(
+    changes,
+    '封禁升级窗口',
+    before.security.escalation_window_s,
+    after.security.escalation_window_s,
+    runtimeOnly,
+    secondsLabel,
+  )
+  addChange(
+    changes,
+    '可信代理 CIDR',
+    before.security.trusted_proxy_cidrs ?? [],
+    after.security.trusted_proxy_cidrs ?? [],
+    needsRestart,
+    cidrListLabel,
+  )
+  addChange(
+    changes,
+    '自动封禁豁免 CIDR',
+    before.security.exempt_cidrs ?? [],
+    after.security.exempt_cidrs ?? [],
+    runtimeOnly,
+    cidrListLabel,
+  )
+  addChange(
+    changes,
+    '调用记录保留天数',
+    before.statistics.retention_days,
+    after.statistics.retention_days,
+    runtimeOnly,
+    daysLabel,
+  )
+  addChange(
+    changes,
+    '工具排行默认条数',
+    before.statistics.top_limit_default,
+    after.statistics.top_limit_default,
+    runtimeOnly,
+  )
+  addChange(
+    changes,
+    '操作日志保留天数',
+    before.audit.retention_days,
+    after.audit.retention_days,
+    runtimeOnly,
+    daysLabel,
+  )
+  addChange(
+    changes,
+    '审计分页默认每页条数',
+    before.audit.page_size_default,
+    after.audit.page_size_default,
+    runtimeOnly,
+  )
+  addChange(
+    changes,
+    '会话超时',
+    before.auth.session_timeout_s,
+    after.auth.session_timeout_s,
+    runtimeOnly,
+    secondsLabel,
+  )
+
+  return changes
+}
+
+export function settingsChangesRequireRestart(changes: SettingsChange[]): boolean {
+  return changes.some((item) => item.requiresRestart)
+}
+
+export function settingsConfirmMessage(changes: SettingsChange[]): string {
+  const preview = changes
+    .slice(0, 8)
+    .map((item) => `• ${item.label}：${item.before} → ${item.after}（${item.impact}）`)
+  const extra = changes.length > preview.length ? `\n• 另有 ${changes.length - preview.length} 项配置变更` : ''
+  const tail = settingsChangesRequireRestart(changes)
+    ? '保存后网关会自动重启以应用相关配置，重启期间管理台和对外 MCP 服务会短暂不可用。'
+    : '这些变更会写入配置文件，并直接应用到当前运行中的服务。'
+  return `本次将保存 ${changes.length} 项配置变更：\n${preview.join('\n')}${extra}\n\n${tail}`
+}
+
+function addChange(
+  changes: SettingsChange[],
+  label: string,
+  before: unknown,
+  after: unknown,
+  requiresRestart: boolean,
+  format: ValueFormatter = String,
+): void {
+  if (sameValue(before, after)) return
+  changes.push({
+    label,
+    before: format(before),
+    after: format(after),
+    impact: requiresRestart ? '保存后重启生效' : '保存后立即生效',
+    requiresRestart,
+  })
+}
+
+function sameValue(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a) === JSON.stringify(b)
+}
+
+function boolLabel(value: unknown): string {
+  return value ? '开启' : '关闭'
+}
+
+function emptyLabel(value: unknown): string {
+  const text = String(value).trim()
+  return text === '' ? '未配置' : text
+}
+
+function secondsLabel(value: unknown): string {
+  return `${value} 秒`
+}
+
+function daysLabel(value: unknown): string {
+  return `${value} 天`
+}
+
+function securityModeLabel(value: unknown): string {
+  const key = String(value)
+  return securityModeLabels[key] ?? key
+}
+
+function routingStrategyLabel(value: unknown): string {
+  const key = String(value)
+  return routingStrategyLabels[key] ?? key
+}
+
+function cidrListLabel(value: unknown): string {
+  const values = Array.isArray(value) ? value.map(String) : []
+  if (values.length === 0) return '未配置'
+  if (values.length <= 2) return values.join('、')
+  return `${values.slice(0, 2).join('、')} 等 ${values.length} 项`
+}

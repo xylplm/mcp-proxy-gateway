@@ -32,6 +32,13 @@ import {
   previewBackup,
   type BackupPreview,
 } from '@/api/backup'
+import {
+  buildSettingsDraft,
+  cloneSettingsConfig,
+  collectSettingsChanges,
+  settingsChangesRequireRestart,
+  settingsConfirmMessage,
+} from '@/utils/settingsChangeSummary'
 
 const { isLargeScreen } = useBreakpoint()
 const toast = useToast()
@@ -44,6 +51,7 @@ const gridClass = computed(() =>
 
 /** 当前配置表单模型（加载后填充）。 */
 const config = ref<YAMLConfig | null>(null)
+const savedConfig = ref<YAMLConfig | null>(null)
 
 const trustedProxyCIDRs = ref('')
 const exemptCIDRs = ref('')
@@ -122,6 +130,16 @@ function textToCIDRList(value: string): string[] {
     .filter((item) => item !== '')
 }
 
+function currentDraftConfig(): YAMLConfig | null {
+  if (config.value === null) return null
+  return buildSettingsDraft(config.value, {
+    adminAddr: portToAddr(adminPort.value),
+    publicMCPAddr: portToAddr(publicMCPPort.value),
+    trustedProxyCIDRs: textToCIDRList(trustedProxyCIDRs.value),
+    exemptCIDRs: textToCIDRList(exemptCIDRs.value),
+  })
+}
+
 function syncSecurityTextFields(): void {
   if (config.value === null) return
   trustedProxyCIDRs.value = cidrListToText(config.value.security.trusted_proxy_cidrs ?? [])
@@ -142,6 +160,7 @@ async function loadSettings(): Promise<void> {
   loadError.value = ''
   try {
     config.value = await getSettings()
+    savedConfig.value = cloneSettingsConfig(config.value)
     adminPort.value = addrToPort(config.value.server.admin_addr)
     publicMCPPort.value = addrToPort(config.value.server.public_mcp_addr)
     syncSecurityTextFields()
@@ -169,28 +188,33 @@ function applyServerError(err: unknown): void {
 /** 保存常规配置。 */
 async function saveSettings(): Promise<void> {
   if (config.value === null || saving.value) return
+  const draft = currentDraftConfig()
+  const before = savedConfig.value
+  if (draft === null || before === null) return
+  const changes = collectSettingsChanges(before, draft)
+  if (changes.length === 0) {
+    toast.info('系统设置没有变更')
+    return
+  }
+  const restart = settingsChangesRequireRestart(changes)
   const ok = await confirm({
     title: '确认保存系统设置',
-    message: '保存后网关会自动重启以应用最新配置。重启期间管理台和对外 MCP 服务会短暂不可用，请确认当前没有关键调用正在进行。',
-    confirmText: '保存并重启',
+    message: settingsConfirmMessage(changes),
+    confirmText: restart ? '保存并重启' : '保存',
     cancelText: '取消',
     tone: 'warning',
   })
   if (!ok) return
 
   clearErrors()
-  // Restore port strings from numeric port inputs before saving
-  config.value.server.admin_addr = portToAddr(adminPort.value)
-  config.value.server.public_mcp_addr = portToAddr(publicMCPPort.value)
-  config.value.security.trusted_proxy_cidrs = textToCIDRList(trustedProxyCIDRs.value)
-  config.value.security.exempt_cidrs = textToCIDRList(exemptCIDRs.value)
   saving.value = true
   try {
-    config.value = await updateSettings(config.value, { restart: true })
+    config.value = await updateSettings(draft, { restart })
+    savedConfig.value = cloneSettingsConfig(config.value)
     adminPort.value = addrToPort(config.value.server.admin_addr)
     publicMCPPort.value = addrToPort(config.value.server.public_mcp_addr)
     syncSecurityTextFields()
-    toast.success('系统设置已保存，网关正在重启')
+    toast.success(restart ? '系统设置已保存，网关正在重启' : '系统设置已保存')
   } catch (err) {
     applyServerError(err)
   } finally {
