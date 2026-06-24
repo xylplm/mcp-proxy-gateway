@@ -39,6 +39,11 @@ import type { ToolDef } from '@/api/tools'
 import type { PrefillForm } from '@/api/templates'
 import { buildToolCountSnapshot, toolCountLabel, type ToolCountSnapshot } from '@/utils/toolCountSnapshot'
 import { buildUpstreamDetailSummary } from '@/utils/upstreamDetailSummary'
+import {
+  formatFileSize,
+  MAX_UPSTREAM_IMPORT_FILE_BYTES,
+  validateUpstreamImportFile,
+} from '@/utils/upstreamImportFile'
 
 const { pageSize } = useBreakpoint()
 const toast = useToast()
@@ -71,7 +76,9 @@ const importCreated = ref<UpstreamImportResultItem[]>([])
 const importFailed = ref<UpstreamImportResultItem[]>([])
 const importLoading = ref(false)
 const importExecuting = ref(false)
+const importFileReading = ref(false)
 const importError = ref('')
+const importFileName = ref('')
 const exportingMCPJSON = ref(false)
 
 const sortingOpen = ref(false)
@@ -307,8 +314,40 @@ function openImport(): void {
 }
 
 function closeImport(): void {
-  if (importLoading.value || importExecuting.value) return
+  if (importLoading.value || importExecuting.value || importFileReading.value) return
   importOpen.value = false
+}
+
+async function importFromFile(file: File | null | undefined): Promise<void> {
+  if (!file || importLoading.value || importExecuting.value || importFileReading.value) return
+  const validation = validateUpstreamImportFile(file)
+  if (!validation.ok) {
+    importFileName.value = ''
+    importError.value = validation.error ?? '文件不可用'
+    return
+  }
+
+  importFileReading.value = true
+  importError.value = ''
+  try {
+    importContent.value = await file.text()
+    importFileName.value = `${file.name || '本地文件'} · ${formatFileSize(file.size)}`
+  } catch (err) {
+    importError.value = err instanceof Error ? err.message : '读取文件失败'
+  } finally {
+    importFileReading.value = false
+  }
+}
+
+function onImportFileChange(event: Event): void {
+  const input = event.target as HTMLInputElement
+  void importFromFile(input.files?.[0])
+  input.value = ''
+}
+
+function onImportDrop(event: DragEvent): void {
+  event.preventDefault()
+  void importFromFile(event.dataTransfer?.files?.[0])
 }
 
 /** 打开编辑抽屉。 */
@@ -1181,6 +1220,38 @@ function goPage(p: number): void {
           </div>
 
           <div class="custom-scrollbar flex-1 overflow-y-auto p-5">
+            <div
+              class="mb-4 rounded-xl border border-dashed border-gray-300 bg-gray-50 px-4 py-5 text-center transition hover:border-brand-300 hover:bg-brand-50/40 dark:border-gray-700 dark:bg-white/[0.03] dark:hover:border-brand-500/40 dark:hover:bg-brand-500/[0.06]"
+              @dragover.prevent
+              @drop="onImportDrop"
+            >
+              <input
+                id="upstream-import-file"
+                type="file"
+                accept=".json,.txt,application/json,text/plain"
+                class="sr-only"
+                :disabled="importLoading || importExecuting || importFileReading"
+                @change="onImportFileChange"
+              />
+              <p class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                拖放 MCP JSON 文件到这里，或
+                <label
+                  for="upstream-import-file"
+                  class="cursor-pointer text-brand-600 hover:underline dark:text-brand-400"
+                >
+                  选择文件
+                </label>
+              </p>
+              <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">
+                支持 .json / .txt，最大 {{ formatFileSize(MAX_UPSTREAM_IMPORT_FILE_BYTES) }}；也可以直接在下方粘贴配置。
+              </p>
+              <p v-if="importFileReading" class="mt-2 text-xs text-brand-600 dark:text-brand-400">
+                正在读取文件...
+              </p>
+              <p v-else-if="importFileName !== ''" class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                已读取 {{ importFileName }}
+              </p>
+            </div>
             <label class="block">
               <span class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
                 JSON 配置
@@ -1190,6 +1261,7 @@ function goPage(p: number): void {
                 class="min-h-64 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 font-mono text-sm text-gray-800 shadow-sm transition placeholder:text-gray-400 focus:border-brand-300 focus:ring-3 focus:ring-brand-500/10 focus:outline-none dark:border-gray-700 dark:bg-gray-950 dark:text-white/90"
                 spellcheck="false"
                 placeholder='{"mcpServers":{"filesystem":{"command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","D:/work"]}}}'
+                @input="importFileName = ''"
               />
             </label>
 
