@@ -21,6 +21,16 @@ import {
   type PrefillForm,
 } from '@/api/templates'
 import { TRANSPORT_OPTIONS } from '@/api/upstreams'
+import { StaredIcon } from '@/icons'
+import {
+  filterTemplatesByPreference,
+  loadTemplateMarketPrefs,
+  markTemplateRecentlyUsed,
+  saveTemplateMarketPrefs,
+  toggleTemplateFavorite,
+  type TemplateMarketPrefs,
+  type TemplateMarketViewFilter,
+} from '@/utils/templateMarketPrefs'
 
 const props = defineProps<{ open: boolean }>()
 const emit = defineEmits<{
@@ -36,6 +46,7 @@ const templates = ref<Template[]>([])
 const activeCategory = ref<TemplateCategory | null>(null)
 /** 关键字检索输入。 */
 const keyword = ref('')
+const viewFilter = ref<TemplateMarketViewFilter>('all')
 /** 当前查看详情的模板。 */
 const detail = ref<Template | null>(null)
 /** 加载与错误状态。 */
@@ -43,6 +54,39 @@ const loading = ref(false)
 const errorMessage = ref('')
 /** 选择模板（请求预填充）的进行中标志。 */
 const selecting = ref(false)
+const prefs = ref<TemplateMarketPrefs>(loadTemplateMarketPrefs())
+
+const visibleTemplates = computed(() =>
+  filterTemplatesByPreference(templates.value, prefs.value, viewFilter.value),
+)
+
+const favoriteCount = computed(() =>
+  templates.value.filter((template) => prefs.value.favoriteIds.includes(template.id)).length,
+)
+
+const recentCount = computed(() =>
+  templates.value.filter((template) => prefs.value.recentIds.includes(template.id)).length,
+)
+
+const filterTabs = computed<Array<{ key: TemplateMarketViewFilter; label: string; count: number }>>(() => [
+  { key: 'all', label: '全部', count: templates.value.length },
+  { key: 'favorites', label: '收藏', count: favoriteCount.value },
+  { key: 'recent', label: '最近使用', count: recentCount.value },
+])
+
+function isFavoriteTemplate(id: string): boolean {
+  return prefs.value.favoriteIds.includes(id)
+}
+
+function updatePrefs(next: TemplateMarketPrefs): void {
+  prefs.value = next
+  saveTemplateMarketPrefs(next)
+}
+
+function toggleFavorite(tpl: Template, event?: MouseEvent): void {
+  event?.stopPropagation()
+  updatePrefs(toggleTemplateFavorite(prefs.value, tpl.id))
+}
 
 /** 传输类型显示名。 */
 function transportLabel(value: string): string {
@@ -129,6 +173,7 @@ async function useTemplate(): Promise<void> {
         placeholders: detail.value.placeholders ?? [],
       }
     }
+    updatePrefs(markTemplateRecentlyUsed(prefs.value, detail.value.id))
     emit('select', prefill)
   } finally {
     selecting.value = false
@@ -142,7 +187,9 @@ watch(
     if (open) {
       activeCategory.value = null
       keyword.value = ''
+      viewFilter.value = 'all'
       detail.value = null
+      prefs.value = loadTemplateMarketPrefs()
       void fetchCategories()
       void fetchTemplates()
     }
@@ -235,6 +282,25 @@ watch(
                 <option v-for="cv in categories" :key="cv.category" :value="cv.category">{{ cv.displayName }}</option>
               </select>
             </div>
+            <div
+              class="flex gap-2 overflow-x-auto border-b border-gray-200 px-4 py-3 dark:border-gray-800"
+            >
+              <button
+                v-for="tab in filterTabs"
+                :key="tab.key"
+                type="button"
+                class="inline-flex shrink-0 items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm transition"
+                :class="
+                  viewFilter === tab.key
+                    ? 'border-brand-300 bg-brand-50 text-brand-600 dark:border-brand-500/50 dark:bg-brand-500/10 dark:text-brand-400'
+                    : 'border-gray-200 text-gray-600 hover:border-brand-300 hover:bg-brand-50/40 dark:border-gray-800 dark:text-gray-300 dark:hover:border-brand-500/40 dark:hover:bg-brand-500/[0.06]'
+                "
+                @click="viewFilter = tab.key"
+              >
+                <span>{{ tab.label }}</span>
+                <span class="text-xs opacity-70">{{ tab.count }}</span>
+              </button>
+            </div>
 
             <!-- 列表 / 详情 -->
             <div class="min-h-0 flex-1 overflow-y-auto p-4">
@@ -257,6 +323,16 @@ watch(
                     <span class="inline-flex items-center rounded-full bg-brand-50 px-2.5 py-0.5 text-xs text-brand-600 dark:bg-brand-500/10 dark:text-brand-400">
                       {{ transportLabel(detail.transport) }}
                     </span>
+                    <button
+                      v-tooltip:bottom="isFavoriteTemplate(detail.id) ? '取消收藏' : '收藏模板'"
+                      type="button"
+                      class="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-gray-200 text-gray-400 transition hover:border-warning-200 hover:bg-warning-50 hover:text-warning-600 dark:border-gray-800 dark:hover:border-warning-500/30 dark:hover:bg-warning-500/10 dark:hover:text-warning-300"
+                      :class="isFavoriteTemplate(detail.id) ? 'border-warning-200 bg-warning-50 text-warning-600 dark:border-warning-500/30 dark:bg-warning-500/10 dark:text-warning-300' : ''"
+                      :aria-label="isFavoriteTemplate(detail.id) ? '取消收藏模板' : '收藏模板'"
+                      @click="toggleFavorite(detail)"
+                    >
+                      <StaredIcon class="h-4 w-4" />
+                    </button>
                   </div>
                   <p class="mt-2 text-sm text-gray-600 dark:text-gray-300">{{ detail.summary }}</p>
                   <a v-if="detail.docUrl" :href="detail.docUrl" target="_blank" rel="noopener noreferrer" class="mt-1 inline-block text-sm text-brand-600 hover:underline dark:text-brand-400">
@@ -283,26 +359,46 @@ watch(
               </div>
 
               <!-- 空列表 -->
-              <p v-else-if="templates.length === 0" class="py-10 text-center text-sm text-gray-400">
+              <p v-else-if="visibleTemplates.length === 0" class="py-10 text-center text-sm text-gray-400">
                 没有匹配的模板
               </p>
 
               <!-- 模板卡片网格 -->
               <div v-else class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
-                <button
-                  v-for="tpl in templates"
+                <article
+                  v-for="tpl in visibleTemplates"
                   :key="tpl.id"
-                  type="button"
-                  class="flex flex-col rounded-2xl border border-gray-200 bg-white p-4 text-left transition hover:border-brand-300 hover:shadow-sm dark:border-gray-800 dark:bg-white/[0.03] dark:hover:border-brand-500/40"
-                  @click="openDetail(tpl)"
+                  class="group relative rounded-2xl border border-gray-200 bg-white transition hover:border-brand-300 hover:shadow-sm dark:border-gray-800 dark:bg-white/[0.03] dark:hover:border-brand-500/40"
                 >
-                  <div class="mb-2 flex items-center gap-2">
-                    <h4 class="flex-1 truncate text-sm font-semibold text-gray-800 dark:text-white/90">{{ tpl.name }}</h4>
-                    <span class="shrink-0 rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-500 dark:bg-gray-800 dark:text-gray-400">{{ categoryLabel(tpl.category) }}</span>
-                  </div>
-                  <p class="line-clamp-2 flex-1 text-xs text-gray-500 dark:text-gray-400">{{ tpl.summary }}</p>
-                  <span class="mt-3 inline-block text-xs text-brand-600 dark:text-brand-400">查看详情 →</span>
-                </button>
+                  <button
+                    type="button"
+                    class="flex h-full w-full flex-col p-4 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
+                    @click="openDetail(tpl)"
+                  >
+                    <div class="mb-2 flex items-start gap-2">
+                      <h4 class="min-w-0 flex-1 truncate pr-7 text-sm font-semibold text-gray-800 dark:text-white/90">{{ tpl.name }}</h4>
+                      <span class="shrink-0 rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-500 dark:bg-gray-800 dark:text-gray-400">{{ categoryLabel(tpl.category) }}</span>
+                    </div>
+                    <span
+                      v-if="prefs.recentIds.includes(tpl.id)"
+                      class="mb-2 inline-flex w-fit rounded-full bg-brand-50 px-2 py-0.5 text-[11px] text-brand-600 dark:bg-brand-500/10 dark:text-brand-400"
+                    >
+                      最近使用
+                    </span>
+                    <p class="line-clamp-2 flex-1 text-xs text-gray-500 dark:text-gray-400">{{ tpl.summary }}</p>
+                    <span class="mt-3 inline-block text-xs text-brand-600 dark:text-brand-400">查看详情 →</span>
+                  </button>
+                  <button
+                    type="button"
+                    v-tooltip:bottom-end="isFavoriteTemplate(tpl.id) ? '取消收藏' : '收藏模板'"
+                    class="absolute top-3 right-3 inline-flex h-8 w-8 items-center justify-center rounded-lg text-gray-300 transition hover:bg-warning-50 hover:text-warning-600 dark:hover:bg-warning-500/10 dark:hover:text-warning-300"
+                    :class="isFavoriteTemplate(tpl.id) ? 'text-warning-500 dark:text-warning-300' : 'group-hover:text-gray-500 dark:group-hover:text-gray-300'"
+                    :aria-label="isFavoriteTemplate(tpl.id) ? '取消收藏模板' : '收藏模板'"
+                    @click="toggleFavorite(tpl, $event)"
+                  >
+                    <StaredIcon class="h-4 w-4" />
+                  </button>
+                </article>
               </div>
             </div>
           </div>
