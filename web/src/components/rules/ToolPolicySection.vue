@@ -306,6 +306,16 @@ function routingClass(strategy?: ToolRoutingStrategy): string {
   return 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300'
 }
 
+function routingStrategyDescription(strategy?: ToolRoutingStrategy): string {
+  if (strategy === 'priority_fill') {
+    return '优先调用排序靠前的健康来源；失败或不可用时自动尝试后续来源。'
+  }
+  if (strategy === 'round_robin') {
+    return '在多个健康来源间轮流分配调用，适合同名工具能力一致的场景。'
+  }
+  return '跟随系统设置里的全局路由策略，通常保持默认即可。'
+}
+
 defineExpose({ reload })
 </script>
 
@@ -504,41 +514,79 @@ defineExpose({ reload })
               </button>
             </div>
 
-            <label class="block">
-              <span class="mb-1.5 block text-sm font-medium text-gray-700 dark:text-gray-300">路由策略</span>
-              <select
-                v-model="form.routingStrategy"
-                class="w-full rounded-lg border border-gray-300 px-3.5 py-2.5 text-sm text-gray-800 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white/90"
-              >
-                <option value="">不覆盖全局策略</option>
-                <option value="priority_fill">优先顺序</option>
-                <option value="round_robin">轮询</option>
-              </select>
-            </label>
-
-            <div class="rounded-lg border border-gray-200 px-3 py-2.5 dark:border-gray-700">
-              <div class="flex items-center justify-between gap-4">
-                <span class="text-sm text-gray-700 dark:text-gray-300">成功结果缓存</span>
-                <button
-                  type="button"
-                  role="switch"
-                  :aria-checked="form.cacheEnabled"
-                  class="relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition"
-                  :class="form.cacheEnabled ? 'bg-brand-500' : 'bg-gray-300 dark:bg-gray-700'"
-                  @click="form.cacheEnabled = !form.cacheEnabled"
-                >
-                  <span class="inline-block h-4 w-4 transform rounded-full bg-white transition" :class="form.cacheEnabled ? 'translate-x-6' : 'translate-x-1'"></span>
-                </button>
+            <section class="rounded-xl border border-gray-200 px-4 py-3 dark:border-gray-700 lg:col-span-2">
+              <div>
+                <h4 class="text-sm font-medium text-gray-700 dark:text-gray-300">调用策略</h4>
+                <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
+                  命中该工具策略后，可单独覆盖路由方式，并按需缓存稳定查询结果。
+                </p>
               </div>
-              <input
-                v-if="form.cacheEnabled"
-                v-model.number="form.cacheTtlSeconds"
-                type="number"
-                min="1"
-                max="3600"
-                class="mt-3 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-800 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white/90"
-              />
-            </div>
+
+              <div class="mt-3 divide-y divide-gray-100 rounded-lg bg-gray-50 px-3 dark:divide-gray-800 dark:bg-white/[0.03]">
+                <label class="grid gap-2 py-3 sm:grid-cols-[minmax(0,1fr)_14rem] sm:items-start sm:gap-4">
+                  <span>
+                    <span class="block text-sm font-medium text-gray-700 dark:text-gray-300">路由策略</span>
+                    <span class="mt-1 block text-xs leading-5 text-gray-500 dark:text-gray-400">
+                      {{ routingStrategyDescription(form.routingStrategy) }}
+                    </span>
+                  </span>
+                  <select
+                    v-model="form.routingStrategy"
+                    class="w-full rounded-lg border border-gray-300 bg-white px-3.5 py-2.5 text-sm text-gray-800 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white/90"
+                  >
+                    <option value="">不覆盖全局策略</option>
+                    <option value="priority_fill">优先顺序</option>
+                    <option value="round_robin">轮询</option>
+                  </select>
+                </label>
+
+                <div class="grid gap-2 py-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:gap-4">
+                  <div>
+                    <p class="text-sm font-medium text-gray-700 dark:text-gray-300">成功结果缓存</p>
+                    <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
+                      仅缓存成功调用结果，命中时直接复用。
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-label="开启或关闭成功结果缓存"
+                    :aria-checked="form.cacheEnabled"
+                    class="relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition sm:justify-self-end"
+                    :class="form.cacheEnabled ? 'bg-brand-500' : 'bg-gray-300 dark:bg-gray-700'"
+                    @click="form.cacheEnabled = !form.cacheEnabled"
+                  >
+                    <span class="inline-block h-4 w-4 transform rounded-full bg-white transition" :class="form.cacheEnabled ? 'translate-x-6' : 'translate-x-1'"></span>
+                  </button>
+                </div>
+
+                <label
+                  class="grid gap-2 py-3 sm:grid-cols-[minmax(0,1fr)_14rem] sm:items-start sm:gap-4"
+                  :class="!form.cacheEnabled ? 'opacity-75' : ''"
+                >
+                  <span>
+                    <span class="block text-sm font-medium text-gray-700 dark:text-gray-300">缓存时间</span>
+                    <span class="mt-1 block text-xs leading-5 text-gray-500 dark:text-gray-400">
+                      {{ form.cacheEnabled ? '范围 1-3600 秒，适合稳定的查询类工具。' : '开启成功结果缓存后生效。' }}
+                    </span>
+                  </span>
+                  <span class="relative block">
+                    <input
+                      v-model.number="form.cacheTtlSeconds"
+                      type="number"
+                      min="1"
+                      max="3600"
+                      aria-label="成功结果缓存时间，单位秒"
+                      class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 pr-12 text-sm text-gray-800 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 focus:outline-none disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400 dark:border-gray-700 dark:bg-gray-800 dark:text-white/90 dark:disabled:bg-gray-800/60 dark:disabled:text-gray-500"
+                      :disabled="!form.cacheEnabled"
+                    />
+                    <span class="pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 text-xs text-gray-400">
+                      秒
+                    </span>
+                  </span>
+                </label>
+              </div>
+            </section>
 
             <div class="lg:col-span-2">
               <span class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">风险提示标签</span>
