@@ -73,7 +73,7 @@ type aggregateQuerier interface {
 }
 
 type recordQuerier interface {
-	ListRecords(ctx context.Context, limit int, afterID int64, afterAt time.Time) ([]store.CallRecordView, error)
+	ListRecords(ctx context.Context, query store.CallRecordQuery) ([]store.CallRecordView, error)
 	HealthRecords(ctx context.Context, since, until time.Time, limit int) ([]store.CallRecordView, error)
 	GetRecord(ctx context.Context, id int64) (store.CallRecordView, error)
 	ClearRecordsBefore(ctx context.Context, cutoff time.Time) (int64, error)
@@ -112,8 +112,8 @@ func (q *CombinedQuerier) APIKeyUsageProfile(ctx context.Context, apiKeyID strin
 	return q.aggregate.APIKeyUsageProfile(ctx, apiKeyID, start, end, limit)
 }
 
-func (q *CombinedQuerier) ListRecords(ctx context.Context, limit int, afterID int64, afterAt time.Time) ([]store.CallRecordView, error) {
-	return q.records.ListRecords(ctx, limit, afterID, afterAt)
+func (q *CombinedQuerier) ListRecords(ctx context.Context, query store.CallRecordQuery) ([]store.CallRecordView, error) {
+	return q.records.ListRecords(ctx, query)
 }
 
 func (q *CombinedQuerier) HealthRecords(ctx context.Context, since, until time.Time, limit int) ([]store.CallRecordView, error) {

@@ -48,6 +48,7 @@ type fakeQuerier struct {
 	lastTopLimit int
 	lastAPIKeyID string
 	lastHealthN  int
+	lastRecordQ  store.CallRecordQuery
 	lastSince    time.Time
 	lastUntil    time.Time
 	clearCutoff  time.Time
@@ -114,7 +115,8 @@ func (q *fakeQuerier) HealthRecords(_ context.Context, since, until time.Time, l
 	return q.healthRecords, nil
 }
 
-func (q *fakeQuerier) ListRecords(_ context.Context, _ int, _ int64, _ time.Time) ([]store.CallRecordView, error) {
+func (q *fakeQuerier) ListRecords(_ context.Context, query store.CallRecordQuery) ([]store.CallRecordView, error) {
+	q.lastRecordQ = query
 	return nil, nil
 }
 
@@ -408,6 +410,29 @@ func TestHealthAggregatesRecentRecords(t *testing.T) {
 	}
 	if repo.lastHealthN != healthRecentLimit || !repo.lastUntil.Equal(now) || repo.lastSince != now.Add(-time.Hour) {
 		t.Fatalf("健康窗口参数未透传：limit=%d since=%v until=%v", repo.lastHealthN, repo.lastSince, repo.lastUntil)
+	}
+}
+
+func TestListRecordsPassesStructuredQueryThrough(t *testing.T) {
+	repo := &fakeQuerier{}
+	svc := newTestQueryService(t, repo, 10)
+	since := time.Date(2026, 6, 24, 11, 0, 0, 0, time.UTC)
+	until := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC)
+	query := store.CallRecordQuery{
+		Limit:        40,
+		Since:        since,
+		Until:        until,
+		UpstreamID:   "up-a",
+		OriginalName: "search",
+		Status:       store.CallStatusUpstreamError,
+		MinLatencyMS: 1000,
+	}
+
+	if _, err := svc.ListRecords(context.Background(), query); err != nil {
+		t.Fatalf("ListRecords 不应返回错误：%v", err)
+	}
+	if repo.lastRecordQ != query {
+		t.Fatalf("调用记录查询参数未透传：got=%+v want=%+v", repo.lastRecordQ, query)
 	}
 }
 

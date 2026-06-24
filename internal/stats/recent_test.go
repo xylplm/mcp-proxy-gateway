@@ -83,3 +83,28 @@ func TestRecentMemberSortsLexicographicallyByID(t *testing.T) {
 		t.Fatalf("零填充 member 应保持字典序等同数字序：%q >= %q", recentMember(9), recentMember(10))
 	}
 }
+
+func TestFilterCallRecordsAppliesDrilldownQuery(t *testing.T) {
+	since := time.Date(2026, 6, 24, 11, 0, 0, 0, time.UTC)
+	until := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC)
+	records := []store.CallRecordView{
+		{ID: 1, UpstreamID: "up-a", OriginalName: "search", CalledAt: since.Add(10 * time.Minute), LatencyMS: 1200, Success: false, Status: store.CallStatusUpstreamError},
+		{ID: 2, UpstreamID: "up-a", OriginalName: "search", CalledAt: since.Add(20 * time.Minute), LatencyMS: 200, Success: false, Status: store.CallStatusUpstreamError},
+		{ID: 3, UpstreamID: "up-b", OriginalName: "search", CalledAt: since.Add(30 * time.Minute), LatencyMS: 1500, Success: false, Status: store.CallStatusUpstreamError},
+		{ID: 4, UpstreamID: "up-a", OriginalName: "search", CalledAt: until.Add(time.Minute), LatencyMS: 1500, Success: false, Status: store.CallStatusUpstreamError},
+	}
+	query := store.CallRecordQuery{
+		Limit:        1,
+		Since:        since,
+		Until:        until,
+		UpstreamID:   "up-a",
+		OriginalName: "search",
+		Status:       store.CallStatusUpstreamError,
+		MinLatencyMS: 1000,
+	}
+
+	got := filterCallRecords(records, query)
+	if len(got) != 1 || got[0].ID != 1 {
+		t.Fatalf("下钻过滤结果不符合预期：%+v", got)
+	}
+}

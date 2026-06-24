@@ -86,6 +86,21 @@ type CallRecordView struct {
 	Description string
 }
 
+// CallRecordQuery 是最近调用记录列表的查询条件。
+// Cursor 字段用于实时增量拉取；其他字段用于管理台从健康看板下钻定位异常记录。
+type CallRecordQuery struct {
+	Limit        int
+	AfterID      int64
+	AfterAt      time.Time
+	Since        time.Time
+	Until        time.Time
+	UpstreamID   string
+	OriginalName string
+	Success      *bool
+	Status       string
+	MinLatencyMS int
+}
+
 // DimensionCount 为按某一维度（上游 MCP 或 API Key）聚合的调用条数（Req 16.2、16.4）。
 type DimensionCount struct {
 	// ID 为该维度的标识（上游 MCP 标识或 API Key 标识）；空串表示该维度为空。

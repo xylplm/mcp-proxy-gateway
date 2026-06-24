@@ -1,11 +1,17 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import AdminLayout from '@/components/layout/AdminLayout.vue'
 import PageBreadcrumb from '@/components/common/PageBreadcrumb.vue'
 import AppTooltip from '@/components/common/AppTooltip.vue'
 import CallRecordDetailModal from '@/components/call-records/CallRecordDetailModal.vue'
-import { clearCallRecords, exportCallRecords, listCallRecords, type CallRecord } from '@/api/stats'
+import {
+  clearCallRecords,
+  exportCallRecords,
+  listCallRecords,
+  type CallRecord,
+  type CallRecordsQuery,
+} from '@/api/stats'
 import { ArchiveIcon, RefreshIcon, TrashIcon } from '@/icons'
 import { useConfirm } from '@/composables/useConfirm'
 import { useToast } from '@/composables/useToast'
@@ -20,7 +26,7 @@ const refreshing = ref(false)
 const exporting = ref(false)
 const errorMessage = ref('')
 const newCount = ref(0)
-const autoRefresh = ref(true)
+const autoRefresh = ref(!hasRouteFilters())
 const clearing = ref(false)
 const searchKeyword = ref(initialSearchKeyword())
 let pollTimer: number | undefined
@@ -39,6 +45,9 @@ const filteredRecords = computed(() => {
   if (keyword === '') return records.value
   return records.value.filter((item) => callRecordSearchText(item).includes(keyword))
 })
+const routeFilterQuery = computed<CallRecordsQuery>(() => routeCallRecordsQuery())
+const hasServerFilters = computed(() => isFilteredCallRecordsQuery(routeFilterQuery.value))
+const filterSummary = computed(() => buildRouteFilterSummary(routeFilterQuery.value))
 const recordCountLabel = computed(() => {
   if (!hasSearchKeyword.value) return `${records.value.length.toLocaleString('zh-CN')}`
   return `${filteredRecords.value.length.toLocaleString('zh-CN')} / ${records.value.length.toLocaleString('zh-CN')}`
@@ -204,7 +213,10 @@ async function loadInitial(): Promise<void> {
   errorMessage.value = ''
   newCount.value = 0
   try {
-    records.value = await listCallRecords({ limit: pageLimit })
+    records.value = await listCallRecords({
+      ...routeFilterQuery.value,
+      limit: hasServerFilters.value ? maxLocalRecords : pageLimit,
+    })
   } catch (err) {
     errorMessage.value = err instanceof Error ? err.message : '加载调用记录失败'
   } finally {
@@ -217,6 +229,10 @@ async function refreshNow(): Promise<void> {
   refreshing.value = true
   errorMessage.value = ''
   try {
+    if (hasServerFilters.value) {
+      records.value = await listCallRecords({ ...routeFilterQuery.value, limit: maxLocalRecords })
+      return
+    }
     const latest = await listCallRecords({
       limit: pageLimit,
       afterId: latestId.value,
@@ -267,7 +283,7 @@ async function downloadRecords(): Promise<void> {
   exporting.value = true
   errorMessage.value = ''
   try {
-    const blob = await exportCallRecords({ limit: maxLocalRecords })
+    const blob = await exportCallRecords({ ...routeFilterQuery.value, limit: maxLocalRecords })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
@@ -286,7 +302,7 @@ async function downloadRecords(): Promise<void> {
 
 function startPolling(): void {
   stopPolling()
-  if (!autoRefresh.value) return
+  if (!autoRefresh.value || hasServerFilters.value) return
   pollTimer = window.setInterval(() => void refreshNow(), 5000)
 }
 
@@ -298,6 +314,10 @@ function stopPolling(): void {
 }
 
 function toggleAutoRefresh(): void {
+  if (hasServerFilters.value) {
+    autoRefresh.value = false
+    return
+  }
   if (autoRefresh.value) {
     void refreshNow()
     startPolling()
@@ -305,6 +325,17 @@ function toggleAutoRefresh(): void {
   }
   stopPolling()
 }
+
+watch(
+  () => route.query,
+  async () => {
+    searchKeyword.value = initialSearchKeyword()
+    autoRefresh.value = !hasRouteFilters()
+    stopPolling()
+    await loadInitial()
+    startPolling()
+  },
+)
 
 function clearNewCount(): void {
   newCount.value = 0
@@ -327,6 +358,70 @@ function initialSearchKeyword(): string {
   if (Array.isArray(q)) return q[0] ?? ''
   return typeof q === 'string' ? q : ''
 }
+
+function firstQueryValue(value: unknown): string {
+  if (Array.isArray(value)) return typeof value[0] === 'string' ? value[0] : ''
+  return typeof value === 'string' ? value : ''
+}
+
+function routeCallRecordsQuery(): CallRecordsQuery {
+  const query: CallRecordsQuery = {}
+  const since = firstQueryValue(route.query.since)
+  const until = firstQueryValue(route.query.until)
+  const upstreamId = firstQueryValue(route.query.upstreamId)
+  const originalName = firstQueryValue(route.query.originalName)
+  const success = firstQueryValue(route.query.success)
+  const status = firstQueryValue(route.query.status)
+  const minLatencyMsRaw = firstQueryValue(route.query.minLatencyMs)
+  if (since !== '') query.since = since
+  if (until !== '') query.until = until
+  if (upstreamId !== '') query.upstreamId = upstreamId
+  if (originalName !== '') query.originalName = originalName
+  if (success === 'true') query.success = true
+  if (success === 'false') query.success = false
+  if (status === 'success' || status === 'upstream_error' || status === 'failed') {
+    query.status = status
+  }
+  const minLatencyMs = Number(minLatencyMsRaw)
+  if (Number.isFinite(minLatencyMs) && minLatencyMs > 0) {
+    query.minLatencyMs = Math.round(minLatencyMs)
+  }
+  return query
+}
+
+function isFilteredCallRecordsQuery(query: CallRecordsQuery): boolean {
+  return Boolean(
+    query.since ||
+      query.until ||
+      query.upstreamId ||
+      query.originalName ||
+      query.success !== undefined ||
+      query.status ||
+      query.minLatencyMs,
+  )
+}
+
+function hasRouteFilters(): boolean {
+  return isFilteredCallRecordsQuery(routeCallRecordsQuery())
+}
+
+function buildRouteFilterSummary(query: CallRecordsQuery): string {
+  const parts: string[] = []
+  if (query.status === 'upstream_error') parts.push('上游错误')
+  if (query.status === 'failed') parts.push('调用失败')
+  if (query.status === 'success') parts.push('成功调用')
+  if (query.success === false && query.status === undefined) parts.push('失败调用')
+  if (query.success === true && query.status === undefined) parts.push('成功调用')
+  if (query.upstreamId) parts.push(`上游 ${query.upstreamId}`)
+  if (query.originalName) parts.push(`工具 ${query.originalName}`)
+  if (query.minLatencyMs) parts.push(`耗时 ≥ ${formatLatency(query.minLatencyMs)}`)
+  if (query.since || query.until) {
+    const start = query.since ? formatDateTime(query.since) : '最早'
+    const end = query.until ? formatDateTime(query.until) : '现在'
+    parts.push(`${start} 至 ${end}`)
+  }
+  return parts.join(' · ')
+}
 </script>
 
 <template>
@@ -339,6 +434,18 @@ function initialSearchKeyword(): string {
         <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
           最新调用排在最上方，仅保留最近 24 小时记录。
         </p>
+        <div
+          v-if="hasServerFilters"
+          class="mt-2 flex max-w-3xl flex-wrap items-center gap-2 text-sm text-brand-600 dark:text-brand-400"
+        >
+          <span class="min-w-0">当前筛选：{{ filterSummary }}</span>
+          <RouterLink
+            :to="{ name: 'CallRecords' }"
+            class="shrink-0 rounded-md px-2 py-1 text-xs font-medium text-gray-500 transition hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+          >
+            查看全部
+          </RouterLink>
+        </div>
       </div>
       <div class="flex flex-wrap items-center gap-2">
         <button
@@ -373,6 +480,7 @@ function initialSearchKeyword(): string {
             v-model="autoRefresh"
             type="checkbox"
             class="h-4 w-4 rounded border-gray-300 text-brand-500 focus:ring-brand-500 dark:border-gray-700"
+            :disabled="hasServerFilters"
             @change="toggleAutoRefresh"
           />
           自动刷新

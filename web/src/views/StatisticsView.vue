@@ -193,6 +193,37 @@ function healthUpstreamLabel(item: Pick<CallHealthUpstreamRank, 'UpstreamID' | '
   return item.UpstreamName || upstreamLabel(item.UpstreamID)
 }
 
+function healthWindowQuery(): Record<string, string> {
+  const query: Record<string, string> = {}
+  if (health.value.Since !== '') query.since = health.value.Since
+  if (health.value.Until !== '') query.until = health.value.Until
+  return query
+}
+
+function failingCallsQuery(extra: Record<string, string> = {}): Record<string, string> {
+  return { ...healthWindowQuery(), success: 'false', ...extra }
+}
+
+function slowCallsQuery(item?: Pick<CallHealthToolRank, 'UpstreamID' | 'OriginalName' | 'P95LatencyMS'>): Record<string, string> {
+  const query = { ...healthWindowQuery() }
+  const threshold = item?.P95LatencyMS ?? health.value.P95LatencyMS
+  if (threshold > 0) query.minLatencyMs = String(Math.max(1, Math.round(threshold)))
+  if (item?.UpstreamID) query.upstreamId = item.UpstreamID
+  if (item?.OriginalName) query.originalName = item.OriginalName
+  return query
+}
+
+function toolDrilldownQuery(item: Pick<CallHealthToolRank, 'UpstreamID' | 'OriginalName'>): Record<string, string> {
+  return failingCallsQuery({
+    upstreamId: item.UpstreamID,
+    originalName: item.OriginalName,
+  })
+}
+
+function upstreamDrilldownQuery(item: Pick<CallHealthUpstreamRank, 'UpstreamID'>): Record<string, string> {
+  return failingCallsQuery({ upstreamId: item.UpstreamID })
+}
+
 // 工具描述用 "upstreamId:originalName" 做键，缺失时返回空串（指令会自动不显示 tooltip）。
 function toolDescription(t: Pick<ToolRank, 'UpstreamID' | 'OriginalName'>): string {
   return toolDescriptions.value[`${t.UpstreamID}:${t.OriginalName}`] ?? ''
@@ -487,16 +518,22 @@ onMounted(async () => {
         </div>
 
         <div class="grid grid-cols-1 gap-3 md:grid-cols-2 2xl:grid-cols-4">
-          <div class="rounded-lg bg-gray-50 px-3 py-2.5 dark:bg-gray-800/60">
+          <RouterLink
+            :to="{ name: 'CallRecords', query: failingCallsQuery() }"
+            class="block rounded-lg bg-gray-50 px-3 py-2.5 transition hover:bg-gray-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-400 dark:bg-gray-800/60 dark:hover:bg-gray-800"
+          >
             <div class="text-xs text-gray-500 dark:text-gray-400">成功率</div>
             <div class="mt-1 text-xl font-semibold" :class="healthToneClass(health.SuccessRate)">
               {{ formatPercent(health.SuccessRate) }}
             </div>
             <div class="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
-              {{ formatInt(health.TotalCalls) }} 次调用
+              {{ formatInt(health.FailureCalls) }} 次失败
             </div>
-          </div>
-          <div class="rounded-lg bg-gray-50 px-3 py-2.5 dark:bg-gray-800/60">
+          </RouterLink>
+          <RouterLink
+            :to="{ name: 'CallRecords', query: slowCallsQuery() }"
+            class="block rounded-lg bg-gray-50 px-3 py-2.5 transition hover:bg-gray-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-400 dark:bg-gray-800/60 dark:hover:bg-gray-800"
+          >
             <div class="text-xs text-gray-500 dark:text-gray-400">延迟</div>
             <div class="mt-1 text-xl font-semibold text-gray-800 dark:text-white/90">
               {{ formatMs(health.P95LatencyMS) }}
@@ -504,20 +541,24 @@ onMounted(async () => {
             <div class="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
               p50 {{ formatMs(health.P50LatencyMS) }}
             </div>
-          </div>
+          </RouterLink>
           <div class="rounded-lg border border-gray-200 p-3 dark:border-gray-800">
             <div class="mb-2 flex items-center justify-between gap-2">
               <span class="text-xs font-medium text-gray-500 dark:text-gray-400">主要异常</span>
               <span class="text-xs text-gray-400 dark:text-gray-500">{{ formatInt(health.FailureCalls) }} 次失败</span>
             </div>
-            <div v-if="healthErrorTools[0]" class="min-w-0">
+            <RouterLink
+              v-if="healthErrorTools[0]"
+              :to="{ name: 'CallRecords', query: toolDrilldownQuery(healthErrorTools[0]) }"
+              class="block min-w-0 rounded-md transition hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-400 dark:hover:bg-gray-800/50"
+            >
               <div class="truncate text-sm font-medium text-gray-800 dark:text-white/90">
                 {{ healthToolLabel(healthErrorTools[0]) }}
               </div>
               <div class="mt-1 truncate text-xs text-gray-500 dark:text-gray-400">
                 {{ healthToolSubLabel(healthErrorTools[0]) }} · {{ formatInt(healthErrorTools[0].FailureCalls) }} 次失败
               </div>
-            </div>
+            </RouterLink>
             <div v-else class="py-1 text-sm text-gray-400">暂无错误</div>
           </div>
 
@@ -529,10 +570,13 @@ onMounted(async () => {
                 :key="item.UpstreamID || item.UpstreamName"
                 class="flex items-start justify-between gap-3"
               >
-                <div class="min-w-0">
+                <RouterLink
+                  :to="{ name: 'CallRecords', query: upstreamDrilldownQuery(item) }"
+                  class="min-w-0 rounded-md transition hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-400 dark:hover:bg-gray-800/50"
+                >
                   <div class="truncate text-sm text-gray-800 dark:text-white/90">{{ healthUpstreamLabel(item) }}</div>
                   <div class="truncate text-xs text-gray-500 dark:text-gray-400">成功率 {{ formatPercent(item.SuccessRate) }}</div>
-                </div>
+                </RouterLink>
                 <span class="shrink-0 text-sm font-semibold text-error-600 dark:text-error-400">{{ formatInt(item.FailureCalls) }}</span>
               </div>
               <div v-if="healthUpstreams.length === 0" class="py-1 text-sm text-gray-400">暂无失败</div>

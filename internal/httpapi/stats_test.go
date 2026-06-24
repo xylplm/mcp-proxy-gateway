@@ -35,6 +35,7 @@ type fakeStats struct {
 	gotWindow   string
 	gotNow      time.Time
 	gotAPIKeyID string
+	gotRecordQ  store.CallRecordQuery
 	gotAfterID  int64
 	gotAfterAt  time.Time
 	gotRecordID int64
@@ -105,8 +106,9 @@ func (f *fakeStats) Health(_ context.Context, window string, now time.Time) (sto
 	return f.health, nil
 }
 
-func (f *fakeStats) ListRecords(_ context.Context, limit int, afterID int64, afterAt time.Time) ([]store.CallRecordView, error) {
-	f.gotLimit, f.gotAfterID, f.gotAfterAt = limit, afterID, afterAt
+func (f *fakeStats) ListRecords(_ context.Context, query store.CallRecordQuery) ([]store.CallRecordView, error) {
+	f.gotRecordQ = query
+	f.gotLimit, f.gotAfterID, f.gotAfterAt = query.Limit, query.AfterID, query.AfterAt
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -361,6 +363,29 @@ func TestStatsCallRecordsParsesRealtimeCursor(t *testing.T) {
 	}
 }
 
+func TestStatsCallRecordsParsesDrilldownFilters(t *testing.T) {
+	since := "2026-06-24T10:00:00Z"
+	until := "2026-06-24T11:00:00Z"
+	st := &fakeStats{callRecords: []store.CallRecordView{{ID: 13, UpstreamID: "up-1", OriginalName: "search"}}}
+	e := newTestEngine(Deps{Stats: st})
+
+	w := doJSON(e, http.MethodGet, "/api/admin/stats/calls?limit=40&since="+since+"&until="+until+"&upstreamId=up-1&originalName=search&status=upstream_error&minLatencyMs=1000", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("期望 HTTP 200，实际 %d，响应体 %s", w.Code, w.Body.String())
+	}
+	wantSince, _ := time.Parse(time.RFC3339, since)
+	wantUntil, _ := time.Parse(time.RFC3339, until)
+	if st.gotRecordQ.Limit != 40 ||
+		!st.gotRecordQ.Since.Equal(wantSince) ||
+		!st.gotRecordQ.Until.Equal(wantUntil) ||
+		st.gotRecordQ.UpstreamID != "up-1" ||
+		st.gotRecordQ.OriginalName != "search" ||
+		st.gotRecordQ.Status != store.CallStatusUpstreamError ||
+		st.gotRecordQ.MinLatencyMS != 1000 {
+		t.Fatalf("调用记录筛选参数未正确解析：%+v", st.gotRecordQ)
+	}
+}
+
 func TestStatsCallRecordsExportReturnsDownload(t *testing.T) {
 	calledAt := time.Date(2024, 5, 1, 10, 1, 0, 0, time.UTC)
 	st := &fakeStats{callRecords: []store.CallRecordView{{
@@ -460,6 +485,16 @@ func TestStatsInvalidLimitMapsTo400(t *testing.T) {
 	w = doJSON(e, http.MethodGet, "/api/admin/stats/calls/export?limit=abc", "")
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("调用记录导出非法 limit 期望 HTTP 400，实际 %d", w.Code)
+	}
+
+	w = doJSON(e, http.MethodGet, "/api/admin/stats/calls?status=bad", "")
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("调用记录非法 status 期望 HTTP 400，实际 %d", w.Code)
+	}
+
+	w = doJSON(e, http.MethodGet, "/api/admin/stats/calls?minLatencyMs=-1", "")
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("调用记录非法 minLatencyMs 期望 HTTP 400，实际 %d", w.Code)
 	}
 }
 

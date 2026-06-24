@@ -356,6 +356,13 @@ export interface CallRecordsQuery {
   limit?: number
   afterId?: number
   afterAt?: string
+  since?: string
+  until?: string
+  upstreamId?: string
+  originalName?: string
+  success?: boolean
+  status?: 'success' | 'upstream_error' | 'failed'
+  minLatencyMs?: number
 }
 
 function buildCallRecordsParams(query: CallRecordsQuery): Record<string, string> {
@@ -368,6 +375,27 @@ function buildCallRecordsParams(query: CallRecordsQuery): Record<string, string>
   }
   if (query.afterAt !== undefined && query.afterAt !== '') {
     params.afterAt = query.afterAt
+  }
+  if (query.since !== undefined && query.since !== '') {
+    params.since = query.since
+  }
+  if (query.until !== undefined && query.until !== '') {
+    params.until = query.until
+  }
+  if (query.upstreamId !== undefined && query.upstreamId !== '') {
+    params.upstreamId = query.upstreamId
+  }
+  if (query.originalName !== undefined && query.originalName !== '') {
+    params.originalName = query.originalName
+  }
+  if (query.success !== undefined) {
+    params.success = String(query.success)
+  }
+  if (query.status !== undefined) {
+    params.status = query.status
+  }
+  if (query.minLatencyMs !== undefined && query.minLatencyMs > 0) {
+    params.minLatencyMs = String(query.minLatencyMs)
   }
   return params
 }

@@ -44,7 +44,7 @@ type StatQuerier interface {
 	APIKeyUsageProfile(ctx context.Context, apiKeyID string, start, end time.Time, limit int) (store.APIKeyUsageProfile, error)
 	HealthRecords(ctx context.Context, since, until time.Time, limit int) ([]store.CallRecordView, error)
 	// ListRecords 按最新时间倒序分页返回调用记录。
-	ListRecords(ctx context.Context, limit int, afterID int64, afterAt time.Time) ([]store.CallRecordView, error)
+	ListRecords(ctx context.Context, query store.CallRecordQuery) ([]store.CallRecordView, error)
 	// GetRecord 按 ID 返回单条调用记录详情。
 	GetRecord(ctx context.Context, id int64) (store.CallRecordView, error)
 	// ClearRecordsBefore 清空指定时刻及以前的调用记录；cutoff 为零值表示清空全部最近记录。
@@ -181,8 +181,8 @@ func (s *QueryService) Health(ctx context.Context, window string, now time.Time)
 }
 
 // ListRecords 按最新时间倒序分页返回调用记录；afterID/afterAt 用于实时页面增量拉取。
-func (s *QueryService) ListRecords(ctx context.Context, limit int, afterID int64, afterAt time.Time) ([]store.CallRecordView, error) {
-	return s.repo.ListRecords(ctx, limit, afterID, afterAt)
+func (s *QueryService) ListRecords(ctx context.Context, query store.CallRecordQuery) ([]store.CallRecordView, error) {
+	return s.repo.ListRecords(ctx, query)
 }
 
 // GetRecord 按 ID 返回单条调用记录详情。

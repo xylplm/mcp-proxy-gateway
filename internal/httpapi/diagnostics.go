@@ -151,7 +151,7 @@ func (r *Router) buildDiagnostics(ctx context.Context) diagnosticsBundle {
 		}
 	}
 	if r.stats != nil {
-		records, err := r.stats.ListRecords(ctx, diagnosticsRecentLimit, 0, time.Time{})
+		records, err := r.stats.ListRecords(ctx, store.CallRecordQuery{Limit: diagnosticsRecentLimit})
 		if err != nil {
 			bundle.addError("recentCallRecords", err)
 		} else {

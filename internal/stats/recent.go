@@ -42,7 +42,7 @@ type RedisRecentRecordStore struct {
 
 var _ interface {
 	AppendRecords(context.Context, []store.CallStatRecord) error
-	ListRecords(context.Context, int, int64, time.Time) ([]store.CallRecordView, error)
+	ListRecords(context.Context, store.CallRecordQuery) ([]store.CallRecordView, error)
 	HealthRecords(context.Context, time.Time, time.Time, int) ([]store.CallRecordView, error)
 	GetRecord(context.Context, int64) (store.CallRecordView, error)
 	ClearRecordsBefore(context.Context, time.Time) (int64, error)
@@ -83,16 +83,20 @@ func (s *RedisRecentRecordStore) AppendRecords(ctx context.Context, records []st
 }
 
 // ListRecords 按调用时间倒序分页返回调用记录。afterAt/afterID 用于前端增量拉取最新记录。
-func (s *RedisRecentRecordStore) ListRecords(ctx context.Context, limit int, afterID int64, afterAt time.Time) ([]store.CallRecordView, error) {
+func (s *RedisRecentRecordStore) ListRecords(ctx context.Context, query store.CallRecordQuery) ([]store.CallRecordView, error) {
 	if s == nil || s.rdb == nil {
 		return []store.CallRecordView{}, nil
 	}
-	limit = normalizeRecordLimit(limit)
-	zs, err := s.recentCandidates(ctx, limit, afterID, afterAt)
+	query.Limit = normalizeRecordLimit(query.Limit)
+	zs, err := s.recentCandidates(ctx, query)
 	if err != nil {
 		return nil, err
 	}
-	return s.loadViews(ctx, zs)
+	records, err := s.loadViews(ctx, zs)
+	if err != nil {
+		return nil, err
+	}
+	return filterCallRecords(records, query), nil
 }
 
 // HealthRecords 返回指定时间窗口内的最近调用记录，供健康看板聚合使用。
@@ -225,18 +229,30 @@ func (s *RedisRecentRecordStore) deleteMembers(ctx context.Context, members []st
 	return err
 }
 
-func (s *RedisRecentRecordStore) recentCandidates(ctx context.Context, limit int, afterID int64, afterAt time.Time) ([]redis.Z, error) {
-	if afterID <= 0 && afterAt.IsZero() {
-		return s.rdb.ZRevRangeWithScores(ctx, recentRecordsZSetKey, 0, int64(limit)-1).Result()
+func (s *RedisRecentRecordStore) recentCandidates(ctx context.Context, query store.CallRecordQuery) ([]redis.Z, error) {
+	limit := query.Limit
+	if query.AfterID <= 0 && query.AfterAt.IsZero() {
+		candidateLimit := callRecordCandidateLimit(query)
+		if query.Since.IsZero() && query.Until.IsZero() {
+			if candidateLimit != query.Limit {
+				return s.rdb.ZRevRangeWithScores(ctx, recentRecordsZSetKey, 0, int64(candidateLimit)-1).Result()
+			}
+			return s.rdb.ZRevRangeWithScores(ctx, recentRecordsZSetKey, 0, int64(limit)-1).Result()
+		}
+		return s.rdb.ZRevRangeByScoreWithScores(ctx, recentRecordsZSetKey, &redis.ZRangeBy{
+			Min:   callRecordScoreMin(query.Since),
+			Max:   callRecordScoreMax(query.Until),
+			Count: int64(candidateLimit),
+		}).Result()
 	}
-	if afterAt.IsZero() {
+	if query.AfterAt.IsZero() {
 		zs, err := s.rdb.ZRevRangeWithScores(ctx, recentRecordsZSetKey, 0, s.maxRecords-1).Result()
 		if err != nil {
 			return nil, err
 		}
-		return filterRecentCandidates(zs, limit, afterID, 0), nil
+		return filterRecentCandidates(zs, limit, query.AfterID, 0), nil
 	}
-	afterScore := afterAt.UTC().UnixMilli()
+	afterScore := query.AfterAt.UTC().UnixMilli()
 	zs, err := s.rdb.ZRevRangeByScoreWithScores(ctx, recentRecordsZSetKey, &redis.ZRangeBy{
 		Min:   fmt.Sprintf("(%d", afterScore),
 		Max:   "+inf",
@@ -255,8 +271,29 @@ func (s *RedisRecentRecordStore) recentCandidates(ctx context.Context, limit int
 	if err != nil {
 		return nil, err
 	}
-	zs = append(zs, filterRecentCandidates(equal, limit-len(zs), afterID, afterScore)...)
+	zs = append(zs, filterRecentCandidates(equal, limit-len(zs), query.AfterID, afterScore)...)
 	return zs, nil
+}
+
+func callRecordCandidateLimit(query store.CallRecordQuery) int {
+	if query.UpstreamID == "" && query.OriginalName == "" && query.Success == nil && query.Status == "" && query.MinLatencyMS <= 0 {
+		return query.Limit
+	}
+	return defaultRecentHealthCap
+}
+
+func callRecordScoreMin(since time.Time) string {
+	if since.IsZero() {
+		return "-inf"
+	}
+	return strconv.FormatInt(since.UTC().UnixMilli(), 10)
+}
+
+func callRecordScoreMax(until time.Time) string {
+	if until.IsZero() {
+		return "+inf"
+	}
+	return strconv.FormatInt(until.UTC().UnixMilli(), 10)
 }
 
 func (s *RedisRecentRecordStore) loadViews(ctx context.Context, zs []redis.Z) ([]store.CallRecordView, error) {
@@ -336,6 +373,41 @@ func filterRecentCandidates(zs []redis.Z, limit int, afterID int64, afterScore i
 		}
 		out = append(out, z)
 		if len(out) >= limit {
+			break
+		}
+	}
+	return out
+}
+
+func filterCallRecords(records []store.CallRecordView, query store.CallRecordQuery) []store.CallRecordView {
+	if len(records) == 0 {
+		return []store.CallRecordView{}
+	}
+	out := make([]store.CallRecordView, 0, len(records))
+	for _, rec := range records {
+		if !query.Since.IsZero() && rec.CalledAt.UTC().Before(query.Since.UTC()) {
+			continue
+		}
+		if !query.Until.IsZero() && rec.CalledAt.UTC().After(query.Until.UTC()) {
+			continue
+		}
+		if query.UpstreamID != "" && rec.UpstreamID != query.UpstreamID {
+			continue
+		}
+		if query.OriginalName != "" && rec.OriginalName != query.OriginalName {
+			continue
+		}
+		if query.Success != nil && rec.Success != *query.Success {
+			continue
+		}
+		if query.Status != "" && storeCallStatus(rec.Status, rec.Success) != query.Status {
+			continue
+		}
+		if query.MinLatencyMS > 0 && rec.LatencyMS < query.MinLatencyMS {
+			continue
+		}
+		out = append(out, rec)
+		if query.Limit > 0 && len(out) >= query.Limit {
 			break
 		}
 	}

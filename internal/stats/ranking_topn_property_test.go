@@ -63,7 +63,7 @@ func (q *rankingFakeQuerier) APIKeyUsageProfile(context.Context, string, time.Ti
 	return store.APIKeyUsageProfile{}, nil
 }
 
-func (q *rankingFakeQuerier) ListRecords(context.Context, int, int64, time.Time) ([]store.CallRecordView, error) {
+func (q *rankingFakeQuerier) ListRecords(context.Context, store.CallRecordQuery) ([]store.CallRecordView, error) {
 	return nil, nil
 }
 

@@ -278,11 +278,11 @@ func (r *Router) statsCallRecords(c *gin.Context) {
 		respondServiceUnavailable(c, "统计查询服务未就绪")
 		return
 	}
-	limit, afterID, afterAt, ok := parseCallRecordQuery(c, 30)
+	query, ok := parseCallRecordQuery(c, 30)
 	if !ok {
 		return
 	}
-	records, err := r.stats.ListRecords(c.Request.Context(), limit, afterID, afterAt)
+	records, err := r.stats.ListRecords(c.Request.Context(), query)
 	if err != nil {
 		respondError(c, err)
 		return
@@ -300,11 +300,11 @@ func (r *Router) exportStatsCallRecords(c *gin.Context) {
 		respondServiceUnavailable(c, "统计查询服务未就绪")
 		return
 	}
-	limit, afterID, afterAt, ok := parseCallRecordQuery(c, 100)
+	query, ok := parseCallRecordQuery(c, 100)
 	if !ok {
 		return
 	}
-	records, err := r.stats.ListRecords(c.Request.Context(), limit, afterID, afterAt)
+	records, err := r.stats.ListRecords(c.Request.Context(), query)
 	if err != nil {
 		respondError(c, err)
 		return
@@ -354,17 +354,17 @@ func (r *Router) clearStatsCallRecords(c *gin.Context) {
 	respondOK(c, gin.H{"deleted": deleted})
 }
 
-func parseCallRecordQuery(c *gin.Context, defaultLimit int) (limit int, afterID int64, afterAt time.Time, ok bool) {
-	limit = defaultLimit
+func parseCallRecordQuery(c *gin.Context, defaultLimit int) (store.CallRecordQuery, bool) {
+	query := store.CallRecordQuery{Limit: defaultLimit}
 	if l := c.Query("limit"); l != "" {
 		n, perr := strconv.Atoi(l)
 		if perr != nil {
 			respondError(c, domain.NewValidationError("调用记录条数参数非法", map[string]string{
 				"limit": "需为整数",
 			}))
-			return 0, 0, time.Time{}, false
+			return store.CallRecordQuery{}, false
 		}
-		limit = n
+		query.Limit = n
 	}
 	if v := c.Query("afterId"); v != "" {
 		n, perr := strconv.ParseInt(v, 10, 64)
@@ -372,9 +372,9 @@ func parseCallRecordQuery(c *gin.Context, defaultLimit int) (limit int, afterID 
 			respondError(c, domain.NewValidationError("调用记录游标参数非法", map[string]string{
 				"afterId": "需为非负整数",
 			}))
-			return 0, 0, time.Time{}, false
+			return store.CallRecordQuery{}, false
 		}
-		afterID = n
+		query.AfterID = n
 	}
 	if v := c.Query("afterAt"); v != "" {
 		t, perr := time.Parse(timeLayout, v)
@@ -382,11 +382,75 @@ func parseCallRecordQuery(c *gin.Context, defaultLimit int) (limit int, afterID 
 			respondError(c, domain.NewValidationError("调用记录时间游标参数非法", map[string]string{
 				"afterAt": "时间格式需为 RFC3339",
 			}))
-			return 0, 0, time.Time{}, false
+			return store.CallRecordQuery{}, false
 		}
-		afterAt = t
+		query.AfterAt = t
 	}
-	return limit, afterID, afterAt, true
+	if v := c.Query("since"); v != "" {
+		t, perr := time.Parse(timeLayout, v)
+		if perr != nil {
+			respondError(c, domain.NewValidationError("调用记录开始时间非法", map[string]string{
+				"since": "时间格式需为 RFC3339",
+			}))
+			return store.CallRecordQuery{}, false
+		}
+		query.Since = t
+	}
+	if v := c.Query("until"); v != "" {
+		t, perr := time.Parse(timeLayout, v)
+		if perr != nil {
+			respondError(c, domain.NewValidationError("调用记录结束时间非法", map[string]string{
+				"until": "时间格式需为 RFC3339",
+			}))
+			return store.CallRecordQuery{}, false
+		}
+		query.Until = t
+	}
+	if !query.Since.IsZero() && !query.Until.IsZero() && query.Since.After(query.Until) {
+		respondError(c, domain.NewValidationError("调用记录时间范围无效", map[string]string{
+			"since": "开始时间不得晚于结束时间",
+		}))
+		return store.CallRecordQuery{}, false
+	}
+	query.UpstreamID = c.Query("upstreamId")
+	query.OriginalName = c.Query("originalName")
+	if status := c.Query("status"); status != "" {
+		switch status {
+		case store.CallStatusSuccess, store.CallStatusUpstreamError, store.CallStatusFailed:
+			query.Status = status
+		default:
+			respondError(c, domain.NewValidationError("调用记录状态参数非法", map[string]string{
+				"status": "需为 success、upstream_error 或 failed",
+			}))
+			return store.CallRecordQuery{}, false
+		}
+	}
+	if v := c.Query("success"); v != "" {
+		switch v {
+		case "true":
+			success := true
+			query.Success = &success
+		case "false":
+			success := false
+			query.Success = &success
+		default:
+			respondError(c, domain.NewValidationError("调用记录结果参数非法", map[string]string{
+				"success": "需为 true 或 false",
+			}))
+			return store.CallRecordQuery{}, false
+		}
+	}
+	if v := c.Query("minLatencyMs"); v != "" {
+		n, perr := strconv.Atoi(v)
+		if perr != nil || n < 0 {
+			respondError(c, domain.NewValidationError("调用记录耗时参数非法", map[string]string{
+				"minLatencyMs": "需为非负整数",
+			}))
+			return store.CallRecordQuery{}, false
+		}
+		query.MinLatencyMS = n
+	}
+	return query, true
 }
 
 // callRecordResponseView 是调用记录的管理台响应视图，在 store.CallRecordView 基础上

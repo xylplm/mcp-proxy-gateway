@@ -265,7 +265,7 @@ type StatsService interface {
 	// Health 返回最近窗口内的调用健康概览。
 	Health(ctx context.Context, window string, now time.Time) (store.CallHealth, error)
 	// ListRecords 按最新时间倒序分页返回调用记录。
-	ListRecords(ctx context.Context, limit int, afterID int64, afterAt time.Time) ([]store.CallRecordView, error)
+	ListRecords(ctx context.Context, query store.CallRecordQuery) ([]store.CallRecordView, error)
 	// GetRecord 按 ID 返回单条调用记录详情。
 	GetRecord(ctx context.Context, id int64) (store.CallRecordView, error)
 	// ClearRecords 清空调用记录，返回删除条数。
