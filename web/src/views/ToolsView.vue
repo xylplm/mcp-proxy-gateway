@@ -37,10 +37,12 @@ import {
   sameToolCatalogQuery,
   type ToolCatalogConflictFilter,
   type ToolCatalogRiskFilter,
+  type ToolCatalogSmartView,
 } from '@/utils/toolCatalogQuery'
 
 type ConflictFilter = ToolCatalogConflictFilter
 type RiskFilter = ToolCatalogRiskFilter
+type SmartView = ToolCatalogSmartView
 
 const route = useRoute()
 const router = useRouter()
@@ -50,6 +52,7 @@ const loadError = ref('')
 const apiKeys = ref<APIKey[]>([])
 const selectedAPIKeyID = ref('')
 const toolDetails = ref<ToolDetail[]>([])
+const smartView = ref<SmartView>('all')
 const searchKeyword = ref('')
 const selectedUpstream = ref('')
 const conflictFilter = ref<ConflictFilter>('all')
@@ -106,6 +109,7 @@ const perspectiveDescription = computed(() => {
 const visibleToolDetails = computed(() => {
   const keyword = normalizedSearchKeyword.value
   return toolDetails.value.filter((detail) => {
+    if (!matchesSmartView(detail, smartView.value)) return false
     if (selectedUpstream.value !== '' && !(detail.sources ?? []).some((source) => source.upstreamId === selectedUpstream.value)) {
       return false
     }
@@ -138,8 +142,21 @@ const riskToolCount = computed(() => toolDetails.value.filter((detail) => toolRi
 const degradedSourceCount = computed(() =>
   toolDetails.value.reduce((sum, detail) => sum + degradedSources(detail).length, 0),
 )
+const smartViewOptions = computed<Array<{ value: SmartView; label: string; count: number }>>(() => [
+  { value: 'all', label: '全部', count: toolDetails.value.length },
+  { value: 'attention', label: '需关注', count: attentionToolCount.value },
+  { value: 'multi', label: '多来源', count: multiSourceCount.value },
+  { value: 'risk', label: '风险提示', count: riskToolCount.value },
+  { value: 'degraded', label: '降级来源', count: degradedToolCount.value },
+])
+const attentionToolCount = computed(() =>
+  toolDetails.value.filter((detail) => matchesSmartView(detail, 'attention')).length,
+)
+const degradedToolCount = computed(() =>
+  toolDetails.value.filter((detail) => matchesSmartView(detail, 'degraded')).length,
+)
 const visibleCountLabel = computed(() => {
-  if (hasSearchKeyword.value || selectedUpstream.value !== '' || conflictFilter.value !== 'all' || riskFilter.value !== 'all') {
+  if (smartView.value !== 'all' || hasSearchKeyword.value || selectedUpstream.value !== '' || conflictFilter.value !== 'all' || riskFilter.value !== 'all') {
     return `${visibleToolDetails.value.length.toLocaleString('zh-CN')} / ${toolDetails.value.length.toLocaleString('zh-CN')}`
   }
   return toolDetails.value.length.toLocaleString('zh-CN')
@@ -234,6 +251,7 @@ function closeDetail(): void {
 }
 
 function resetFilters(): void {
+  smartView.value = 'all'
   searchKeyword.value = ''
   selectedUpstream.value = ''
   conflictFilter.value = 'all'
@@ -254,6 +272,7 @@ function applyRouteQuery(): boolean {
   const state = parseToolCatalogQuery(route.query)
   const apiKeyChanged = selectedAPIKeyID.value !== state.apiKeyId
   selectedAPIKeyID.value = state.apiKeyId
+  smartView.value = state.view
   searchKeyword.value = state.search
   selectedUpstream.value = state.upstreamId
   conflictFilter.value = state.status
@@ -285,6 +304,7 @@ async function syncRouteQuery(): Promise<void> {
   if (syncingRoute || applyingRoute) return
   const query = buildToolCatalogQuery({
     apiKeyId: selectedAPIKeyID.value,
+    view: smartView.value,
     search: searchKeyword.value,
     upstreamId: selectedUpstream.value,
     status: conflictFilter.value,
@@ -304,6 +324,20 @@ async function syncRouteQuery(): Promise<void> {
 function sourceCountText(detail: ToolDetail): string {
   const count = detail.tool.sourceCount ?? detail.sources?.length ?? 1
   return `${count} 个来源`
+}
+
+function setSmartView(view: SmartView): void {
+  smartView.value = view
+}
+
+function matchesSmartView(detail: ToolDetail, view: SmartView): boolean {
+  if (view === 'all') return true
+  if (view === 'multi') return (detail.tool.sourceCount ?? detail.sources?.length ?? 1) > 1
+  if (view === 'risk') return toolRiskTags(detail).length > 0
+  if (view === 'degraded') return degradedSources(detail).length > 0
+  return detail.tool.schemaConflict === true
+    || toolRiskTags(detail).length > 0
+    || degradedSources(detail).length > 0
 }
 
 function schemaPreview(value: unknown): string {
@@ -533,7 +567,7 @@ watch(
 )
 
 watch(
-  [searchKeyword, selectedUpstream, conflictFilter, riskFilter],
+  [smartView, searchKeyword, selectedUpstream, conflictFilter, riskFilter],
   () => {
     scheduleRouteSync()
   },
@@ -602,8 +636,8 @@ onUnmounted(() => {
       </section>
       <section :class="cardClass">
         <p class="text-sm text-gray-500 dark:text-gray-400">需关注</p>
-        <p class="mt-2 text-2xl font-semibold" :class="schemaConflictCount + riskToolCount + degradedSourceCount > 0 ? 'text-warning-700 dark:text-warning-400' : 'text-success-700 dark:text-success-400'">
-          {{ (schemaConflictCount + riskToolCount + degradedSourceCount).toLocaleString('zh-CN') }}
+        <p class="mt-2 text-2xl font-semibold" :class="attentionToolCount > 0 ? 'text-warning-700 dark:text-warning-400' : 'text-success-700 dark:text-success-400'">
+          {{ attentionToolCount.toLocaleString('zh-CN') }}
         </p>
         <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
           风险提示 {{ riskToolCount.toLocaleString('zh-CN') }} 个，降级来源 {{ degradedSourceCount.toLocaleString('zh-CN') }} 个
@@ -612,6 +646,32 @@ onUnmounted(() => {
     </div>
 
     <section :class="[cardClass, 'mb-5']">
+      <div class="mb-4">
+        <div class="mb-2 flex items-center justify-between gap-3">
+          <span class="text-xs font-medium text-gray-500 dark:text-gray-400">智能视图</span>
+          <span v-if="smartView !== 'all'" class="text-xs text-gray-400 dark:text-gray-500">
+            已按视图筛选
+          </span>
+        </div>
+        <div class="flex flex-wrap gap-2">
+          <button
+            v-for="item in smartViewOptions"
+            :key="item.value"
+            type="button"
+            class="inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition"
+            :class="smartView === item.value
+              ? 'border-brand-300 bg-brand-50 text-brand-700 dark:border-brand-500/30 dark:bg-brand-500/10 dark:text-brand-300'
+              : 'border-gray-200 text-gray-600 hover:bg-gray-50 dark:border-gray-800 dark:text-gray-300 dark:hover:bg-gray-800'"
+            @click="setSmartView(item.value)"
+          >
+            <span>{{ item.label }}</span>
+            <span class="rounded-full bg-white/80 px-1.5 py-0.5 text-[11px] text-gray-500 dark:bg-gray-900/60 dark:text-gray-400">
+              {{ item.count.toLocaleString('zh-CN') }}
+            </span>
+          </button>
+        </div>
+      </div>
+
       <div class="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-[240px_minmax(0,1fr)_220px_170px_160px_auto] xl:items-end">
         <label class="block">
           <span class="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400">调用视角</span>

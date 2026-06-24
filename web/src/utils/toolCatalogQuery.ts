@@ -1,8 +1,10 @@
 export type ToolCatalogConflictFilter = 'all' | 'conflict' | 'multi'
 export type ToolCatalogRiskFilter = 'all' | 'risk'
+export type ToolCatalogSmartView = 'all' | 'attention' | 'multi' | 'risk' | 'degraded'
 
 export interface ToolCatalogQueryState {
   apiKeyId: string
+  view: ToolCatalogSmartView
   search: string
   upstreamId: string
   status: ToolCatalogConflictFilter
@@ -14,10 +16,12 @@ export type ToolCatalogQuery = Record<string, string>
 
 const conflictFilters = new Set<ToolCatalogConflictFilter>(['all', 'conflict', 'multi'])
 const riskFilters = new Set<ToolCatalogRiskFilter>(['all', 'risk'])
+const smartViews = new Set<ToolCatalogSmartView>(['all', 'attention', 'multi', 'risk', 'degraded'])
 
 export function emptyToolCatalogQueryState(): ToolCatalogQueryState {
   return {
     apiKeyId: '',
+    view: 'all',
     search: '',
     upstreamId: '',
     status: 'all',
@@ -29,8 +33,10 @@ export function emptyToolCatalogQueryState(): ToolCatalogQueryState {
 export function parseToolCatalogQuery(query: Record<string, unknown>): ToolCatalogQueryState {
   const status = firstQueryValue(query.status)
   const risk = firstQueryValue(query.risk)
+  const view = firstQueryValue(query.view)
   return {
     apiKeyId: firstQueryValue(query.apiKeyId),
+    view: smartViews.has(view as ToolCatalogSmartView) ? (view as ToolCatalogSmartView) : 'all',
     search: firstQueryValue(query.q),
     upstreamId: firstQueryValue(query.upstreamId),
     status: conflictFilters.has(status as ToolCatalogConflictFilter)
@@ -48,6 +54,7 @@ export function buildToolCatalogQuery(state: ToolCatalogQueryState): ToolCatalog
   const upstreamId = state.upstreamId.trim()
   const tool = state.tool.trim()
   if (apiKeyId !== '') query.apiKeyId = apiKeyId
+  if (state.view !== 'all') query.view = state.view
   if (search !== '') query.q = search
   if (upstreamId !== '') query.upstreamId = upstreamId
   if (state.status !== 'all') query.status = state.status

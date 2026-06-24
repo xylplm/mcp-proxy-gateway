@@ -10,6 +10,7 @@ test('parses tool catalog query with valid filters', () => {
   assert.deepEqual(
     parseToolCatalogQuery({
       apiKeyId: ' key-1 ',
+      view: 'attention',
       q: ' search ',
       upstreamId: ' up-1 ',
       status: 'conflict',
@@ -18,6 +19,7 @@ test('parses tool catalog query with valid filters', () => {
     }),
     {
       apiKeyId: 'key-1',
+      view: 'attention',
       search: 'search',
       upstreamId: 'up-1',
       status: 'conflict',
@@ -32,10 +34,12 @@ test('falls back invalid tool catalog query filters to all', () => {
     parseToolCatalogQuery({
       status: 'broken',
       risk: ['unknown', 'risk'],
+      view: 'unknown',
       q: ['first', 'second'],
     }),
     {
       apiKeyId: '',
+      view: 'all',
       search: 'first',
       upstreamId: '',
       status: 'all',
@@ -49,6 +53,7 @@ test('builds compact query without default values', () => {
   assert.deepEqual(
     buildToolCatalogQuery({
       apiKeyId: ' key-1 ',
+      view: 'risk',
       search: ' media ',
       upstreamId: '',
       status: 'all',
@@ -57,6 +62,7 @@ test('builds compact query without default values', () => {
     }),
     {
       apiKeyId: 'key-1',
+      view: 'risk',
       q: 'media',
       risk: 'risk',
     },
