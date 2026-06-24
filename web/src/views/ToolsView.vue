@@ -989,7 +989,11 @@ onUnmounted(() => {
               </div>
             </div>
 
-            <ToolPlaygroundPanel :tool-name="selectedToolDetail.tool.name" :initial-api-key-id="selectedAPIKeyID" />
+            <ToolPlaygroundPanel
+              :tool-name="selectedToolDetail.tool.name"
+              :input-schema="selectedToolDetail.tool.inputSchema"
+              :initial-api-key-id="selectedAPIKeyID"
+            />
 
             <details class="mt-4 rounded-lg bg-gray-50 p-3 dark:bg-white/[0.03]">
               <summary class="cursor-pointer text-xs font-medium text-gray-700 dark:text-gray-300">

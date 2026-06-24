@@ -8,21 +8,35 @@ import {
 } from '@/api/tools'
 import { useToast } from '@/composables/useToast'
 import {
+  buildPlaygroundSchemaFields,
+  initialSchemaFormValues,
+  schemaArgsToFormValues,
+  schemaFormDefaultArgs,
+  schemaFormValuesToArgs,
+  type PlaygroundSchemaField,
+} from '@/utils/jsonSchemaPlayground'
+import {
   buildPlaygroundCallRecordQuery,
   parsePlaygroundArgs,
   prettifyPlaygroundValue,
+  type PlaygroundArgsParseResult,
 } from '@/utils/toolPlayground'
 
 const props = defineProps<{
   toolName: string
+  inputSchema?: unknown
   initialApiKeyId?: string
 }>()
 
 const toast = useToast()
 
+type InputMode = 'form' | 'json'
+
 const apiKeys = ref<APIKey[]>([])
 const selectedAPIKeyID = ref('')
 const argsText = ref('{\n}')
+const formValues = ref<Record<string, string>>({})
+const inputMode = ref<InputMode>('json')
 const running = ref(false)
 const loadingKeys = ref(false)
 const loadKeyError = ref('')
@@ -36,11 +50,23 @@ const selectedAPIKeyLabel = computed(() => {
   return key?.name || selectedAPIKeyID.value
 })
 const callRecordQuery = computed(() => buildPlaygroundCallRecordQuery(props.toolName))
+const schemaFields = computed<PlaygroundSchemaField[]>(() => buildPlaygroundSchemaFields(props.inputSchema))
+const hasSchemaForm = computed(() => schemaFields.value.length > 0)
+const usingFormMode = computed(() => inputMode.value === 'form' && hasSchemaForm.value)
 
 watch(
   () => props.initialApiKeyId,
   (id) => {
     selectedAPIKeyID.value = id ?? ''
+  },
+  { immediate: true },
+)
+
+watch(
+  () => [props.toolName, props.inputSchema] as const,
+  () => {
+    resetArgs()
+    inputMode.value = hasSchemaForm.value ? 'form' : 'json'
   },
   { immediate: true },
 )
@@ -63,7 +89,7 @@ async function loadAPIKeys(): Promise<void> {
 
 async function runPlayground(): Promise<void> {
   if (!runnable.value) return
-  const parsed = parsePlaygroundArgs(argsText.value)
+  const parsed = buildArgs()
   if (!parsed.ok) {
     argsError.value = parsed.error
     return
@@ -85,8 +111,42 @@ async function runPlayground(): Promise<void> {
 }
 
 function resetArgs(): void {
-  argsText.value = '{\n}'
+  const defaults = schemaFormDefaultArgs(schemaFields.value)
+  argsText.value = prettifyPlaygroundValue(defaults)
+  formValues.value = initialSchemaFormValues(schemaFields.value)
   argsError.value = ''
+}
+
+function switchInputMode(mode: InputMode): void {
+  if (mode === inputMode.value) return
+  if (mode === 'json') {
+    const parsed = schemaFormValuesToArgs(schemaFields.value, formValues.value)
+    if (parsed.ok) {
+      argsText.value = prettifyPlaygroundValue(parsed.value)
+      argsError.value = ''
+    }
+    inputMode.value = 'json'
+    return
+  }
+
+  const parsed = parsePlaygroundArgs(argsText.value)
+  if (parsed.ok) {
+    formValues.value = schemaArgsToFormValues(schemaFields.value, parsed.value)
+    argsError.value = ''
+  }
+  inputMode.value = 'form'
+}
+
+function buildArgs(): PlaygroundArgsParseResult {
+  if (usingFormMode.value) {
+    return schemaFormValuesToArgs(schemaFields.value, formValues.value)
+  }
+  return parsePlaygroundArgs(argsText.value)
+}
+
+function fieldInputType(field: PlaygroundSchemaField): string {
+  if (field.kind === 'number' || field.kind === 'integer') return 'number'
+  return 'text'
 }
 
 function resultStatusLabel(item: ToolPlaygroundResponse): string {
@@ -152,14 +212,95 @@ function formatLatency(value: number): string {
           {{ loadKeyError }}
         </p>
 
-        <label class="mt-4 block">
-          <span class="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400">入参 JSON</span>
+        <div class="mt-4">
+          <span class="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <span class="text-xs font-medium text-gray-500 dark:text-gray-400">入参</span>
+            <span
+              v-if="hasSchemaForm"
+              class="inline-flex rounded-lg bg-gray-100 p-0.5 dark:bg-white/5"
+            >
+              <button
+                type="button"
+                class="rounded-md px-2.5 py-1 text-xs font-medium transition"
+                :class="usingFormMode ? 'bg-white text-brand-700 shadow-sm dark:bg-gray-900 dark:text-brand-300' : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'"
+                @click="switchInputMode('form')"
+              >
+                表单
+              </button>
+              <button
+                type="button"
+                class="rounded-md px-2.5 py-1 text-xs font-medium transition"
+                :class="!usingFormMode ? 'bg-white text-brand-700 shadow-sm dark:bg-gray-900 dark:text-brand-300' : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'"
+                @click="switchInputMode('json')"
+              >
+                JSON
+              </button>
+            </span>
+          </span>
+
+          <div
+            v-if="usingFormMode"
+            class="space-y-3 rounded-xl border border-gray-200 bg-gray-50 p-3 dark:border-gray-800 dark:bg-white/[0.03]"
+          >
+            <label
+              v-for="field in schemaFields"
+              :key="field.name"
+              class="block"
+            >
+              <span class="mb-1 flex flex-wrap items-center gap-1.5 text-xs font-medium text-gray-600 dark:text-gray-300">
+                <span>{{ field.label }}</span>
+                <span v-if="field.required" class="text-error-500">*</span>
+                <span class="rounded-full bg-white px-1.5 py-0.5 text-[10px] text-gray-400 dark:bg-gray-900">
+                  {{ field.kind }}
+                </span>
+              </span>
+              <select
+                v-if="field.enumOptions.length > 0"
+                v-model="formValues[field.name]"
+                class="h-10 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-800 shadow-sm transition focus:border-brand-300 focus:ring-3 focus:ring-brand-500/10 focus:outline-none dark:border-gray-700 dark:bg-gray-900 dark:text-white/90"
+              >
+                <option value="">不传此参数</option>
+                <option v-for="option in field.enumOptions" :key="option.key" :value="option.key">
+                  {{ option.label }}
+                </option>
+              </select>
+              <select
+                v-else-if="field.kind === 'boolean'"
+                v-model="formValues[field.name]"
+                class="h-10 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-800 shadow-sm transition focus:border-brand-300 focus:ring-3 focus:ring-brand-500/10 focus:outline-none dark:border-gray-700 dark:bg-gray-900 dark:text-white/90"
+              >
+                <option value="">不传此参数</option>
+                <option value="true">true</option>
+                <option value="false">false</option>
+              </select>
+              <textarea
+                v-else-if="field.kind === 'json'"
+                v-model="formValues[field.name]"
+                spellcheck="false"
+                class="custom-scrollbar h-24 w-full resize-y rounded-lg border border-gray-300 bg-white p-3 font-mono text-xs leading-5 text-gray-800 outline-none transition focus:border-brand-300 focus:ring-3 focus:ring-brand-500/10 dark:border-gray-700 dark:bg-gray-900 dark:text-white/90"
+                placeholder="JSON 值"
+              />
+              <input
+                v-else
+                v-model="formValues[field.name]"
+                :type="fieldInputType(field)"
+                :step="field.kind === 'integer' ? '1' : 'any'"
+                class="h-10 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-800 shadow-sm transition focus:border-brand-300 focus:ring-3 focus:ring-brand-500/10 focus:outline-none dark:border-gray-700 dark:bg-gray-900 dark:text-white/90"
+              />
+              <span v-if="field.description !== ''" class="mt-1 block text-xs leading-5 text-gray-500 dark:text-gray-400">
+                {{ field.description }}
+              </span>
+            </label>
+          </div>
+
           <textarea
+            v-else
             v-model="argsText"
+            aria-label="入参 JSON"
             spellcheck="false"
             class="custom-scrollbar h-56 w-full resize-y rounded-xl border border-gray-300 bg-gray-950 p-3 font-mono text-xs leading-5 text-gray-100 outline-none transition focus:border-brand-300 focus:ring-3 focus:ring-brand-500/10 dark:border-gray-700"
           />
-        </label>
+        </div>
         <p v-if="argsError !== ''" class="mt-2 text-xs text-error-600 dark:text-error-400">
           {{ argsError }}
         </p>
