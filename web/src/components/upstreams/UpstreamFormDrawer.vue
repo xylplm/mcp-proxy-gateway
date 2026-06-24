@@ -22,6 +22,10 @@ import {
   RefreshIcon,
   SuccessIcon,
 } from '@/icons'
+import {
+  testStageLabel,
+  upstreamTestDiagnostic,
+} from '@/utils/upstreamTestDiagnostics'
 
 const props = defineProps<{
   open: boolean
@@ -169,6 +173,7 @@ const testResult = ref<UpstreamTestResult | null>(null)
 const testRequestToken = ref(0)
 const fieldErrors = reactive<Record<string, string>>({})
 const formError = ref('')
+const testDiagnostic = computed(() => upstreamTestDiagnostic(testResult.value, form.transport))
 
 const normalizedTagOptions = computed(() => normalizeTags(props.tagOptions ?? []))
 const formTags = computed(() => normalizeTags([...form.tags, ...parseTags(form.tagDraft)]))
@@ -807,19 +812,6 @@ function applyServerError(err: unknown, fallback = '保存失败，请稍后重�
     return
   }
   formError.value = err instanceof Error ? err.message : fallback
-}
-
-function testStageLabel(stage: string): string {
-  switch (stage) {
-    case 'connect':
-      return '连接阶段'
-    case 'list_tools':
-      return '工具列表'
-    case 'ok':
-      return '测试完成'
-    default:
-      return stage
-  }
 }
 
 async function handleTestConnection(): Promise<void> {
@@ -1477,6 +1469,28 @@ const errorClass = 'mt-1.5 text-xs text-error-500'
                       {{ testResult.message || '上游未返回具体错误。' }}
                     </template>
                   </p>
+
+                  <div
+                    v-if="testDiagnostic !== null"
+                    class="mt-3 rounded-lg border border-error-200/80 bg-white/70 p-3 dark:border-error-500/20 dark:bg-white/[0.03]"
+                  >
+                    <p class="text-sm font-medium text-error-700 dark:text-error-300">
+                      {{ testDiagnostic.title }}
+                    </p>
+                    <p class="mt-1 text-xs leading-5 text-error-700/80 dark:text-error-300/80">
+                      {{ testDiagnostic.description }}
+                    </p>
+                    <ul class="mt-2 space-y-1 text-xs leading-5 text-gray-600 dark:text-gray-300">
+                      <li
+                        v-for="action in testDiagnostic.actions"
+                        :key="action"
+                        class="flex gap-2"
+                      >
+                        <span class="mt-2 h-1 w-1 shrink-0 rounded-full bg-error-400" aria-hidden="true"></span>
+                        <span>{{ action }}</span>
+                      </li>
+                    </ul>
+                  </div>
 
                   <div
                     v-if="testResult.ok && testResult.tools.length > 0"
