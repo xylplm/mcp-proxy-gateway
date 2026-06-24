@@ -30,6 +30,7 @@ type fakeQuerier struct {
 	summary        store.StatsSummary
 	daily          []store.DailyCount
 	topErrors      []store.ToolErrorRank
+	apiKeyProfile  store.APIKeyUsageProfile
 
 	upstreamErr error
 	apiKeyErr   error
@@ -37,12 +38,14 @@ type fakeQuerier struct {
 	summaryErr  error
 	dailyErr    error
 	errorErr    error
+	profileErr  error
 
 	// 记录最近一次各方法收到的入参，用于断言透传与 limit 收敛。
 	lastStart    time.Time
 	lastEnd      time.Time
 	lastTZ       string
 	lastTopLimit int
+	lastAPIKeyID string
 	clearCutoff  time.Time
 }
 
@@ -92,6 +95,14 @@ func (q *fakeQuerier) TopToolErrors(_ context.Context, start, end time.Time, lim
 		return nil, q.errorErr
 	}
 	return q.topErrors, nil
+}
+
+func (q *fakeQuerier) APIKeyUsageProfile(_ context.Context, apiKeyID string, start, end time.Time, limit int) (store.APIKeyUsageProfile, error) {
+	q.lastAPIKeyID, q.lastStart, q.lastEnd, q.lastTopLimit = apiKeyID, start, end, limit
+	if q.profileErr != nil {
+		return store.APIKeyUsageProfile{}, q.profileErr
+	}
+	return q.apiKeyProfile, nil
 }
 
 func (q *fakeQuerier) ListRecords(_ context.Context, _ int, _ int64, _ time.Time) ([]store.CallRecordView, error) {
@@ -323,6 +334,33 @@ func TestSummaryDailyAndToolErrorsPassThrough(t *testing.T) {
 	}
 	if repo.lastTopLimit != 10 {
 		t.Fatalf("TopToolErrors 应复用排行默认条数，实际 %d", repo.lastTopLimit)
+	}
+}
+
+func TestAPIKeyUsageProfilePassesThroughAndResolvesLimit(t *testing.T) {
+	start := time.Date(2024, 5, 1, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2024, 5, 7, 23, 59, 0, 0, time.UTC)
+	repo := &fakeQuerier{
+		apiKeyProfile: store.APIKeyUsageProfile{
+			APIKeyID:    "key-1",
+			TotalCalls:  9,
+			UniqueTools: 2,
+		},
+	}
+	svc := newTestQueryService(t, repo, 12)
+
+	profile, err := svc.APIKeyUsageProfile(context.Background(), "key-1", start, end, 0)
+	if err != nil {
+		t.Fatalf("APIKeyUsageProfile 不应返回错误：%v", err)
+	}
+	if profile.TotalCalls != 9 || profile.APIKeyID != "key-1" {
+		t.Fatalf("画像结果未透传：%+v", profile)
+	}
+	if repo.lastAPIKeyID != "key-1" || !repo.lastStart.Equal(start) || !repo.lastEnd.Equal(end) {
+		t.Fatalf("画像查询参数未透传：apiKeyID=%s start=%v end=%v", repo.lastAPIKeyID, repo.lastStart, repo.lastEnd)
+	}
+	if repo.lastTopLimit != 12 {
+		t.Fatalf("画像工具排行应复用配置默认条数，实际 %d", repo.lastTopLimit)
 	}
 }
 

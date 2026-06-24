@@ -22,6 +22,7 @@ type fakeStats struct {
 	summary        store.StatsSummary
 	daily          []store.DailyCount
 	topErrors      []store.ToolErrorRank
+	apiKeyProfile  store.APIKeyUsageProfile
 	callRecords    []store.CallRecordView
 	callRecord     store.CallRecordView
 	err            error
@@ -30,6 +31,7 @@ type fakeStats struct {
 	gotEnd      time.Time
 	gotTZ       string
 	gotLimit    int
+	gotAPIKeyID string
 	gotAfterID  int64
 	gotAfterAt  time.Time
 	gotRecordID int64
@@ -82,6 +84,14 @@ func (f *fakeStats) TopToolErrors(_ context.Context, start, end time.Time, limit
 		return nil, f.err
 	}
 	return f.topErrors, nil
+}
+
+func (f *fakeStats) APIKeyUsageProfile(_ context.Context, apiKeyID string, start, end time.Time, limit int) (store.APIKeyUsageProfile, error) {
+	f.gotAPIKeyID, f.gotStart, f.gotEnd, f.gotLimit = apiKeyID, start, end, limit
+	if f.err != nil {
+		return store.APIKeyUsageProfile{}, f.err
+	}
+	return f.apiKeyProfile, nil
 }
 
 func (f *fakeStats) ListRecords(_ context.Context, limit int, afterID int64, afterAt time.Time) ([]store.CallRecordView, error) {
@@ -144,6 +154,45 @@ func TestStatsByAPIKey(t *testing.T) {
 	unmarshalData(t, w, &got)
 	if len(got.Counts) != 1 || got.Counts[0].Count != 9 {
 		t.Errorf("统计结果不符：%+v", got.Counts)
+	}
+}
+
+func TestStatsAPIKeyUsageProfileDefaultsToRecentSevenDays(t *testing.T) {
+	lastCalled := time.Date(2024, 5, 7, 12, 0, 0, 0, time.UTC)
+	st := &fakeStats{apiKeyProfile: store.APIKeyUsageProfile{
+		APIKeyID:     "key-1",
+		TotalCalls:   18,
+		SuccessCalls: 17,
+		FailureCalls: 1,
+		LastCalledAt: lastCalled,
+		TopTools: []store.APIKeyToolUsage{{
+			UpstreamID:   "up-1",
+			OriginalName: "search",
+			Count:        10,
+		}},
+	}}
+	e := newTestEngine(Deps{Stats: st})
+
+	w := doJSON(e, http.MethodGet, "/api/admin/stats/apikeys/key-1/profile?end=2024-05-07T12:00:00Z&limit=3", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("期望 HTTP 200，实际 %d，响应体 %s", w.Code, w.Body.String())
+	}
+	if st.gotAPIKeyID != "key-1" {
+		t.Fatalf("API Key 标识未透传，got=%q", st.gotAPIKeyID)
+	}
+	wantStart := time.Date(2024, 5, 1, 12, 0, 0, 0, time.UTC)
+	if !st.gotStart.Equal(wantStart) || !st.gotEnd.Equal(lastCalled) {
+		t.Fatalf("画像默认时间范围不正确，start=%v end=%v", st.gotStart, st.gotEnd)
+	}
+	if st.gotLimit != 3 {
+		t.Fatalf("limit 未透传，got=%d", st.gotLimit)
+	}
+	var got struct {
+		Profile store.APIKeyUsageProfile `json:"profile"`
+	}
+	unmarshalData(t, w, &got)
+	if got.Profile.TotalCalls != 18 || len(got.Profile.TopTools) != 1 {
+		t.Fatalf("画像结果未正确返回：%+v", got.Profile)
 	}
 }
 

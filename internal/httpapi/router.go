@@ -247,6 +247,8 @@ type StatsService interface {
 	Daily(ctx context.Context, start, end time.Time, tz string) ([]store.DailyCount, error)
 	// TopToolErrors 返回闭区间内按失败次数降序的工具错误排行。
 	TopToolErrors(ctx context.Context, start, end time.Time, limit int) ([]store.ToolErrorRank, error)
+	// APIKeyUsageProfile 返回单个 API Key 在闭区间内的使用画像。
+	APIKeyUsageProfile(ctx context.Context, apiKeyID string, start, end time.Time, limit int) (store.APIKeyUsageProfile, error)
 	// ListRecords 按最新时间倒序分页返回调用记录。
 	ListRecords(ctx context.Context, limit int, afterID int64, afterAt time.Time) ([]store.CallRecordView, error)
 	// GetRecord 按 ID 返回单条调用记录详情。

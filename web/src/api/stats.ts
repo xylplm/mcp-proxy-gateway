@@ -73,6 +73,25 @@ export interface ToolErrorRank {
   AvgLatencyMS: number
 }
 
+export interface APIKeyToolUsage {
+  UpstreamID: string
+  OriginalName: string
+  Count: number
+}
+
+export interface APIKeyUsageProfile {
+  APIKeyID: string
+  TotalCalls: number
+  SuccessCalls: number
+  FailureCalls: number
+  UniqueTools: number
+  AvgLatencyMS: number
+  P95LatencyMS: number
+  LastCalledAt?: string
+  LastFailedAt?: string
+  TopTools: APIKeyToolUsage[] | null
+}
+
 export type CallRecordStatus = 'success' | 'upstream_error' | 'failed' | string
 
 export interface CallFailureDetail {
@@ -139,6 +158,10 @@ interface DailyResponse {
 
 interface ToolErrorsResponse {
   tools: ToolErrorRank[] | null
+}
+
+interface APIKeyUsageProfileResponse {
+  profile: APIKeyUsageProfile
 }
 
 interface CallRecordsResponse {
@@ -242,6 +265,33 @@ export async function topToolErrors(
   return res.data?.tools ?? []
 }
 
+export async function getAPIKeyUsageProfile(
+  apiKeyId: string,
+  range: TimeRangeQuery = {},
+  limit?: number,
+): Promise<APIKeyUsageProfile> {
+  const params = buildRangeParams(range)
+  if (limit !== undefined && limit > 0) {
+    params.limit = String(limit)
+  }
+  const res = await request.get<APIKeyUsageProfileResponse>(
+    `/stats/apikeys/${encodeURIComponent(apiKeyId)}/profile`,
+    { params },
+  )
+  return (
+    res.data?.profile ?? {
+      APIKeyID: apiKeyId,
+      TotalCalls: 0,
+      SuccessCalls: 0,
+      FailureCalls: 0,
+      UniqueTools: 0,
+      AvgLatencyMS: 0,
+      P95LatencyMS: 0,
+      TopTools: [],
+    }
+  )
+}
+
 export interface CallRecordsQuery {
   limit?: number
   afterId?: number
@@ -275,7 +325,9 @@ export async function exportCallRecords(query: CallRecordsQuery = {}): Promise<B
 }
 
 export async function getCallRecord(id: number | string): Promise<CallRecord> {
-  const res = await request.get<CallRecordResponse>(`/stats/calls/${encodeURIComponent(String(id))}`)
+  const res = await request.get<CallRecordResponse>(
+    `/stats/calls/${encodeURIComponent(String(id))}`,
+  )
   return res.data.record
 }
 

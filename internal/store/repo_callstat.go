@@ -138,6 +138,25 @@ type ToolErrorRank struct {
 	AvgLatencyMS float64
 }
 
+type APIKeyToolUsage struct {
+	UpstreamID   string
+	OriginalName string
+	Count        int64
+}
+
+type APIKeyUsageProfile struct {
+	APIKeyID     string
+	TotalCalls   int64
+	SuccessCalls int64
+	FailureCalls int64
+	UniqueTools  int64
+	AvgLatencyMS float64
+	P95LatencyMS float64
+	LastCalledAt time.Time
+	LastFailedAt time.Time
+	TopTools     []APIKeyToolUsage
+}
+
 // CallStatRepo 提供调用统计每日聚合事实表的批量写入与多维度查询。
 type CallStatRepo struct {
 	db *gorm.DB
@@ -398,6 +417,73 @@ func (r *CallStatRepo) TopToolErrors(ctx context.Context, start, end time.Time, 
 	return rows, nil
 }
 
+func (r *CallStatRepo) APIKeyUsageProfile(ctx context.Context, apiKeyID string, start, end time.Time, limit int) (APIKeyUsageProfile, error) {
+	startDate, endDate, err := normalizeStatDateRange(start, end)
+	if err != nil {
+		return APIKeyUsageProfile{}, err
+	}
+	if limit <= 0 {
+		limit = 1
+	}
+	const summaryQ = `
+		SELECT
+			coalesce(sum(total_calls), 0)::bigint AS total_calls,
+			coalesce(sum(success_calls), 0)::bigint AS success_calls,
+			coalesce(sum(failure_calls), 0)::bigint AS failure_calls,
+			count(DISTINCT (upstream_id, original_name)) AS unique_tools,
+			coalesce(sum(latency_sum_ms), 0)::bigint AS latency_sum_ms,
+			coalesce(max(latency_max_ms), 0)::integer AS latency_max_ms,
+			coalesce(sum(latency_lt_50), 0)::bigint AS latency_lt_50,
+			coalesce(sum(latency_lt_100), 0)::bigint AS latency_lt_100,
+			coalesce(sum(latency_lt_200), 0)::bigint AS latency_lt_200,
+			coalesce(sum(latency_lt_500), 0)::bigint AS latency_lt_500,
+			coalesce(sum(latency_lt_1000), 0)::bigint AS latency_lt_1000,
+			coalesce(sum(latency_lt_3000), 0)::bigint AS latency_lt_3000,
+			coalesce(sum(latency_gte_3000), 0)::bigint AS latency_gte_3000,
+			max(last_called_at) AS last_called_at,
+			max(last_failed_at) AS last_failed_at
+		FROM call_stat_daily
+		WHERE api_key_id = ? AND stat_date >= ? AND stat_date <= ?`
+	var row apiKeyProfileAggregateRow
+	if err := r.db.WithContext(ctx).Raw(summaryQ, apiKeyID, startDate, endDate).Scan(&row).Error; err != nil {
+		return APIKeyUsageProfile{}, err
+	}
+	out := APIKeyUsageProfile{
+		APIKeyID:     apiKeyID,
+		TotalCalls:   row.TotalCalls,
+		SuccessCalls: row.SuccessCalls,
+		FailureCalls: row.FailureCalls,
+		UniqueTools:  row.UniqueTools,
+		P95LatencyMS: estimateP95LatencyMS(row.latencyBuckets(), row.LatencyMaxMS),
+	}
+	if row.LastCalledAt != nil {
+		out.LastCalledAt = row.LastCalledAt.UTC()
+	}
+	if row.LastFailedAt != nil {
+		out.LastFailedAt = row.LastFailedAt.UTC()
+	}
+	if row.TotalCalls > 0 {
+		out.AvgLatencyMS = float64(row.LatencySumMS) / float64(row.TotalCalls)
+	}
+
+	const toolsQ = `
+		SELECT upstream_id, original_name, coalesce(sum(total_calls), 0)::bigint AS count
+		FROM call_stat_daily
+		WHERE api_key_id = ? AND stat_date >= ? AND stat_date <= ?
+		GROUP BY upstream_id, original_name
+		ORDER BY count DESC, original_name ASC
+		LIMIT ?`
+	var tools []APIKeyToolUsage
+	if err := r.db.WithContext(ctx).Raw(toolsQ, apiKeyID, startDate, endDate, limit).Scan(&tools).Error; err != nil {
+		return APIKeyUsageProfile{}, err
+	}
+	if tools == nil {
+		tools = []APIKeyToolUsage{}
+	}
+	out.TopTools = tools
+	return out, nil
+}
+
 // DeleteOlderThan 删除早于 cutoff 所在 UTC 日期的每日聚合统计，返回删除行数。
 func (r *CallStatRepo) DeleteOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {
 	res := r.db.WithContext(ctx).Where("stat_date < ?", utcDayStart(cutoff)).Delete(&callStatDailyModel{})
@@ -539,14 +625,40 @@ type summaryAggregateRow struct {
 }
 
 func (r summaryAggregateRow) latencyBuckets() []latencyBucketCount {
+	return buildLatencyBuckets(r.LatencyLT50, r.LatencyLT100, r.LatencyLT200, r.LatencyLT500, r.LatencyLT1000, r.LatencyLT3000, r.LatencyGTE3000, r.LatencyMaxMS)
+}
+
+type apiKeyProfileAggregateRow struct {
+	TotalCalls     int64
+	SuccessCalls   int64
+	FailureCalls   int64
+	UniqueTools    int64
+	LatencySumMS   int64
+	LatencyMaxMS   int
+	LatencyLT50    int64
+	LatencyLT100   int64
+	LatencyLT200   int64
+	LatencyLT500   int64
+	LatencyLT1000  int64
+	LatencyLT3000  int64
+	LatencyGTE3000 int64
+	LastCalledAt   *time.Time
+	LastFailedAt   *time.Time
+}
+
+func (r apiKeyProfileAggregateRow) latencyBuckets() []latencyBucketCount {
+	return buildLatencyBuckets(r.LatencyLT50, r.LatencyLT100, r.LatencyLT200, r.LatencyLT500, r.LatencyLT1000, r.LatencyLT3000, r.LatencyGTE3000, r.LatencyMaxMS)
+}
+
+func buildLatencyBuckets(lt50, lt100, lt200, lt500, lt1000, lt3000, gte3000 int64, maxLatencyMS int) []latencyBucketCount {
 	return []latencyBucketCount{
-		{UpperBoundMS: 50, Count: r.LatencyLT50},
-		{UpperBoundMS: 100, Count: r.LatencyLT100},
-		{UpperBoundMS: 200, Count: r.LatencyLT200},
-		{UpperBoundMS: 500, Count: r.LatencyLT500},
-		{UpperBoundMS: 1000, Count: r.LatencyLT1000},
-		{UpperBoundMS: 3000, Count: r.LatencyLT3000},
-		{UpperBoundMS: float64(maxInt(r.LatencyMaxMS, 3000)), Count: r.LatencyGTE3000},
+		{UpperBoundMS: 50, Count: lt50},
+		{UpperBoundMS: 100, Count: lt100},
+		{UpperBoundMS: 200, Count: lt200},
+		{UpperBoundMS: 500, Count: lt500},
+		{UpperBoundMS: 1000, Count: lt1000},
+		{UpperBoundMS: 3000, Count: lt3000},
+		{UpperBoundMS: float64(maxInt(maxLatencyMS, 3000)), Count: gte3000},
 	}
 }
 

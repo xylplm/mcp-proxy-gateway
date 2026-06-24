@@ -69,6 +69,7 @@ type aggregateQuerier interface {
 	Summary(ctx context.Context, start, end time.Time) (store.StatsSummary, error)
 	Daily(ctx context.Context, start, end time.Time, tz string) ([]store.DailyCount, error)
 	TopToolErrors(ctx context.Context, start, end time.Time, limit int) ([]store.ToolErrorRank, error)
+	APIKeyUsageProfile(ctx context.Context, apiKeyID string, start, end time.Time, limit int) (store.APIKeyUsageProfile, error)
 }
 
 type recordQuerier interface {
@@ -104,6 +105,10 @@ func (q *CombinedQuerier) Daily(ctx context.Context, start, end time.Time, tz st
 
 func (q *CombinedQuerier) TopToolErrors(ctx context.Context, start, end time.Time, limit int) ([]store.ToolErrorRank, error) {
 	return q.aggregate.TopToolErrors(ctx, start, end, limit)
+}
+
+func (q *CombinedQuerier) APIKeyUsageProfile(ctx context.Context, apiKeyID string, start, end time.Time, limit int) (store.APIKeyUsageProfile, error) {
+	return q.aggregate.APIKeyUsageProfile(ctx, apiKeyID, start, end, limit)
 }
 
 func (q *CombinedQuerier) ListRecords(ctx context.Context, limit int, afterID int64, afterAt time.Time) ([]store.CallRecordView, error) {

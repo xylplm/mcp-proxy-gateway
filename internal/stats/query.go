@@ -38,6 +38,7 @@ type StatQuerier interface {
 	Daily(ctx context.Context, start, end time.Time, tz string) ([]store.DailyCount, error)
 	// TopToolErrors 返回 [start, end] 闭区间内按失败次数降序排列的工具错误排行。
 	TopToolErrors(ctx context.Context, start, end time.Time, limit int) ([]store.ToolErrorRank, error)
+	APIKeyUsageProfile(ctx context.Context, apiKeyID string, start, end time.Time, limit int) (store.APIKeyUsageProfile, error)
 	// ListRecords 按最新时间倒序分页返回调用记录。
 	ListRecords(ctx context.Context, limit int, afterID int64, afterAt time.Time) ([]store.CallRecordView, error)
 	// GetRecord 按 ID 返回单条调用记录详情。
@@ -147,6 +148,10 @@ func (s *QueryService) Daily(ctx context.Context, start, end time.Time, tz strin
 // TopToolErrors 返回 [start, end] 闭区间内按失败次数降序排列的工具错误排行。
 func (s *QueryService) TopToolErrors(ctx context.Context, start, end time.Time, limit int) ([]store.ToolErrorRank, error) {
 	return s.repo.TopToolErrors(ctx, start, end, s.resolveTopLimit(limit))
+}
+
+func (s *QueryService) APIKeyUsageProfile(ctx context.Context, apiKeyID string, start, end time.Time, limit int) (store.APIKeyUsageProfile, error) {
+	return s.repo.APIKeyUsageProfile(ctx, apiKeyID, start, end, s.resolveTopLimit(limit))
 }
 
 // ListRecords 按最新时间倒序分页返回调用记录；afterID/afterAt 用于实时页面增量拉取。

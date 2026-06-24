@@ -29,6 +29,7 @@ import (
 
 // timeLayout 为统计/审计时间参数与响应时间字段统一采用的时间格式（RFC3339）。
 const timeLayout = time.RFC3339
+const apiKeyProfileDefaultDays = 7
 
 // parseTimeRange 解析查询参数 start/end 为闭区间端点（Req 16.5）。
 //
@@ -66,6 +67,7 @@ func (r *Router) registerStatsRoutes(g *gin.RouterGroup) {
 	st := g.Group("/stats")
 	st.GET("/upstreams", r.statsByUpstream)
 	st.GET("/apikeys", r.statsByAPIKey)
+	st.GET("/apikeys/:id/profile", r.statsAPIKeyUsageProfile)
 	st.GET("/tools", r.statsTopTools)
 	st.GET("/summary", r.statsSummary)
 	st.GET("/daily", r.statsDaily)
@@ -112,6 +114,45 @@ func (r *Router) statsByAPIKey(c *gin.Context) {
 		return
 	}
 	respondOK(c, gin.H{"counts": counts})
+}
+
+func (r *Router) statsAPIKeyUsageProfile(c *gin.Context) {
+	if r.stats == nil {
+		respondServiceUnavailable(c, "统计查询服务未就绪")
+		return
+	}
+	apiKeyID := c.Param("id")
+	if apiKeyID == "" {
+		respondError(c, domain.NewValidationError("API Key 标识非法", map[string]string{
+			"id": "不能为空",
+		}))
+		return
+	}
+	start, end, err := parseTimeRange(c)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	if start.IsZero() {
+		start = end.AddDate(0, 0, -apiKeyProfileDefaultDays+1)
+	}
+	limit := 0
+	if l := c.Query("limit"); l != "" {
+		n, perr := strconv.Atoi(l)
+		if perr != nil {
+			respondError(c, domain.NewValidationError("排行条数参数非法", map[string]string{
+				"limit": "需为整数",
+			}))
+			return
+		}
+		limit = n
+	}
+	profile, err := r.stats.APIKeyUsageProfile(c.Request.Context(), apiKeyID, start, end, limit)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	respondOK(c, gin.H{"profile": profile})
 }
 
 // statsTopTools 返回区间内按调用次数降序的工具排行（Req 16.3）。

@@ -25,6 +25,7 @@ import {
   type ACLEntry,
 } from '@/api/apikeys'
 import { getAggregatedTools, type ToolDetail } from '@/api/tools'
+import { getAPIKeyUsageProfile, type APIKeyToolUsage, type APIKeyUsageProfile } from '@/api/stats'
 import { useConfirm } from '@/composables/useConfirm'
 import { useToast } from '@/composables/useToast'
 import {
@@ -43,7 +44,7 @@ const { confirm } = useConfirm()
 const toast = useToast()
 
 /** 当前激活的分页签。 */
-type Tab = 'filters' | 'acl' | 'ratelimit'
+type Tab = 'profile' | 'filters' | 'acl' | 'ratelimit'
 const activeTab = ref<Tab>('filters')
 
 /** 通用提示与加载状态。 */
@@ -287,20 +288,113 @@ function positiveNumberOrNull(value: number | null): number | null {
   return value !== null && value > 0 ? value : null
 }
 
+// ── 使用画像 ──────────────────────────────────────────────────────────────
+const usageProfile = ref<APIKeyUsageProfile | null>(null)
+const profileLoading = ref(false)
+let profileRequestSeq = 0
+
+function emptyUsageProfile(apiKeyId = ''): APIKeyUsageProfile {
+  return {
+    APIKeyID: apiKeyId,
+    TotalCalls: 0,
+    SuccessCalls: 0,
+    FailureCalls: 0,
+    UniqueTools: 0,
+    AvgLatencyMS: 0,
+    P95LatencyMS: 0,
+    TopTools: [],
+  }
+}
+
+const profileStats = computed(() => usageProfile.value ?? emptyUsageProfile(props.apiKey?.id ?? ''))
+const profileTopTools = computed(() => usageProfile.value?.TopTools ?? [])
+const profileSuccessRate = computed(() => {
+  const total = profileStats.value.TotalCalls
+  return total === 0 ? 0 : (profileStats.value.SuccessCalls / total) * 100
+})
+
+function toolUsageLabel(item: APIKeyToolUsage): string {
+  const detail = toolDetails.value.find(
+    (entry) =>
+      entry.tool.upstreamId === item.UpstreamID && entry.tool.originalName === item.OriginalName,
+  )
+  if (detail?.tool.name !== undefined && detail.tool.name !== '') {
+    return detail.tool.name
+  }
+  return item.OriginalName || '(未知工具)'
+}
+
+function toolUsageSource(item: APIKeyToolUsage): string {
+  const detail = toolDetails.value.find(
+    (entry) =>
+      entry.tool.upstreamId === item.UpstreamID && entry.tool.originalName === item.OriginalName,
+  )
+  const source = detail?.sources?.find(
+    (entry) => entry.upstreamId === item.UpstreamID && entry.originalName === item.OriginalName,
+  )
+  return source?.upstreamName ?? item.UpstreamID
+}
+
+function formatInt(value: number): string {
+  return Math.max(0, Math.round(value)).toLocaleString('zh-CN')
+}
+
+function formatPercent(value: number): string {
+  return `${value.toFixed(1)}%`
+}
+
+function formatLatency(value: number): string {
+  return `${Math.max(0, Math.round(value)).toLocaleString('zh-CN')} ms`
+}
+
+function formatDateTime(value?: string): string {
+  if (value === undefined || value === '') return '-'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime()) || date.getUTCFullYear() <= 1) return '-'
+  return date.toLocaleString('zh-CN', { hour12: false })
+}
+
+async function loadUsageProfile(id: string): Promise<void> {
+  const seq = ++profileRequestSeq
+  profileLoading.value = true
+  try {
+    const profile = await getAPIKeyUsageProfile(id, {}, 10)
+    if (seq === profileRequestSeq) {
+      usageProfile.value = profile
+    }
+  } catch (err) {
+    if (seq === profileRequestSeq) {
+      usageProfile.value = emptyUsageProfile(id)
+      showError(err, '加载使用画像失败')
+    }
+  } finally {
+    if (seq === profileRequestSeq) {
+      profileLoading.value = false
+    }
+  }
+}
+
 // ── 打开时加载全部从属配置 ────────────────────────────────────────────────
 watch(
   () => props.apiKey,
   (key) => {
-    if (key === null) return
+    if (key === null) {
+      profileRequestSeq += 1
+      usageProfile.value = null
+      profileLoading.value = false
+      return
+    }
     activeTab.value = 'filters'
     errorMessage.value = ''
     newFilterPattern.value = ''
     newFilterIsRegex.value = false
     newCidr.value = ''
+    usageProfile.value = emptyUsageProfile(key.id)
     void loadFilters(key.id)
     void loadToolDetails()
     void loadACL(key.id)
     void loadRateLimit(key.id)
+    void loadUsageProfile(key.id)
   },
   { immediate: true },
 )
@@ -329,9 +423,7 @@ function buildFilterPreviewSummary(rule: APIKeyFilter): APIKeyFilterPreviewSumma
           class="flex items-center justify-between border-b border-gray-200 px-6 py-4 dark:border-gray-800"
         >
           <div>
-            <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">
-              配置 API Key
-            </h3>
+            <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">配置 API Key</h3>
             <p class="mt-0.5 text-sm text-gray-500 dark:text-gray-400">
               {{ apiKey.name }}
               <span class="ml-1 font-mono text-xs text-gray-400">{{ apiKey.keyPrefix }}…</span>
@@ -344,22 +436,28 @@ function buildFilterPreviewSummary(rule: APIKeyFilter): APIKeyFilterPreviewSumma
             @click="emit('close')"
           >
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-              <path d="M18 6 6 18M6 6l12 12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+              <path
+                d="M18 6 6 18M6 6l12 12"
+                stroke="currentColor"
+                stroke-width="1.8"
+                stroke-linecap="round"
+              />
             </svg>
           </button>
         </div>
 
         <!-- 分页签 -->
-        <div class="flex gap-1 border-b border-gray-200 px-6 dark:border-gray-800">
+        <div class="flex gap-1 overflow-x-auto border-b border-gray-200 px-6 dark:border-gray-800">
           <button
             v-for="tab in [
+              { key: 'profile', label: '使用画像' },
               { key: 'filters', label: '屏蔽规则' },
               { key: 'acl', label: '来源白名单' },
               { key: 'ratelimit', label: '限流配置' },
             ]"
             :key="tab.key"
             type="button"
-            class="border-b-2 px-3 py-3 text-sm font-medium transition"
+            class="shrink-0 border-b-2 px-3 py-3 text-sm font-medium transition"
             :class="
               activeTab === tab.key
                 ? 'border-brand-500 text-brand-600 dark:text-brand-400'
@@ -375,7 +473,7 @@ function buildFilterPreviewSummary(rule: APIKeyFilter): APIKeyFilterPreviewSumma
         <div class="px-6 pt-4">
           <p
             v-if="errorMessage !== ''"
-            class="mb-3 rounded-lg bg-error-50 px-4 py-2.5 text-sm text-error-600 dark:bg-error-500/10 dark:text-error-400"
+            class="bg-error-50 text-error-600 dark:bg-error-500/10 dark:text-error-400 mb-3 rounded-lg px-4 py-2.5 text-sm"
           >
             {{ errorMessage }}
           </p>
@@ -383,10 +481,117 @@ function buildFilterPreviewSummary(rule: APIKeyFilter): APIKeyFilterPreviewSumma
 
         <!-- 内容区 -->
         <div class="flex-1 overflow-y-auto px-6 pb-6">
+          <!-- 使用画像 -->
+          <section v-if="activeTab === 'profile'">
+            <div
+              v-if="profileLoading"
+              class="rounded-xl border border-gray-200 px-4 py-8 text-center text-sm text-gray-400 dark:border-gray-800"
+            >
+              加载中…
+            </div>
+            <div v-else class="space-y-4">
+              <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                <div
+                  class="rounded-xl border border-gray-200 bg-white p-3 dark:border-gray-800 dark:bg-white/[0.03]"
+                >
+                  <p class="text-xs text-gray-500 dark:text-gray-400">7 天调用</p>
+                  <p class="mt-1 text-lg font-semibold text-gray-800 dark:text-white/90">
+                    {{ formatInt(profileStats.TotalCalls) }}
+                  </p>
+                </div>
+                <div
+                  class="rounded-xl border border-gray-200 bg-white p-3 dark:border-gray-800 dark:bg-white/[0.03]"
+                >
+                  <p class="text-xs text-gray-500 dark:text-gray-400">成功率</p>
+                  <p class="text-success-600 dark:text-success-400 mt-1 text-lg font-semibold">
+                    {{ formatPercent(profileSuccessRate) }}
+                  </p>
+                </div>
+                <div
+                  class="rounded-xl border border-gray-200 bg-white p-3 dark:border-gray-800 dark:bg-white/[0.03]"
+                >
+                  <p class="text-xs text-gray-500 dark:text-gray-400">失败</p>
+                  <p class="text-error-600 dark:text-error-400 mt-1 text-lg font-semibold">
+                    {{ formatInt(profileStats.FailureCalls) }}
+                  </p>
+                </div>
+                <div
+                  class="rounded-xl border border-gray-200 bg-white p-3 dark:border-gray-800 dark:bg-white/[0.03]"
+                >
+                  <p class="text-xs text-gray-500 dark:text-gray-400">覆盖工具</p>
+                  <p class="mt-1 text-lg font-semibold text-gray-800 dark:text-white/90">
+                    {{ formatInt(profileStats.UniqueTools) }}
+                  </p>
+                </div>
+              </div>
+
+              <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <div
+                  class="rounded-xl border border-gray-200 bg-white p-3 dark:border-gray-800 dark:bg-white/[0.03]"
+                >
+                  <p class="text-xs text-gray-500 dark:text-gray-400">最近调用</p>
+                  <p class="mt-1 truncate text-sm font-medium text-gray-700 dark:text-gray-200">
+                    {{ formatDateTime(profileStats.LastCalledAt) }}
+                  </p>
+                </div>
+                <div
+                  class="rounded-xl border border-gray-200 bg-white p-3 dark:border-gray-800 dark:bg-white/[0.03]"
+                >
+                  <p class="text-xs text-gray-500 dark:text-gray-400">平均耗时</p>
+                  <p class="mt-1 text-sm font-medium text-gray-700 dark:text-gray-200">
+                    {{ formatLatency(profileStats.AvgLatencyMS) }}
+                  </p>
+                </div>
+                <div
+                  class="rounded-xl border border-gray-200 bg-white p-3 dark:border-gray-800 dark:bg-white/[0.03]"
+                >
+                  <p class="text-xs text-gray-500 dark:text-gray-400">P95 耗时</p>
+                  <p class="mt-1 text-sm font-medium text-gray-700 dark:text-gray-200">
+                    {{ formatLatency(profileStats.P95LatencyMS) }}
+                  </p>
+                </div>
+              </div>
+
+              <div
+                class="rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-white/[0.03]"
+              >
+                <div class="mb-3 flex items-center justify-between gap-3">
+                  <h4 class="text-sm font-semibold text-gray-800 dark:text-white/90">常用工具</h4>
+                  <span class="text-xs text-gray-400">近 7 天</span>
+                </div>
+                <div
+                  v-if="profileTopTools.length === 0"
+                  class="rounded-lg border border-dashed border-gray-300 px-4 py-8 text-center text-sm text-gray-400 dark:border-gray-700"
+                >
+                  暂无调用记录
+                </div>
+                <div v-else class="space-y-2">
+                  <div
+                    v-for="item in profileTopTools"
+                    :key="`${item.UpstreamID}:${item.OriginalName}`"
+                    class="flex items-center gap-3 rounded-lg border border-gray-100 px-3 py-2 dark:border-gray-800"
+                  >
+                    <div class="min-w-0 flex-1">
+                      <p class="truncate text-sm font-medium text-gray-800 dark:text-white/90">
+                        {{ toolUsageLabel(item) }}
+                      </p>
+                      <p class="mt-0.5 truncate text-xs text-gray-400">
+                        {{ toolUsageSource(item) }} / {{ item.OriginalName }}
+                      </p>
+                    </div>
+                    <span class="shrink-0 text-sm font-semibold text-gray-700 dark:text-gray-200">
+                      {{ formatInt(item.Count) }}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
           <!-- 屏蔽规则 -->
-          <section v-if="activeTab === 'filters'">
+          <section v-else-if="activeTab === 'filters'">
             <div class="mb-4 flex flex-wrap items-end gap-2">
-              <div class="flex-1 min-w-[200px]">
+              <div class="min-w-[200px] flex-1">
                 <label class="mb-1.5 block text-xs font-medium text-gray-600 dark:text-gray-400">
                   匹配模式
                 </label>
@@ -395,7 +600,7 @@ function buildFilterPreviewSummary(rule: APIKeyFilter): APIKeyFilterPreviewSumma
                   type="text"
                   maxlength="200"
                   placeholder="工具原始名称；正则模式如 ^admin\..+$"
-                  class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-800 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white/90"
+                  class="focus:border-brand-400 focus:ring-brand-100 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-800 focus:ring-2 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white/90"
                   @keyup.enter="addFilter"
                 />
               </div>
@@ -417,7 +622,7 @@ function buildFilterPreviewSummary(rule: APIKeyFilter): APIKeyFilterPreviewSumma
               </div>
               <button
                 type="button"
-                class="rounded-lg bg-brand-500 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-brand-600 disabled:opacity-60"
+                class="bg-brand-500 hover:bg-brand-600 rounded-lg px-3.5 py-2 text-sm font-medium text-white transition disabled:opacity-60"
                 :disabled="filterBusy"
                 @click="addFilter"
               >
@@ -426,18 +631,21 @@ function buildFilterPreviewSummary(rule: APIKeyFilter): APIKeyFilterPreviewSumma
             </div>
             <div
               v-if="newFilterPattern.trim() !== ''"
-              class="mb-4 rounded-lg border border-warning-200 bg-warning-50 px-2.5 py-2 text-xs text-warning-700 dark:border-warning-500/20 dark:bg-warning-500/10 dark:text-warning-300"
+              class="border-warning-200 bg-warning-50 text-warning-700 dark:border-warning-500/20 dark:bg-warning-500/10 dark:text-warning-300 mb-4 rounded-lg border px-2.5 py-2 text-xs"
             >
               <div class="flex items-center justify-between gap-2">
                 <span>{{ draftFilterPreviewSummary.label }}</span>
                 <span
                   v-if="draftFilterPreviewSummary.hiddenCount > 0"
-                  class="shrink-0 text-warning-600 dark:text-warning-300"
+                  class="text-warning-600 dark:text-warning-300 shrink-0"
                 >
                   +{{ draftFilterPreviewSummary.hiddenCount }}
                 </span>
               </div>
-              <div v-if="draftFilterPreviewSummary.items.length > 0" class="mt-2 flex flex-wrap gap-1.5">
+              <div
+                v-if="draftFilterPreviewSummary.items.length > 0"
+                class="mt-2 flex flex-wrap gap-1.5"
+              >
                 <AppTooltip
                   v-for="item in draftFilterPreviewSummary.items"
                   :key="item.key"
@@ -445,7 +653,7 @@ function buildFilterPreviewSummary(rule: APIKeyFilter): APIKeyFilterPreviewSumma
                   placement="bottom"
                 >
                   <span
-                    class="inline-flex max-w-full items-center rounded-md bg-white px-1.5 py-0.5 text-[11px] text-warning-700 ring-1 ring-warning-200 dark:bg-white/5 dark:text-warning-200 dark:ring-warning-500/20"
+                    class="text-warning-700 ring-warning-200 dark:text-warning-200 dark:ring-warning-500/20 inline-flex max-w-full items-center rounded-md bg-white px-1.5 py-0.5 text-[11px] ring-1 dark:bg-white/5"
                   >
                     <span class="truncate">{{ item.exposedName }} / {{ item.originalName }}</span>
                   </span>
@@ -453,10 +661,16 @@ function buildFilterPreviewSummary(rule: APIKeyFilter): APIKeyFilterPreviewSumma
               </div>
             </div>
 
-            <div v-if="filtersLoading" class="rounded-xl border border-gray-200 px-4 py-8 text-center text-sm text-gray-400 dark:border-gray-800">
+            <div
+              v-if="filtersLoading"
+              class="rounded-xl border border-gray-200 px-4 py-8 text-center text-sm text-gray-400 dark:border-gray-800"
+            >
               加载中…
             </div>
-            <div v-else-if="filters.length === 0" class="rounded-xl border border-dashed border-gray-300 px-4 py-8 text-center text-sm text-gray-400 dark:border-gray-700">
+            <div
+              v-else-if="filters.length === 0"
+              class="rounded-xl border border-dashed border-gray-300 px-4 py-8 text-center text-sm text-gray-400 dark:border-gray-700"
+            >
               暂无屏蔽规则
             </div>
             <div v-else class="space-y-2">
@@ -466,11 +680,18 @@ function buildFilterPreviewSummary(rule: APIKeyFilter): APIKeyFilterPreviewSumma
                 class="rounded-xl border border-gray-200 bg-white p-3 dark:border-gray-800 dark:bg-white/[0.03]"
               >
                 <div class="flex items-center gap-3">
-                  <AppTooltip :content="rule.pattern" placement="bottom-start" class="min-w-0 flex-1">
-                    <code class="block truncate font-mono text-xs text-gray-700 dark:text-gray-300">{{ rule.pattern }}</code>
+                  <AppTooltip
+                    :content="rule.pattern"
+                    placement="bottom-start"
+                    class="min-w-0 flex-1"
+                  >
+                    <code
+                      class="block truncate font-mono text-xs text-gray-700 dark:text-gray-300"
+                      >{{ rule.pattern }}</code
+                    >
                   </AppTooltip>
                   <span
-                    class="shrink-0 inline-flex items-center rounded-full px-2 py-0.5 text-xs"
+                    class="inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-xs"
                     :class="
                       rule.isRegex
                         ? 'bg-brand-50 text-brand-600 dark:bg-brand-500/10 dark:text-brand-400'
@@ -494,25 +715,28 @@ function buildFilterPreviewSummary(rule: APIKeyFilter): APIKeyFilterPreviewSumma
                   </button>
                   <button
                     type="button"
-                    class="shrink-0 rounded-lg px-2.5 py-1.5 text-xs font-medium text-error-600 hover:bg-error-50 dark:text-error-400 dark:hover:bg-error-500/10"
+                    class="text-error-600 hover:bg-error-50 dark:text-error-400 dark:hover:bg-error-500/10 shrink-0 rounded-lg px-2.5 py-1.5 text-xs font-medium"
                     @click="removeFilter(rule)"
                   >
                     删除
                   </button>
                 </div>
                 <div
-                  class="mt-2 rounded-lg border border-warning-200 bg-warning-50 px-2.5 py-2 text-xs text-warning-700 dark:border-warning-500/20 dark:bg-warning-500/10 dark:text-warning-300"
+                  class="border-warning-200 bg-warning-50 text-warning-700 dark:border-warning-500/20 dark:bg-warning-500/10 dark:text-warning-300 mt-2 rounded-lg border px-2.5 py-2 text-xs"
                 >
                   <div class="flex items-center justify-between gap-2">
                     <span>{{ filterPreviewSummary(rule).label }}</span>
                     <span
                       v-if="filterPreviewSummary(rule).hiddenCount > 0"
-                      class="shrink-0 text-warning-600 dark:text-warning-300"
+                      class="text-warning-600 dark:text-warning-300 shrink-0"
                     >
                       +{{ filterPreviewSummary(rule).hiddenCount }}
                     </span>
                   </div>
-                  <div v-if="filterPreviewSummary(rule).items.length > 0" class="mt-2 flex flex-wrap gap-1.5">
+                  <div
+                    v-if="filterPreviewSummary(rule).items.length > 0"
+                    class="mt-2 flex flex-wrap gap-1.5"
+                  >
                     <AppTooltip
                       v-for="item in filterPreviewSummary(rule).items"
                       :key="item.key"
@@ -520,9 +744,11 @@ function buildFilterPreviewSummary(rule: APIKeyFilter): APIKeyFilterPreviewSumma
                       placement="bottom"
                     >
                       <span
-                        class="inline-flex max-w-full items-center rounded-md bg-white px-1.5 py-0.5 text-[11px] text-warning-700 ring-1 ring-warning-200 dark:bg-white/5 dark:text-warning-200 dark:ring-warning-500/20"
+                        class="text-warning-700 ring-warning-200 dark:text-warning-200 dark:ring-warning-500/20 inline-flex max-w-full items-center rounded-md bg-white px-1.5 py-0.5 text-[11px] ring-1 dark:bg-white/5"
                       >
-                        <span class="truncate">{{ item.exposedName }} / {{ item.originalName }}</span>
+                        <span class="truncate"
+                          >{{ item.exposedName }} / {{ item.originalName }}</span
+                        >
                       </span>
                     </AppTooltip>
                   </div>
@@ -534,7 +760,7 @@ function buildFilterPreviewSummary(rule: APIKeyFilter): APIKeyFilterPreviewSumma
           <!-- 来源白名单 -->
           <section v-else-if="activeTab === 'acl'">
             <div class="mb-4 flex flex-wrap items-end gap-2">
-              <div class="flex-1 min-w-[200px]">
+              <div class="min-w-[200px] flex-1">
                 <label class="mb-1.5 block text-xs font-medium text-gray-600 dark:text-gray-400">
                   IP / CIDR 网段
                 </label>
@@ -542,13 +768,13 @@ function buildFilterPreviewSummary(rule: APIKeyFilter): APIKeyFilterPreviewSumma
                   v-model="newCidr"
                   type="text"
                   placeholder="如：10.0.0.0/8 或 1.2.3.4"
-                  class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-800 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white/90"
+                  class="focus:border-brand-400 focus:ring-brand-100 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-800 focus:ring-2 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white/90"
                   @keyup.enter="addACL"
                 />
               </div>
               <button
                 type="button"
-                class="rounded-lg bg-brand-500 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-brand-600 disabled:opacity-60"
+                class="bg-brand-500 hover:bg-brand-600 rounded-lg px-3.5 py-2 text-sm font-medium text-white transition disabled:opacity-60"
                 :disabled="aclBusy"
                 @click="addACL"
               >
@@ -560,10 +786,16 @@ function buildFilterPreviewSummary(rule: APIKeyFilter): APIKeyFilterPreviewSumma
               留空表示不限制来源；配置后仅白名单内的来源 IP 可使用该 API Key。
             </p>
 
-            <div v-if="aclLoading" class="rounded-xl border border-gray-200 px-4 py-8 text-center text-sm text-gray-400 dark:border-gray-800">
+            <div
+              v-if="aclLoading"
+              class="rounded-xl border border-gray-200 px-4 py-8 text-center text-sm text-gray-400 dark:border-gray-800"
+            >
               加载中…
             </div>
-            <div v-else-if="aclEntries.length === 0" class="rounded-xl border border-dashed border-gray-300 px-4 py-8 text-center text-sm text-gray-400 dark:border-gray-700">
+            <div
+              v-else-if="aclEntries.length === 0"
+              class="rounded-xl border border-dashed border-gray-300 px-4 py-8 text-center text-sm text-gray-400 dark:border-gray-700"
+            >
               暂无来源白名单（不限制来源）
             </div>
             <div v-else class="space-y-2">
@@ -572,10 +804,13 @@ function buildFilterPreviewSummary(rule: APIKeyFilter): APIKeyFilterPreviewSumma
                 :key="entry.ID"
                 class="flex items-center gap-3 rounded-xl border border-gray-200 bg-white p-3 dark:border-gray-800 dark:bg-white/[0.03]"
               >
-                <code class="min-w-0 flex-1 truncate font-mono text-xs text-gray-700 dark:text-gray-300">{{ entry.CIDR }}</code>
+                <code
+                  class="min-w-0 flex-1 truncate font-mono text-xs text-gray-700 dark:text-gray-300"
+                  >{{ entry.CIDR }}</code
+                >
                 <button
                   type="button"
-                  class="shrink-0 rounded-lg px-2.5 py-1.5 text-xs font-medium text-error-600 hover:bg-error-50 dark:text-error-400 dark:hover:bg-error-500/10"
+                  class="text-error-600 hover:bg-error-50 dark:text-error-400 dark:hover:bg-error-500/10 shrink-0 rounded-lg px-2.5 py-1.5 text-xs font-medium"
                   @click="removeACL(entry)"
                 >
                   删除
@@ -585,36 +820,36 @@ function buildFilterPreviewSummary(rule: APIKeyFilter): APIKeyFilterPreviewSumma
           </section>
 
           <!-- 限流配置 -->
-          <section v-else>
+          <section v-else-if="activeTab === 'ratelimit'">
             <div v-if="rateLoading" class="px-1 py-8 text-center text-sm text-gray-400">
               加载中…
             </div>
             <div v-else class="max-w-2xl">
               <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div>
-                <label class="mb-1.5 block text-sm font-medium text-gray-700 dark:text-gray-300">
-                  请求上限（次）
-                </label>
-                <input
-                  v-model.number="rateLimit"
-                  type="number"
-                  min="0"
-                  placeholder="留空表示不限流"
-                  class="w-full rounded-lg border border-gray-300 px-3.5 py-2.5 text-sm text-gray-800 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white/90"
-                />
-              </div>
+                  <label class="mb-1.5 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                    请求上限（次）
+                  </label>
+                  <input
+                    v-model.number="rateLimit"
+                    type="number"
+                    min="0"
+                    placeholder="留空表示不限流"
+                    class="focus:border-brand-400 focus:ring-brand-100 w-full rounded-lg border border-gray-300 px-3.5 py-2.5 text-sm text-gray-800 focus:ring-2 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white/90"
+                  />
+                </div>
                 <div>
-                <label class="mb-1.5 block text-sm font-medium text-gray-700 dark:text-gray-300">
-                  计数窗口（秒）
-                </label>
-                <input
-                  v-model.number="rateWindowS"
-                  type="number"
-                  min="0"
-                  placeholder="留空表示不限流"
-                  class="w-full rounded-lg border border-gray-300 px-3.5 py-2.5 text-sm text-gray-800 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white/90"
-                />
-              </div>
+                  <label class="mb-1.5 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                    计数窗口（秒）
+                  </label>
+                  <input
+                    v-model.number="rateWindowS"
+                    type="number"
+                    min="0"
+                    placeholder="留空表示不限流"
+                    class="focus:border-brand-400 focus:ring-brand-100 w-full rounded-lg border border-gray-300 px-3.5 py-2.5 text-sm text-gray-800 focus:ring-2 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white/90"
+                  />
+                </div>
                 <div>
                   <label class="mb-1.5 block text-sm font-medium text-gray-700 dark:text-gray-300">
                     每日调用上限
@@ -624,7 +859,7 @@ function buildFilterPreviewSummary(rule: APIKeyFilter): APIKeyFilterPreviewSumma
                     type="number"
                     min="0"
                     placeholder="留空表示不限额"
-                    class="w-full rounded-lg border border-gray-300 px-3.5 py-2.5 text-sm text-gray-800 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white/90"
+                    class="focus:border-brand-400 focus:ring-brand-100 w-full rounded-lg border border-gray-300 px-3.5 py-2.5 text-sm text-gray-800 focus:ring-2 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white/90"
                   />
                 </div>
                 <div>
@@ -636,7 +871,7 @@ function buildFilterPreviewSummary(rule: APIKeyFilter): APIKeyFilterPreviewSumma
                     type="number"
                     min="0"
                     placeholder="留空表示不限额"
-                    class="w-full rounded-lg border border-gray-300 px-3.5 py-2.5 text-sm text-gray-800 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white/90"
+                    class="focus:border-brand-400 focus:ring-brand-100 w-full rounded-lg border border-gray-300 px-3.5 py-2.5 text-sm text-gray-800 focus:ring-2 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white/90"
                   />
                 </div>
               </div>
@@ -646,7 +881,7 @@ function buildFilterPreviewSummary(rule: APIKeyFilter): APIKeyFilterPreviewSumma
               <div class="flex items-center gap-3">
                 <button
                   type="button"
-                  class="rounded-lg bg-brand-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-brand-600 disabled:opacity-60"
+                  class="bg-brand-500 hover:bg-brand-600 rounded-lg px-4 py-2 text-sm font-medium text-white transition disabled:opacity-60"
                   :disabled="rateSaving"
                   @click="saveRateLimit"
                 >
