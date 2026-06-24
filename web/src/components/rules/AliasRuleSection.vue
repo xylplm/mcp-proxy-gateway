@@ -19,10 +19,12 @@ import type { Upstream } from '@/api/upstreams'
 import type { ToolDef } from '@/api/tools'
 import { useConfirm } from '@/composables/useConfirm'
 import {
+  buildToolRulePreview,
   createOriginalNameMatcher,
   enabledUpstreamIDs,
   loadCachedToolsForEnabledUpstreams,
   scopedEnabledUpstreamIDs,
+  type ToolRulePreviewSummary,
 } from '@/utils/rulePreview'
 
 const props = defineProps<{
@@ -84,6 +86,16 @@ const toolsByUpstream = ref<Record<string, ToolDef[]>>({})
 const previewSummaries = computed<Record<string, AliasPreviewSummary>>(() => {
   return buildAliasPreviewSummaries()
 })
+
+const draftPreviewSummary = computed<ToolRulePreviewSummary>(() =>
+  buildToolRulePreview(form.value, props.upstreams, toolsByUpstream.value, {
+    emptyLabel: '填写匹配模式后显示预计重写影响',
+    noHitLabel: '当前缓存暂未命中工具',
+    hitLabel: (count) => `预计影响 ${count} 个工具`,
+  }),
+)
+
+const draftChangeLabel = computed(() => aliasChangeLabel(form.value))
 
 /** 加载别名规则（按 sortOrder 升序）。 */
 async function load(): Promise<void> {
@@ -379,7 +391,7 @@ function aliasPreviewItem(
   }
 }
 
-function aliasChangeLabel(rule: AliasRule): string {
+function aliasChangeLabel(rule: { targetName?: string; targetDesc?: string }): string {
   const hasName = (rule.targetName ?? '').trim() !== ''
   const hasDesc = (rule.targetDesc ?? '').trim() !== ''
   if (hasName && hasDesc) return '改名并重写描述'
@@ -614,6 +626,33 @@ defineExpose({ reload })
                 placeholder="重写后的工具描述（与目标名称至少填一项）"
                 class="w-full rounded-lg border border-gray-300 px-3.5 py-2.5 text-sm text-gray-800 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white/90"
               ></textarea>
+            </div>
+            <div class="rounded-lg border border-brand-100 bg-brand-50 px-3 py-2 text-xs text-brand-700 dark:border-brand-500/20 dark:bg-brand-500/10 dark:text-brand-300">
+              <div class="flex items-center justify-between gap-2">
+                <span>{{ draftPreviewSummary.label }}</span>
+                <span v-if="draftPreviewSummary.hiddenCount > 0" class="shrink-0 text-brand-600 dark:text-brand-300">
+                  +{{ draftPreviewSummary.hiddenCount }}
+                </span>
+              </div>
+              <div v-if="draftPreviewSummary.items.length > 0" class="mt-2 flex flex-wrap gap-1.5">
+                <AppTooltip
+                  v-for="item in draftPreviewSummary.items"
+                  :key="item.key"
+                  :content="form.targetName.trim() !== ''
+                    ? `${item.upstreamName} / ${item.originalName} → ${form.targetName.trim()}`
+                    : `${item.upstreamName} / ${item.originalName}`"
+                  placement="bottom"
+                >
+                  <span
+                    class="inline-flex max-w-full items-center rounded-md bg-white px-1.5 py-0.5 text-[11px] text-brand-700 ring-1 ring-brand-100 dark:bg-white/5 dark:text-brand-200 dark:ring-brand-500/20"
+                  >
+                    <span class="truncate">
+                      {{ item.originalName }}<template v-if="form.targetName.trim() !== ''"> → {{ form.targetName.trim() }}</template>
+                    </span>
+                    <span class="ml-1 shrink-0 text-brand-500 dark:text-brand-300">{{ draftChangeLabel }}</span>
+                  </span>
+                </AppTooltip>
+              </div>
             </div>
           </div>
 

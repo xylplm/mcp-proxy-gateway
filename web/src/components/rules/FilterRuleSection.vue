@@ -20,9 +20,11 @@ import type { Upstream } from '@/api/upstreams'
 import type { ToolDef } from '@/api/tools'
 import { useConfirm } from '@/composables/useConfirm'
 import {
+  buildToolRulePreview,
   createOriginalNameMatcher,
   loadCachedToolsForEnabledUpstreams,
   scopedEnabledUpstreamIDs,
+  type ToolRulePreviewSummary,
 } from '@/utils/rulePreview'
 
 const props = defineProps<{
@@ -83,6 +85,14 @@ const previewSummaries = computed<Record<string, RulePreviewSummary>>(() => {
   }
   return summaries
 })
+
+const draftPreviewSummary = computed<ToolRulePreviewSummary>(() =>
+  buildToolRulePreview(form.value, props.upstreams, toolsByUpstream.value, {
+    emptyLabel: '填写匹配模式后显示预计屏蔽影响',
+    noHitLabel: '当前缓存暂未命中工具',
+    hitLabel: (count) => `预计屏蔽 ${count} 个工具`,
+  }),
+)
 
 /** 标记/解除行级繁忙态。 */
 function setBusy(key: string, on: boolean): void {
@@ -577,6 +587,28 @@ defineExpose({ reload })
                   :class="form.enabled ? 'translate-x-6' : 'translate-x-1'"
                 ></span>
               </button>
+            </div>
+            <div class="rounded-lg border border-warning-200 bg-warning-50 px-3 py-2 text-xs text-warning-700 dark:border-warning-500/20 dark:bg-warning-500/10 dark:text-warning-300">
+              <div class="flex items-center justify-between gap-2">
+                <span>{{ draftPreviewSummary.label }}</span>
+                <span v-if="draftPreviewSummary.hiddenCount > 0" class="shrink-0 text-warning-600 dark:text-warning-300">
+                  +{{ draftPreviewSummary.hiddenCount }}
+                </span>
+              </div>
+              <div v-if="draftPreviewSummary.items.length > 0" class="mt-2 flex flex-wrap gap-1.5">
+                <AppTooltip
+                  v-for="item in draftPreviewSummary.items"
+                  :key="item.key"
+                  :content="`${item.upstreamName} / ${item.originalName}`"
+                  placement="bottom"
+                >
+                  <span
+                    class="inline-flex max-w-full items-center rounded-md bg-white px-1.5 py-0.5 text-[11px] text-warning-700 ring-1 ring-warning-200 dark:bg-white/5 dark:text-warning-200 dark:ring-warning-500/20"
+                  >
+                    <span class="truncate">{{ item.upstreamName }} / {{ item.originalName }}</span>
+                  </span>
+                </AppTooltip>
+              </div>
             </div>
           </div>
 
