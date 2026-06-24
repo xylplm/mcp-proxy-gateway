@@ -42,7 +42,7 @@ const riskRules: Array<{
     key: 'send',
     label: '发送',
     level: 'medium',
-    patterns: [/\b(send|email|mail|message|notify|publish|post|sms|webhook)\b/i, /发送|邮件|消息|通知|发布|短信|推送/],
+    patterns: [/(^|[^a-z0-9])(send|email|notify|publish|post|sms|webhook)(?=$|[^a-z0-9])/i, /发送|短信|推送/],
   },
 ]
 

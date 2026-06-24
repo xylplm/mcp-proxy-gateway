@@ -63,3 +63,20 @@ test('does not mark media subscription tools as payment risk', () => {
   assert.equal(subscribeTags.some((tag) => tag.key === 'payment'), false)
   assert.equal(refreshTags.some((tag) => tag.key === 'payment'), false)
 })
+
+test('does not mark read-only media status as send risk', () => {
+  const tags = toolRiskTags(
+    detail({
+      name: 'get_media_status',
+      description: '查询媒体状态，例如：已发布站点列表、是否已入库等。',
+    }),
+  )
+
+  assert.equal(tags.some((tag) => tag.key === 'send'), false)
+})
+
+test('does not mark query message tools as send risk', () => {
+  const tags = toolRiskTags(detail({ name: 'get_site_message', description: '查询站点消息' }))
+
+  assert.equal(tags.some((tag) => tag.key === 'send'), false)
+})
