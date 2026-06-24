@@ -35,6 +35,8 @@ func (f *factory) NewSession(cfg domain.UpstreamConfig) (UpstreamSession, error)
 		return newStreamableHTTPSession(cfg)
 	case domain.TransportWebSocket:
 		return newWebSocketSession(cfg)
+	case domain.TransportOpenAPI:
+		return newOpenAPISession(cfg)
 	default:
 		// 理论上不可达：ValidateConnParams 已拒绝不受支持的类型，此处兜底保持完备。
 		return nil, domain.NewValidationError(
@@ -52,7 +54,8 @@ func (f *factory) Supports(t domain.TransportType) bool {
 	case domain.TransportStdio,
 		domain.TransportSSE,
 		domain.TransportStreamableHTTP,
-		domain.TransportWebSocket:
+		domain.TransportWebSocket,
+		domain.TransportOpenAPI:
 		return true
 	default:
 		return false

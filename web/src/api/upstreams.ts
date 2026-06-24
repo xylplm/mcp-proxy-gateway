@@ -27,7 +27,7 @@ import type { ToolDef } from '@/api/tools'
 import type { UpstreamRateLimits } from '@/api/rateLimits'
 
 /** 上游 MCP 传输类型，与后端 domain.TransportType 对齐。 */
-export type TransportType = 'stdio' | 'sse' | 'streamable-http' | 'websocket'
+export type TransportType = 'stdio' | 'sse' | 'streamable-http' | 'websocket' | 'openapi'
 
 /** 上游连接状态，与后端 domain.ConnState 对齐。 */
 export type ConnState = 'connecting' | 'available' | 'unavailable' | 'suspended'
@@ -38,6 +38,7 @@ export const TRANSPORT_OPTIONS: ReadonlyArray<{ value: TransportType; label: str
   { value: 'sse', label: 'SSE（Server-Sent Events）' },
   { value: 'streamable-http', label: 'Streamable-HTTP' },
   { value: 'websocket', label: 'WebSocket' },
+  { value: 'openapi', label: 'OpenAPI / REST' },
 ]
 
 /** 连接状态的中文显示名映射。 */
@@ -61,6 +62,19 @@ export interface ConnParams {
   cwd?: string
   url?: string
   headers?: Record<string, string>
+  baseUrl?: string
+  docUrl?: string
+  docContent?: string
+  authType?:
+    | 'none'
+    | 'bearer'
+    | 'basic'
+    | 'api-key-header'
+    | 'api-key-query'
+    | 'custom-header'
+    | string
+  authName?: string
+  authValue?: string
   [key: string]: unknown
 }
 
@@ -270,7 +284,9 @@ export async function refreshUpstream(id: string): Promise<number> {
 
 /** 批量读取全部上游 MCP 的工具缓存摘要；只读缓存，不触发补拉。 */
 export async function listUpstreamToolSummaries(): Promise<UpstreamToolSummary[]> {
-  const res = await request.get<{ summaries: UpstreamToolSummary[] | null }>('/upstreams/tool-summaries')
+  const res = await request.get<{ summaries: UpstreamToolSummary[] | null }>(
+    '/upstreams/tool-summaries',
+  )
   return res.data?.summaries ?? []
 }
 
@@ -280,10 +296,9 @@ export async function listUpstreamTools(
   options?: { ensure?: boolean },
 ): Promise<UpstreamToolsResult> {
   const params = options?.ensure === undefined ? undefined : { ensure: options.ensure }
-  const res = await request.get<UpstreamToolsResult>(
-    `/upstreams/${encodeURIComponent(id)}/tools`,
-    { params },
-  )
+  const res = await request.get<UpstreamToolsResult>(`/upstreams/${encodeURIComponent(id)}/tools`, {
+    params,
+  })
   return {
     id: res.data?.id ?? id,
     tools: res.data?.tools ?? [],

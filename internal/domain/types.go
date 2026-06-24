@@ -21,6 +21,8 @@ const (
 	TransportStreamableHTTP TransportType = "streamable-http"
 	// TransportWebSocket 表示通过 WebSocket 与上游 MCP 通信。
 	TransportWebSocket TransportType = "websocket"
+	// TransportOpenAPI 表示把 OpenAPI/REST 服务虚拟成 MCP 工具。
+	TransportOpenAPI TransportType = "openapi"
 )
 
 // ConnState 表示上游 MCP 连接的生命周期状态。

@@ -22,10 +22,7 @@ import {
   RefreshIcon,
   SuccessIcon,
 } from '@/icons'
-import {
-  testStageLabel,
-  upstreamTestDiagnostic,
-} from '@/utils/upstreamTestDiagnostics'
+import { testStageLabel, upstreamTestDiagnostic } from '@/utils/upstreamTestDiagnostics'
 
 const props = defineProps<{
   open: boolean
@@ -42,6 +39,14 @@ const emit = defineEmits<{
 
 type RemoteAuthMode = 'none' | 'bearer' | 'api-key' | 'custom'
 type StdioAuthMode = 'none' | 'env' | 'custom'
+type OpenAPIAuthMode =
+  | 'none'
+  | 'bearer'
+  | 'basic'
+  | 'api-key-header'
+  | 'api-key-query'
+  | 'custom-header'
+type OpenAPIDocMode = 'url' | 'content'
 
 const credentialPlaceholder = '${credential}'
 const maxTagCount = 8
@@ -71,6 +76,11 @@ const transportHelp: Record<
     description: '通过 ws 或 wss 长连接接入 MCP 服务。',
     placeholder: 'wss://example.com/mcp',
   },
+  openapi: {
+    title: 'OpenAPI 转工具',
+    description: '把已有 REST / OpenAPI 服务转换成 MCP 工具。',
+    placeholder: 'https://api.example.com/v1',
+  },
 }
 
 const remoteAuthOptions: ReadonlyArray<{ value: RemoteAuthMode; label: string; desc: string }> = [
@@ -86,10 +96,20 @@ const stdioAuthOptions: ReadonlyArray<{ value: StdioAuthMode; label: string; des
   { value: 'custom', label: '自定义注入', desc: '在参数或高级环境变量中使用凭证占位。' },
 ]
 
+const openAPIAuthOptions: ReadonlyArray<{ value: OpenAPIAuthMode; label: string; desc: string }> = [
+  { value: 'none', label: '无需认证', desc: '接口可直接访问。' },
+  { value: 'bearer', label: 'Bearer Token', desc: '发送 Authorization: Bearer <Token>。' },
+  { value: 'api-key-header', label: 'API Key Header', desc: '把凭证放入指定请求头。' },
+  { value: 'api-key-query', label: 'API Key Query', desc: '把凭证放入指定查询参数。' },
+  { value: 'basic', label: 'Basic Auth', desc: '凭证填写 username:password。' },
+  { value: 'custom-header', label: '自定义 Header', desc: '把凭证作为指定 Header 值发送。' },
+]
+
 const isEdit = computed(() => props.upstream !== null)
 const fromTemplate = computed(() => props.prefill !== null && !isEdit.value)
 const currentTransport = computed(() => transportHelp[form.transport])
 const isRemoteTransport = computed(() => form.transport !== 'stdio')
+const isOpenAPITransport = computed(() => form.transport === 'openapi')
 
 const transportCards = computed(() =>
   TRANSPORT_OPTIONS.map((opt) => ({
@@ -114,6 +134,12 @@ const form = reactive<{
   command: string
   args: string
   url: string
+  openAPIBaseUrl: string
+  openAPIDocMode: OpenAPIDocMode
+  openAPIDocUrl: string
+  openAPIDocContent: string
+  openAPIAuthMode: OpenAPIAuthMode
+  openAPIAuthName: string
   credential: string
   remoteAuthMode: RemoteAuthMode
   stdioAuthMode: StdioAuthMode
@@ -142,6 +168,12 @@ const form = reactive<{
   command: '',
   args: '',
   url: '',
+  openAPIBaseUrl: '',
+  openAPIDocMode: 'url',
+  openAPIDocUrl: '',
+  openAPIDocContent: '',
+  openAPIAuthMode: 'none',
+  openAPIAuthName: 'X-API-Key',
   credential: '',
   remoteAuthMode: 'none',
   stdioAuthMode: 'none',
@@ -181,6 +213,7 @@ const availableTagOptions = computed(() => normalizedTagOptions.value.filter((ta
 
 const selectedAuthMayUseCredential = computed(() => {
   if (fromTemplate.value) return false
+  if (form.transport === 'openapi') return form.openAPIAuthMode !== 'none'
   if (form.transport === 'stdio') return form.stdioAuthMode !== 'none'
   return form.remoteAuthMode !== 'none'
 })
@@ -257,6 +290,12 @@ function resetManualFields(): void {
   form.command = ''
   form.args = ''
   form.url = ''
+  form.openAPIBaseUrl = ''
+  form.openAPIDocMode = 'url'
+  form.openAPIDocUrl = ''
+  form.openAPIDocContent = ''
+  form.openAPIAuthMode = 'none'
+  form.openAPIAuthName = 'X-API-Key'
   form.credential = ''
   form.remoteAuthMode = 'none'
   form.stdioAuthMode = 'none'
@@ -402,9 +441,42 @@ function applyDetectedAuth(headers: Record<string, string>, env: Record<string, 
 function customParamsFrom(params: ConnParams): string {
   const custom: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(params)) {
-    if (!['command', 'args', 'url', 'env', 'cwd', 'headers'].includes(key)) custom[key] = value
+    if (
+      ![
+        'command',
+        'args',
+        'url',
+        'env',
+        'cwd',
+        'headers',
+        'baseUrl',
+        'docUrl',
+        'docContent',
+        'authType',
+        'authName',
+        'authValue',
+      ].includes(key)
+    )
+      custom[key] = value
   }
   return Object.keys(custom).length > 0 ? JSON.stringify(custom, null, 2) : ''
+}
+
+function normalizeOpenAPIAuthMode(value: unknown): OpenAPIAuthMode {
+  switch (value) {
+    case 'bearer':
+    case 'basic':
+    case 'api-key-header':
+    case 'api-key-query':
+    case 'custom-header':
+      return value
+    default:
+      return 'none'
+  }
+}
+
+function requiresOpenAPIAuthName(value: OpenAPIAuthMode): boolean {
+  return value === 'api-key-header' || value === 'api-key-query' || value === 'custom-header'
 }
 
 function parseCustomParams(): ConnParams | null {
@@ -442,6 +514,14 @@ function resetForm(): void {
     form.command = typeof cfg.connParams.command === 'string' ? cfg.connParams.command : ''
     form.args = Array.isArray(cfg.connParams.args) ? cfg.connParams.args.join('\n') : ''
     form.url = typeof cfg.connParams.url === 'string' ? cfg.connParams.url : ''
+    form.openAPIBaseUrl = typeof cfg.connParams.baseUrl === 'string' ? cfg.connParams.baseUrl : ''
+    form.openAPIDocUrl = typeof cfg.connParams.docUrl === 'string' ? cfg.connParams.docUrl : ''
+    form.openAPIDocContent =
+      typeof cfg.connParams.docContent === 'string' ? cfg.connParams.docContent : ''
+    form.openAPIDocMode = form.openAPIDocContent.trim() !== '' ? 'content' : 'url'
+    form.openAPIAuthMode = normalizeOpenAPIAuthMode(cfg.connParams.authType)
+    form.openAPIAuthName =
+      typeof cfg.connParams.authName === 'string' ? cfg.connParams.authName : 'X-API-Key'
     form.credential = cfg.credential ?? ''
     applyDetectedAuth(headers, env)
     form.headersText = formatKeyValues(headers, ':')
@@ -488,6 +568,12 @@ watch(
     form.command,
     form.args,
     form.url,
+    form.openAPIBaseUrl,
+    form.openAPIDocMode,
+    form.openAPIDocUrl,
+    form.openAPIDocContent,
+    form.openAPIAuthMode,
+    form.openAPIAuthName,
     form.credential,
     form.remoteAuthMode,
     form.stdioAuthMode,
@@ -605,6 +691,22 @@ function buildManualConnParams(): ConnParams | null {
   const custom = parseCustomParams()
   if (custom === null) return null
 
+  if (form.transport === 'openapi') {
+    const headers = parseKeyValues(form.headersText, '请求头', 'header')
+    if (headers === null) return null
+    const params: ConnParams = {
+      ...custom,
+      baseUrl: form.openAPIBaseUrl.trim(),
+      authType: form.openAPIAuthMode,
+    }
+    if (form.openAPIDocMode === 'content') params.docContent = form.openAPIDocContent.trim()
+    else params.docUrl = form.openAPIDocUrl.trim()
+    if (requiresOpenAPIAuthName(form.openAPIAuthMode)) params.authName = form.openAPIAuthName.trim()
+    if (form.openAPIAuthMode !== 'none') params.authValue = credentialPlaceholder
+    if (Object.keys(headers).length > 0) params.headers = headers
+    return params
+  }
+
   if (form.transport === 'stdio') {
     const env = parseKeyValues(form.envText, '环境变量', 'env')
     if (env === null) return null
@@ -670,6 +772,38 @@ function validateTags(): boolean {
 
 function validateManualBasics(): boolean {
   let ok = true
+  if (form.transport === 'openapi') {
+    if (
+      !validateURLField(
+        'openAPIBaseUrl',
+        form.openAPIBaseUrl.trim(),
+        ['http', 'https'],
+        '请输入 API 基础地址',
+      )
+    ) {
+      ok = false
+    }
+    if (form.openAPIDocMode === 'url') {
+      if (
+        !validateURLField(
+          'openAPIDocUrl',
+          form.openAPIDocUrl.trim(),
+          ['http', 'https'],
+          '请输入 OpenAPI 文档地址',
+        )
+      ) {
+        ok = false
+      }
+    } else if (form.openAPIDocContent.trim() === '') {
+      fieldErrors.openAPIDocContent = '请粘贴 OpenAPI JSON 或 YAML 文档'
+      ok = false
+    }
+    if (requiresOpenAPIAuthName(form.openAPIAuthMode) && form.openAPIAuthName.trim() === '') {
+      fieldErrors.openAPIAuthName = '请输入 Header 或 Query 名称'
+      ok = false
+    }
+    return ok
+  }
   if (form.transport === 'stdio') {
     if (form.command.trim() === '') {
       fieldErrors.command = '请输入启动命令'
@@ -678,23 +812,37 @@ function validateManualBasics(): boolean {
     return ok
   }
 
-  const url = form.url.trim()
   const wantWs = form.transport === 'websocket'
-  if (url === '') {
-    fieldErrors.url = '请输入服务地址'
-    ok = false
-  } else if (!isValidURL(url)) {
-    fieldErrors.url = '服务地址不是合法 URL'
-    ok = false
-  } else {
-    const proto = url.split(':')[0].toLowerCase()
-    const allowed = wantWs ? ['ws', 'wss'] : ['http', 'https']
-    if (!allowed.includes(proto)) {
-      fieldErrors.url = `服务地址协议必须为 ${allowed.join(' / ')}`
-      ok = false
-    }
-  }
+  ok =
+    validateURLField(
+      'url',
+      form.url.trim(),
+      wantWs ? ['ws', 'wss'] : ['http', 'https'],
+      '请输入服务地址',
+    ) && ok
   return ok
+}
+
+function validateURLField(
+  field: string,
+  value: string,
+  allowed: string[],
+  emptyMessage: string,
+): boolean {
+  if (value === '') {
+    fieldErrors[field] = emptyMessage
+    return false
+  }
+  if (!isValidURL(value)) {
+    fieldErrors[field] = '地址不是合法 URL'
+    return false
+  }
+  const proto = value.split(':')[0].toLowerCase()
+  if (!allowed.includes(proto)) {
+    fieldErrors[field] = `地址协议必须为 ${allowed.join(' / ')}`
+    return false
+  }
+  return true
 }
 
 function validateCredential(connParams: ConnParams, credential: string): boolean {
@@ -790,6 +938,12 @@ function mapServerField(field: string): string {
     command: 'command',
     args: 'args',
     url: 'url',
+    baseUrl: 'openAPIBaseUrl',
+    docUrl: 'openAPIDocUrl',
+    docContent: 'openAPIDocContent',
+    authType: 'openAPIAuthMode',
+    authName: 'openAPIAuthName',
+    authValue: 'credential',
     env: 'envText',
     cwd: 'cwd',
     headers: 'headersText',
@@ -840,9 +994,10 @@ async function handleSubmit(): Promise<void> {
 
   submitting.value = true
   try {
-    const saved = isEdit.value && props.upstream !== null
-      ? await updateUpstream(props.upstream.id, payload)
-      : await createUpstream(payload)
+    const saved =
+      isEdit.value && props.upstream !== null
+        ? await updateUpstream(props.upstream.id, payload)
+        : await createUpstream(payload)
     emit('saved', { upstream: saved, mode: isEdit.value ? 'edit' : 'create' })
   } catch (err) {
     applyServerError(err)
@@ -1108,6 +1263,84 @@ const errorClass = 'mt-1.5 text-xs text-error-500'
                   </div>
                 </template>
 
+                <template v-else-if="isOpenAPITransport">
+                  <div class="space-y-4">
+                    <div>
+                      <label for="up-openapi-base-url" :class="labelClass"
+                        >API 基础地址<span class="text-error-500">*</span></label
+                      >
+                      <input
+                        id="up-openapi-base-url"
+                        v-model="form.openAPIBaseUrl"
+                        type="text"
+                        :class="inputClass"
+                        :placeholder="currentTransport.placeholder"
+                      />
+                      <p :class="helpClass">
+                        业务接口的基础地址，例如 https://api.example.com/v1。
+                      </p>
+                      <p v-if="fieldErrors.openAPIBaseUrl" :class="errorClass">
+                        {{ fieldErrors.openAPIBaseUrl }}
+                      </p>
+                    </div>
+
+                    <div>
+                      <span :class="labelClass">OpenAPI 文档</span>
+                      <div class="mb-3 inline-flex rounded-lg bg-gray-100 p-1 dark:bg-white/[0.04]">
+                        <button
+                          type="button"
+                          class="rounded-md px-3 py-1.5 text-xs font-medium transition"
+                          :class="
+                            form.openAPIDocMode === 'url'
+                              ? 'text-brand-700 dark:text-brand-300 bg-white shadow-sm dark:bg-gray-900'
+                              : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
+                          "
+                          @click="form.openAPIDocMode = 'url'"
+                        >
+                          文档地址
+                        </button>
+                        <button
+                          type="button"
+                          class="rounded-md px-3 py-1.5 text-xs font-medium transition"
+                          :class="
+                            form.openAPIDocMode === 'content'
+                              ? 'text-brand-700 dark:text-brand-300 bg-white shadow-sm dark:bg-gray-900'
+                              : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
+                          "
+                          @click="form.openAPIDocMode = 'content'"
+                        >
+                          粘贴文档
+                        </button>
+                      </div>
+                      <input
+                        v-if="form.openAPIDocMode === 'url'"
+                        id="up-openapi-doc-url"
+                        v-model="form.openAPIDocUrl"
+                        type="text"
+                        :class="inputClass"
+                        placeholder="https://api.example.com/openapi.json"
+                      />
+                      <textarea
+                        v-else
+                        id="up-openapi-doc-content"
+                        v-model="form.openAPIDocContent"
+                        rows="8"
+                        :class="textareaClass"
+                        placeholder="粘贴 OpenAPI JSON 或 YAML"
+                      ></textarea>
+                      <p :class="helpClass">
+                        支持 OpenAPI 3.x 的 JSON/YAML，生成工具后可在工具目录预览。
+                      </p>
+                      <p v-if="fieldErrors.openAPIDocUrl" :class="errorClass">
+                        {{ fieldErrors.openAPIDocUrl }}
+                      </p>
+                      <p v-if="fieldErrors.openAPIDocContent" :class="errorClass">
+                        {{ fieldErrors.openAPIDocContent }}
+                      </p>
+                    </div>
+                  </div>
+                </template>
+
                 <template v-else>
                   <div>
                     <label for="up-url" :class="labelClass"
@@ -1145,7 +1378,28 @@ const errorClass = 'mt-1.5 text-xs text-error-500'
                   </p>
                 </div>
 
-                <div v-if="isRemoteTransport" class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div v-if="isOpenAPITransport" class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <label
+                    v-for="item in openAPIAuthOptions"
+                    :key="item.value"
+                    :class="authOptionClass(form.openAPIAuthMode === item.value)"
+                  >
+                    <input
+                      v-model="form.openAPIAuthMode"
+                      class="sr-only"
+                      type="radio"
+                      :value="item.value"
+                    />
+                    <span class="min-w-0 flex-1">
+                      <span class="block text-sm font-medium">{{ item.label }}</span>
+                      <span class="mt-1 block text-xs leading-5 text-gray-500 dark:text-gray-400">{{
+                        item.desc
+                      }}</span>
+                    </span>
+                  </label>
+                </div>
+
+                <div v-else-if="isRemoteTransport" class="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <label
                     v-for="item in remoteAuthOptions"
                     :key="item.value"
@@ -1166,7 +1420,28 @@ const errorClass = 'mt-1.5 text-xs text-error-500'
                   </label>
                 </div>
 
-                <div v-else class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <div
+                  v-if="requiresOpenAPIAuthName(form.openAPIAuthMode) && isOpenAPITransport"
+                  class="max-w-md"
+                >
+                  <label for="up-openapi-auth-name" :class="labelClass">
+                    {{ form.openAPIAuthMode === 'api-key-query' ? 'Query 参数名' : 'Header 名称' }}
+                  </label>
+                  <input
+                    id="up-openapi-auth-name"
+                    v-model="form.openAPIAuthName"
+                    type="text"
+                    :class="inputClass"
+                    :placeholder="
+                      form.openAPIAuthMode === 'api-key-query' ? 'api_key' : 'X-API-Key'
+                    "
+                  />
+                  <p v-if="fieldErrors.openAPIAuthName" :class="errorClass">
+                    {{ fieldErrors.openAPIAuthName }}
+                  </p>
+                </div>
+
+                <div v-if="!isRemoteTransport" class="grid grid-cols-1 gap-3 sm:grid-cols-3">
                   <label
                     v-for="item in stdioAuthOptions"
                     :key="item.value"
@@ -1187,7 +1462,10 @@ const errorClass = 'mt-1.5 text-xs text-error-500'
                   </label>
                 </div>
 
-                <div v-if="form.remoteAuthMode === 'api-key' && isRemoteTransport" class="max-w-md">
+                <div
+                  v-if="form.remoteAuthMode === 'api-key' && isRemoteTransport && !isOpenAPITransport"
+                  class="max-w-md"
+                >
                   <label for="up-api-header" :class="labelClass">请求头名称</label>
                   <input
                     id="up-api-header"
@@ -1363,7 +1641,9 @@ const errorClass = 'mt-1.5 text-xs text-error-500'
               <div class="rounded-lg border border-gray-200 p-3 dark:border-gray-800">
                 <label class="flex cursor-pointer items-start justify-between gap-4">
                   <span>
-                    <span class="block text-sm font-medium text-gray-800 dark:text-white/90">限流与额度</span>
+                    <span class="block text-sm font-medium text-gray-800 dark:text-white/90"
+                      >限流与额度</span
+                    >
                     <span class="mt-1 block text-xs leading-5 text-gray-500 dark:text-gray-400">
                       按该上游维度统计调用次数，用于避开第三方频率限制和周期额度。
                     </span>
@@ -1375,45 +1655,108 @@ const errorClass = 'mt-1.5 text-xs text-error-500'
                   />
                 </label>
 
-                <div v-if="form.rateLimitEnabled" class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div
+                  v-if="form.rateLimitEnabled"
+                  class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2"
+                >
                   <div>
                     <label for="up-rate-second" :class="labelClass">每秒上限</label>
-                    <input id="up-rate-second" v-model.number="form.perSecond" type="number" min="0" :class="inputClass" placeholder="不填表示不限" />
-                    <p v-if="fieldErrors.perSecond" :class="errorClass">{{ fieldErrors.perSecond }}</p>
+                    <input
+                      id="up-rate-second"
+                      v-model.number="form.perSecond"
+                      type="number"
+                      min="0"
+                      :class="inputClass"
+                      placeholder="不填表示不限"
+                    />
+                    <p v-if="fieldErrors.perSecond" :class="errorClass">
+                      {{ fieldErrors.perSecond }}
+                    </p>
                   </div>
                   <div>
                     <label for="up-rate-minute" :class="labelClass">每分钟上限</label>
-                    <input id="up-rate-minute" v-model.number="form.perMinute" type="number" min="0" :class="inputClass" placeholder="不填表示不限" />
-                    <p v-if="fieldErrors.perMinute" :class="errorClass">{{ fieldErrors.perMinute }}</p>
+                    <input
+                      id="up-rate-minute"
+                      v-model.number="form.perMinute"
+                      type="number"
+                      min="0"
+                      :class="inputClass"
+                      placeholder="不填表示不限"
+                    />
+                    <p v-if="fieldErrors.perMinute" :class="errorClass">
+                      {{ fieldErrors.perMinute }}
+                    </p>
                   </div>
                   <div>
                     <label for="up-rate-hour" :class="labelClass">每小时上限</label>
-                    <input id="up-rate-hour" v-model.number="form.perHour" type="number" min="0" :class="inputClass" placeholder="不填表示不限" />
+                    <input
+                      id="up-rate-hour"
+                      v-model.number="form.perHour"
+                      type="number"
+                      min="0"
+                      :class="inputClass"
+                      placeholder="不填表示不限"
+                    />
                     <p v-if="fieldErrors.perHour" :class="errorClass">{{ fieldErrors.perHour }}</p>
                   </div>
                   <div>
                     <label for="up-rate-day" :class="labelClass">每日额度</label>
-                    <input id="up-rate-day" v-model.number="form.perDay" type="number" min="0" :class="inputClass" placeholder="不填表示不限" />
+                    <input
+                      id="up-rate-day"
+                      v-model.number="form.perDay"
+                      type="number"
+                      min="0"
+                      :class="inputClass"
+                      placeholder="不填表示不限"
+                    />
                     <p v-if="fieldErrors.perDay" :class="errorClass">{{ fieldErrors.perDay }}</p>
                   </div>
                   <div>
                     <label for="up-rate-week" :class="labelClass">每周额度</label>
-                    <input id="up-rate-week" v-model.number="form.perWeek" type="number" min="0" :class="inputClass" placeholder="不填表示不限" />
+                    <input
+                      id="up-rate-week"
+                      v-model.number="form.perWeek"
+                      type="number"
+                      min="0"
+                      :class="inputClass"
+                      placeholder="不填表示不限"
+                    />
                     <p v-if="fieldErrors.perWeek" :class="errorClass">{{ fieldErrors.perWeek }}</p>
                   </div>
                   <div>
                     <label for="up-rate-month" :class="labelClass">每月额度</label>
-                    <input id="up-rate-month" v-model.number="form.perMonth" type="number" min="0" :class="inputClass" placeholder="不填表示不限" />
-                    <p v-if="fieldErrors.perMonth" :class="errorClass">{{ fieldErrors.perMonth }}</p>
+                    <input
+                      id="up-rate-month"
+                      v-model.number="form.perMonth"
+                      type="number"
+                      min="0"
+                      :class="inputClass"
+                      placeholder="不填表示不限"
+                    />
+                    <p v-if="fieldErrors.perMonth" :class="errorClass">
+                      {{ fieldErrors.perMonth }}
+                    </p>
                   </div>
                   <div class="sm:col-span-2">
                     <label for="up-rate-timezone" :class="labelClass">额度重置时区</label>
-                    <input id="up-rate-timezone" v-model="form.rateLimitTimezone" type="text" :class="inputClass" placeholder="UTC" />
-                    <p :class="helpClass">用于每日、每周、每月额度窗口，填写 IANA 时区，例如 UTC 或 Asia/Shanghai。</p>
-                    <p v-if="fieldErrors.rateLimitTimezone" :class="errorClass">{{ fieldErrors.rateLimitTimezone }}</p>
+                    <input
+                      id="up-rate-timezone"
+                      v-model="form.rateLimitTimezone"
+                      type="text"
+                      :class="inputClass"
+                      placeholder="UTC"
+                    />
+                    <p :class="helpClass">
+                      用于每日、每周、每月额度窗口，填写 IANA 时区，例如 UTC 或 Asia/Shanghai。
+                    </p>
+                    <p v-if="fieldErrors.rateLimitTimezone" :class="errorClass">
+                      {{ fieldErrors.rateLimitTimezone }}
+                    </p>
                   </div>
                 </div>
-                <p v-if="fieldErrors.rateLimits" :class="errorClass">{{ fieldErrors.rateLimits }}</p>
+                <p v-if="fieldErrors.rateLimits" :class="errorClass">
+                  {{ fieldErrors.rateLimits }}
+                </p>
               </div>
             </section>
 
@@ -1473,21 +1816,20 @@ const errorClass = 'mt-1.5 text-xs text-error-500'
 
                   <div
                     v-if="testDiagnostic !== null"
-                    class="mt-3 rounded-lg border border-error-200/80 bg-white/70 p-3 dark:border-error-500/20 dark:bg-white/[0.03]"
+                    class="border-error-200/80 dark:border-error-500/20 mt-3 rounded-lg border bg-white/70 p-3 dark:bg-white/[0.03]"
                   >
-                    <p class="text-sm font-medium text-error-700 dark:text-error-300">
+                    <p class="text-error-700 dark:text-error-300 text-sm font-medium">
                       {{ testDiagnostic.title }}
                     </p>
-                    <p class="mt-1 text-xs leading-5 text-error-700/80 dark:text-error-300/80">
+                    <p class="text-error-700/80 dark:text-error-300/80 mt-1 text-xs leading-5">
                       {{ testDiagnostic.description }}
                     </p>
                     <ul class="mt-2 space-y-1 text-xs leading-5 text-gray-600 dark:text-gray-300">
-                      <li
-                        v-for="action in testDiagnostic.actions"
-                        :key="action"
-                        class="flex gap-2"
-                      >
-                        <span class="mt-2 h-1 w-1 shrink-0 rounded-full bg-error-400" aria-hidden="true"></span>
+                      <li v-for="action in testDiagnostic.actions" :key="action" class="flex gap-2">
+                        <span
+                          class="bg-error-400 mt-2 h-1 w-1 shrink-0 rounded-full"
+                          aria-hidden="true"
+                        ></span>
                         <span>{{ action }}</span>
                       </li>
                     </ul>
@@ -1500,7 +1842,7 @@ const errorClass = 'mt-1.5 text-xs text-error-500'
                     <div
                       v-for="tool in testResult.tools"
                       :key="tool.originalName || tool.name"
-                      class="rounded-lg border border-success-200/70 bg-white/70 p-3 dark:border-success-500/20 dark:bg-white/[0.03]"
+                      class="border-success-200/70 dark:border-success-500/20 rounded-lg border bg-white/70 p-3 dark:bg-white/[0.03]"
                     >
                       <p class="truncate text-sm font-medium text-gray-800 dark:text-white/90">
                         {{ tool.name || tool.originalName }}

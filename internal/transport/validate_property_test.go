@@ -43,6 +43,7 @@ func genTransport() *rapid.Generator[domain.TransportType] {
 			domain.TransportSSE,
 			domain.TransportStreamableHTTP,
 			domain.TransportWebSocket,
+			domain.TransportOpenAPI,
 		}),
 		rapid.SampledFrom([]domain.TransportType{
 			"", "STDIO", "Sse", "http", "grpc", "tcp", "ws", "unknown", "stdio ",
@@ -170,7 +171,8 @@ func transportSupported(tp domain.TransportType) bool {
 	case domain.TransportStdio,
 		domain.TransportSSE,
 		domain.TransportStreamableHTTP,
-		domain.TransportWebSocket:
+		domain.TransportWebSocket,
+		domain.TransportOpenAPI:
 		return true
 	default:
 		return false
@@ -253,9 +255,67 @@ func connParamsValidRef(cfg domain.UpstreamConfig) bool {
 		return urlValidRef(cfg.ConnParams, "http", "https")
 	case domain.TransportWebSocket:
 		return urlValidRef(cfg.ConnParams, "ws", "wss")
+	case domain.TransportOpenAPI:
+		return openAPIValidRef(cfg.ConnParams)
 	default:
 		return false
 	}
+}
+
+func openAPIValidRef(params map[string]any) bool {
+	if !urlValidRefKey(params, ParamOpenAPIBaseURL, "http", "https") {
+		return false
+	}
+	docURL, _ := params[ParamOpenAPIDocURL].(string)
+	docContent, _ := params[ParamOpenAPIDocContent].(string)
+	if strings.TrimSpace(docURL) == "" && strings.TrimSpace(docContent) == "" {
+		return false
+	}
+	if strings.TrimSpace(docURL) != "" && !urlValidRefKey(params, ParamOpenAPIDocURL, "http", "https") {
+		return false
+	}
+	if raw, ok := params[ParamOpenAPIAuthType]; ok && raw != nil {
+		authType, ok := raw.(string)
+		if !ok {
+			return false
+		}
+		switch strings.ToLower(strings.TrimSpace(authType)) {
+		case "", "none", "bearer", "basic":
+			return true
+		case "api-key-header", "api-key-query", "custom-header":
+			name, ok := params[ParamOpenAPIAuthName].(string)
+			return ok && strings.TrimSpace(name) != ""
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func urlValidRefKey(params map[string]any, key string, allowed ...string) bool {
+	raw, ok := params[key]
+	if !ok || raw == nil {
+		return false
+	}
+	s, ok := raw.(string)
+	if !ok || strings.TrimSpace(s) == "" {
+		return false
+	}
+	u, err := url.Parse(s)
+	if err != nil {
+		return false
+	}
+	schemeOK := false
+	for _, a := range allowed {
+		if u.Scheme == a {
+			schemeOK = true
+			break
+		}
+	}
+	if !schemeOK {
+		return false
+	}
+	return u.Host != ""
 }
 
 // assertConnParamsResult 断言 ValidateConnParams 的返回值与期望一致：

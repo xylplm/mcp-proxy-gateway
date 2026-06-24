@@ -74,6 +74,8 @@ type connParams struct {
 	url string
 	// headers 为远程传输建立连接时携带的自定义请求头。
 	headers map[string]string
+	// openapi 为 OpenAPI 虚拟上游参数。
+	openapi openAPIParams
 }
 
 // parseConnParams 在校验通过的前提下从配置中提取连接参数。
@@ -110,8 +112,46 @@ func parseConnParams(cfg domain.UpstreamConfig) (connParams, error) {
 		if headers := toStringMap(cfg.ConnParams[ParamHeaders]); len(headers) > 0 {
 			p.headers = headers
 		}
+	case domain.TransportOpenAPI:
+		p.openapi = parseOpenAPIParams(cfg)
 	}
 	return p, nil
+}
+
+type openAPIParams struct {
+	baseURL    string
+	docURL     string
+	docContent string
+	authType   string
+	authName   string
+	authValue  string
+	headers    map[string]string
+}
+
+func parseOpenAPIParams(cfg domain.UpstreamConfig) openAPIParams {
+	params := openAPIParams{
+		authType: "none",
+		headers:  toStringMap(cfg.ConnParams[ParamHeaders]),
+	}
+	if s, ok := cfg.ConnParams[ParamOpenAPIBaseURL].(string); ok {
+		params.baseURL = s
+	}
+	if s, ok := cfg.ConnParams[ParamOpenAPIDocURL].(string); ok {
+		params.docURL = s
+	}
+	if s, ok := cfg.ConnParams[ParamOpenAPIDocContent].(string); ok {
+		params.docContent = s
+	}
+	if s, ok := cfg.ConnParams[ParamOpenAPIAuthType].(string); ok && strings.TrimSpace(s) != "" {
+		params.authType = strings.ToLower(strings.TrimSpace(s))
+	}
+	if s, ok := cfg.ConnParams[ParamOpenAPIAuthName].(string); ok {
+		params.authName = strings.TrimSpace(s)
+	}
+	if s, ok := cfg.ConnParams[ParamOpenAPIAuthValue].(string); ok {
+		params.authValue = s
+	}
+	return params
 }
 
 // toStringSlice 将连接参数中的 args 归一化为 []string，兼容 []string 与 []any 两种来源。

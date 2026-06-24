@@ -23,6 +23,18 @@ const (
 	ParamURL = "url"
 	// ParamHeaders 为 SSE / Streamable-HTTP / WebSocket 传输的请求头映射，可选。
 	ParamHeaders = "headers"
+	// ParamOpenAPIBaseURL 为 OpenAPI 虚拟上游的业务 API 基础地址，必填。
+	ParamOpenAPIBaseURL = "baseUrl"
+	// ParamOpenAPIDocURL 为 OpenAPI 文档地址；与 docContent 二选一。
+	ParamOpenAPIDocURL = "docUrl"
+	// ParamOpenAPIDocContent 为 OpenAPI 文档内容；与 docUrl 二选一。
+	ParamOpenAPIDocContent = "docContent"
+	// ParamOpenAPIAuthType 为 OpenAPI 出站请求鉴权方式，可选。
+	ParamOpenAPIAuthType = "authType"
+	// ParamOpenAPIAuthName 为 API Key 或自定义 Header/Query 名称，可选。
+	ParamOpenAPIAuthName = "authName"
+	// ParamOpenAPIAuthValue 为 OpenAPI 鉴权值，可选，支持 ${credential}。
+	ParamOpenAPIAuthValue = "authValue"
 )
 
 // 各传输类型的必填连接参数与格式约定（Req 4.5）：
@@ -30,6 +42,7 @@ const (
 //   - sse：url（http:// 或 https:// 合法 URL）；headers 可选。
 //   - streamable-http：url（http:// 或 https:// 合法 URL）；headers 可选。
 //   - websocket：url（ws:// 或 wss:// 合法 URL）；headers 可选。
+//   - openapi：baseUrl（http:// 或 https:// 合法 URL）；docUrl 或 docContent 二选一。
 //
 // 不在上述集合内的传输类型视为不受支持（Req 4.6）。
 
@@ -53,10 +66,15 @@ func ValidateConnParams(cfg domain.UpstreamConfig) error {
 		// WebSocket 要求 ws/wss 合法 URL。
 		validateURLParam(cfg.ConnParams, fields, "ws", "wss")
 		validateOptionalStringMapParam(cfg.ConnParams, ParamHeaders, fields)
+	case domain.TransportOpenAPI:
+		validateURLParamKey(cfg.ConnParams, ParamOpenAPIBaseURL, fields, "http", "https")
+		validateOpenAPIDocumentParams(cfg.ConnParams, fields)
+		validateOpenAPIAuthParams(cfg.ConnParams, fields)
+		validateOptionalStringMapParam(cfg.ConnParams, ParamHeaders, fields)
 	default:
 		// 传输类型不属于受支持集合，返回指示「传输类型不受支持」的校验错误（Req 4.6）。
 		fields["transport"] = fmt.Sprintf(
-			"传输类型 %q 不受支持（仅支持 stdio、sse、streamable-http、websocket）",
+			"传输类型 %q 不受支持（仅支持 stdio、sse、streamable-http、websocket、openapi）",
 			cfg.Transport,
 		)
 	}
@@ -94,14 +112,18 @@ func validateStdioParams(params map[string]any, fields map[string]string) {
 
 // validateURLParam 校验名为 url 的必填连接参数为合法 URL，且其协议位于 allowedSchemes 之内。
 func validateURLParam(params map[string]any, fields map[string]string, allowedSchemes ...string) {
-	raw, ok := requireStringParam(params, ParamURL, fields)
+	validateURLParamKey(params, ParamURL, fields, allowedSchemes...)
+}
+
+func validateURLParamKey(params map[string]any, key string, fields map[string]string, allowedSchemes ...string) {
+	raw, ok := requireStringParam(params, key, fields)
 	if !ok {
 		return
 	}
 
 	u, err := url.Parse(raw)
 	if err != nil {
-		fields[fieldKey(ParamURL)] = fmt.Sprintf("连接参数 %q 不是合法 URL：%v", ParamURL, err)
+		fields[fieldKey(key)] = fmt.Sprintf("连接参数 %q 不是合法 URL：%v", key, err)
 		return
 	}
 
@@ -113,17 +135,49 @@ func validateURLParam(params map[string]any, fields map[string]string, allowedSc
 		}
 	}
 	if !schemeOK {
-		fields[fieldKey(ParamURL)] = fmt.Sprintf(
+		fields[fieldKey(key)] = fmt.Sprintf(
 			"连接参数 %q 协议必须为 %s",
-			ParamURL,
+			key,
 			strings.Join(schemeSuffixes(allowedSchemes), " 或 "),
 		)
 		return
 	}
 
 	if u.Host == "" {
-		fields[fieldKey(ParamURL)] = fmt.Sprintf("连接参数 %q 缺少主机名", ParamURL)
+		fields[fieldKey(key)] = fmt.Sprintf("连接参数 %q 缺少主机名", key)
 	}
+}
+
+func validateOpenAPIDocumentParams(params map[string]any, fields map[string]string) {
+	docURL, hasDocURL := optionalOpenAPIStringParam(params, ParamOpenAPIDocURL, fields)
+	docContent, _ := optionalOpenAPIStringParam(params, ParamOpenAPIDocContent, fields)
+	if hasDocURL && strings.TrimSpace(docURL) != "" {
+		validateURLParamKey(params, ParamOpenAPIDocURL, fields, "http", "https")
+	}
+	if strings.TrimSpace(docURL) == "" && strings.TrimSpace(docContent) == "" {
+		fields[fieldKey(ParamOpenAPIDocURL)] = "OpenAPI 文档地址或文档内容至少填写一项"
+	}
+}
+
+func validateOpenAPIAuthParams(params map[string]any, fields map[string]string) {
+	authType, hasAuthType := optionalOpenAPIStringParam(params, ParamOpenAPIAuthType, fields)
+	normalizedType := strings.ToLower(strings.TrimSpace(authType))
+	if !hasAuthType || normalizedType == "" {
+		return
+	}
+	switch normalizedType {
+	case "none", "bearer", "basic", "api-key-header", "api-key-query", "custom-header":
+	default:
+		fields[fieldKey(ParamOpenAPIAuthType)] = "鉴权方式仅支持 none、bearer、basic、api-key-header、api-key-query、custom-header"
+		return
+	}
+	if normalizedType == "api-key-header" || normalizedType == "api-key-query" || normalizedType == "custom-header" {
+		name, ok := optionalOpenAPIStringParam(params, ParamOpenAPIAuthName, fields)
+		if !ok || strings.TrimSpace(name) == "" {
+			fields[fieldKey(ParamOpenAPIAuthName)] = "该鉴权方式需要填写 Header 或 Query 名称"
+		}
+	}
+	optionalOpenAPIStringParam(params, ParamOpenAPIAuthValue, fields)
 }
 
 // requireStringParam 提取必填的字符串连接参数；缺失、类型不符或空白时向 fields 写入字段级错误并返回 false。
@@ -147,18 +201,36 @@ func requireStringParam(params map[string]any, key string, fields map[string]str
 
 // validateOptionalStringParam 校验可选字符串连接参数；提供时必须是非空字符串。
 func validateOptionalStringParam(params map[string]any, key string, fields map[string]string) {
+	optionalStringParam(params, key, fields)
+}
+
+func optionalStringParam(params map[string]any, key string, fields map[string]string) (string, bool) {
 	raw, ok := params[key]
 	if !ok || raw == nil {
-		return
+		return "", false
 	}
 	s, ok := raw.(string)
 	if !ok {
 		fields[fieldKey(key)] = fmt.Sprintf("连接参数 %q 必须为字符串", key)
-		return
+		return "", true
 	}
 	if strings.TrimSpace(s) == "" {
 		fields[fieldKey(key)] = fmt.Sprintf("连接参数 %q 不能为空", key)
 	}
+	return s, true
+}
+
+func optionalOpenAPIStringParam(params map[string]any, key string, fields map[string]string) (string, bool) {
+	raw, ok := params[key]
+	if !ok || raw == nil {
+		return "", false
+	}
+	s, ok := raw.(string)
+	if !ok {
+		fields[fieldKey(key)] = fmt.Sprintf("连接参数 %q 必须为字符串", key)
+		return "", true
+	}
+	return s, true
 }
 
 // validateOptionalStringMapParam 校验可选字符串映射连接参数；提供时键和值均需为字符串。
