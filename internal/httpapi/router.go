@@ -262,6 +262,8 @@ type StatsService interface {
 	TopToolErrors(ctx context.Context, start, end time.Time, limit int) ([]store.ToolErrorRank, error)
 	// APIKeyUsageProfile 返回单个 API Key 在闭区间内的使用画像。
 	APIKeyUsageProfile(ctx context.Context, apiKeyID string, start, end time.Time, limit int) (store.APIKeyUsageProfile, error)
+	// Health 返回最近窗口内的调用健康概览。
+	Health(ctx context.Context, window string, now time.Time) (store.CallHealth, error)
 	// ListRecords 按最新时间倒序分页返回调用记录。
 	ListRecords(ctx context.Context, limit int, afterID int64, afterAt time.Time) ([]store.CallRecordView, error)
 	// GetRecord 按 ID 返回单条调用记录详情。

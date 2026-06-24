@@ -27,6 +27,7 @@ const (
 	maxRecentFailureJSONBytes   = 4096
 	maxRecentErrorMessageRunes  = 1000
 	defaultRecentRecordsListCap = 100
+	defaultRecentHealthCap      = 5000
 )
 
 // RedisRecentRecordStore 保存最近 24 小时调用记录，供调用记录页面查询。
@@ -42,6 +43,7 @@ type RedisRecentRecordStore struct {
 var _ interface {
 	AppendRecords(context.Context, []store.CallStatRecord) error
 	ListRecords(context.Context, int, int64, time.Time) ([]store.CallRecordView, error)
+	HealthRecords(context.Context, time.Time, time.Time, int) ([]store.CallRecordView, error)
 	GetRecord(context.Context, int64) (store.CallRecordView, error)
 	ClearRecordsBefore(context.Context, time.Time) (int64, error)
 } = (*RedisRecentRecordStore)(nil)
@@ -87,6 +89,29 @@ func (s *RedisRecentRecordStore) ListRecords(ctx context.Context, limit int, aft
 	}
 	limit = normalizeRecordLimit(limit)
 	zs, err := s.recentCandidates(ctx, limit, afterID, afterAt)
+	if err != nil {
+		return nil, err
+	}
+	return s.loadViews(ctx, zs)
+}
+
+// HealthRecords 返回指定时间窗口内的最近调用记录，供健康看板聚合使用。
+func (s *RedisRecentRecordStore) HealthRecords(ctx context.Context, since, until time.Time, limit int) ([]store.CallRecordView, error) {
+	if s == nil || s.rdb == nil {
+		return []store.CallRecordView{}, nil
+	}
+	if until.IsZero() {
+		until = time.Now().UTC()
+	}
+	if since.IsZero() {
+		since = until.Add(-time.Hour)
+	}
+	limit = normalizeHealthRecordLimit(limit)
+	zs, err := s.rdb.ZRevRangeByScoreWithScores(ctx, recentRecordsZSetKey, &redis.ZRangeBy{
+		Min:   strconv.FormatInt(since.UTC().UnixMilli(), 10),
+		Max:   strconv.FormatInt(until.UTC().UnixMilli(), 10),
+		Count: int64(limit),
+	}).Result()
 	if err != nil {
 		return nil, err
 	}
@@ -358,6 +383,13 @@ func normalizeRecordLimit(limit int) int {
 	}
 	if limit > defaultRecentRecordsListCap {
 		return defaultRecentRecordsListCap
+	}
+	return limit
+}
+
+func normalizeHealthRecordLimit(limit int) int {
+	if limit <= 0 || limit > defaultRecentHealthCap {
+		return defaultRecentHealthCap
 	}
 	return limit
 }

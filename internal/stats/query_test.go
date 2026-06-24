@@ -31,6 +31,7 @@ type fakeQuerier struct {
 	daily          []store.DailyCount
 	topErrors      []store.ToolErrorRank
 	apiKeyProfile  store.APIKeyUsageProfile
+	healthRecords  []store.CallRecordView
 
 	upstreamErr error
 	apiKeyErr   error
@@ -46,6 +47,9 @@ type fakeQuerier struct {
 	lastTZ       string
 	lastTopLimit int
 	lastAPIKeyID string
+	lastHealthN  int
+	lastSince    time.Time
+	lastUntil    time.Time
 	clearCutoff  time.Time
 }
 
@@ -103,6 +107,11 @@ func (q *fakeQuerier) APIKeyUsageProfile(_ context.Context, apiKeyID string, sta
 		return store.APIKeyUsageProfile{}, q.profileErr
 	}
 	return q.apiKeyProfile, nil
+}
+
+func (q *fakeQuerier) HealthRecords(_ context.Context, since, until time.Time, limit int) ([]store.CallRecordView, error) {
+	q.lastSince, q.lastUntil, q.lastHealthN = since, until, limit
+	return q.healthRecords, nil
 }
 
 func (q *fakeQuerier) ListRecords(_ context.Context, _ int, _ int64, _ time.Time) ([]store.CallRecordView, error) {
@@ -361,6 +370,44 @@ func TestAPIKeyUsageProfilePassesThroughAndResolvesLimit(t *testing.T) {
 	}
 	if repo.lastTopLimit != 12 {
 		t.Fatalf("画像工具排行应复用配置默认条数，实际 %d", repo.lastTopLimit)
+	}
+}
+
+func TestHealthAggregatesRecentRecords(t *testing.T) {
+	now := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC)
+	repo := &fakeQuerier{
+		healthRecords: []store.CallRecordView{
+			{UpstreamID: "up-a", UpstreamName: "A", OriginalName: "search", ExposedName: "search", CalledAt: now.Add(-10 * time.Minute), LatencyMS: 100, Success: true, Status: store.CallStatusSuccess},
+			{UpstreamID: "up-a", UpstreamName: "A", OriginalName: "search", ExposedName: "search", CalledAt: now.Add(-9 * time.Minute), LatencyMS: 900, Success: false, Status: store.CallStatusUpstreamError, ErrorMessage: "timeout"},
+			{UpstreamID: "up-b", UpstreamName: "B", OriginalName: "slow", ExposedName: "slow", CalledAt: now.Add(-8 * time.Minute), LatencyMS: 1200, Success: true, Status: store.CallStatusSuccess},
+		},
+	}
+	svc := newTestQueryService(t, repo, 10)
+
+	health, err := svc.Health(context.Background(), "1h", now)
+	if err != nil {
+		t.Fatalf("Health 不应返回错误：%v", err)
+	}
+	if health.TotalCalls != 3 || health.SuccessCalls != 2 || health.FailureCalls != 1 {
+		t.Fatalf("健康概览聚合错误：%+v", health)
+	}
+	if health.SuccessRate < 66 || health.SuccessRate > 67 {
+		t.Fatalf("成功率不符合预期：%v", health.SuccessRate)
+	}
+	if health.P50LatencyMS != 900 || health.P95LatencyMS != 1200 {
+		t.Fatalf("延迟分位不符合预期：p50=%v p95=%v", health.P50LatencyMS, health.P95LatencyMS)
+	}
+	if len(health.TopErrorTools) != 1 || health.TopErrorTools[0].OriginalName != "search" || health.TopErrorTools[0].LastError != "timeout" {
+		t.Fatalf("错误工具排行不符合预期：%+v", health.TopErrorTools)
+	}
+	if len(health.TopSlowTools) == 0 || health.TopSlowTools[0].OriginalName != "slow" {
+		t.Fatalf("慢工具排行不符合预期：%+v", health.TopSlowTools)
+	}
+	if len(health.TopUpstreams) != 1 || health.TopUpstreams[0].UpstreamID != "up-a" {
+		t.Fatalf("失败上游排行不符合预期：%+v", health.TopUpstreams)
+	}
+	if repo.lastHealthN != healthRecentLimit || !repo.lastUntil.Equal(now) || repo.lastSince != now.Add(-time.Hour) {
+		t.Fatalf("健康窗口参数未透传：limit=%d since=%v until=%v", repo.lastHealthN, repo.lastSince, repo.lastUntil)
 	}
 }
 

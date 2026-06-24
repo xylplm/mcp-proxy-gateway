@@ -2,6 +2,7 @@ package stats
 
 import (
 	"context"
+	"sort"
 	"time"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/config"
@@ -16,7 +17,9 @@ const (
 	// maxTopLimit 为工具排行返回条数上界。
 	maxTopLimit = 100
 	// defaultTopLimit 为工具排行返回条数默认值，用于配置缺失或越界时回退。
-	defaultTopLimit = 10
+	defaultTopLimit   = 10
+	healthRecentLimit = 5000
+	healthTopLimit    = 5
 )
 
 // StatQuerier 是统计查询服务依赖的仓储窄接口（Req 16.2、16.3、16.4）。
@@ -39,6 +42,7 @@ type StatQuerier interface {
 	// TopToolErrors 返回 [start, end] 闭区间内按失败次数降序排列的工具错误排行。
 	TopToolErrors(ctx context.Context, start, end time.Time, limit int) ([]store.ToolErrorRank, error)
 	APIKeyUsageProfile(ctx context.Context, apiKeyID string, start, end time.Time, limit int) (store.APIKeyUsageProfile, error)
+	HealthRecords(ctx context.Context, since, until time.Time, limit int) ([]store.CallRecordView, error)
 	// ListRecords 按最新时间倒序分页返回调用记录。
 	ListRecords(ctx context.Context, limit int, afterID int64, afterAt time.Time) ([]store.CallRecordView, error)
 	// GetRecord 按 ID 返回单条调用记录详情。
@@ -154,6 +158,28 @@ func (s *QueryService) APIKeyUsageProfile(ctx context.Context, apiKeyID string, 
 	return s.repo.APIKeyUsageProfile(ctx, apiKeyID, start, end, s.resolveTopLimit(limit))
 }
 
+func (s *QueryService) Health(ctx context.Context, window string, now time.Time) (store.CallHealth, error) {
+	until := now.UTC()
+	if until.IsZero() {
+		until = time.Now().UTC()
+	}
+	duration, normalizedWindow := healthWindowDuration(window)
+	since := until.Add(-duration)
+	records, err := s.repo.HealthRecords(ctx, since, until, healthRecentLimit)
+	if err != nil {
+		return store.CallHealth{}, err
+	}
+	filtered := make([]store.CallRecordView, 0, len(records))
+	for _, rec := range records {
+		calledAt := rec.CalledAt.UTC()
+		if calledAt.IsZero() || calledAt.Before(since) || calledAt.After(until) {
+			continue
+		}
+		filtered = append(filtered, rec)
+	}
+	return buildCallHealth(normalizedWindow, since, until, filtered), nil
+}
+
 // ListRecords 按最新时间倒序分页返回调用记录；afterID/afterAt 用于实时页面增量拉取。
 func (s *QueryService) ListRecords(ctx context.Context, limit int, afterID int64, afterAt time.Time) ([]store.CallRecordView, error) {
 	return s.repo.ListRecords(ctx, limit, afterID, afterAt)
@@ -195,4 +221,223 @@ func (s *QueryService) defaultTopLimit() int {
 		return defaultTopLimit
 	}
 	return d
+}
+
+func healthWindowDuration(window string) (time.Duration, string) {
+	if window == "24h" {
+		return 24 * time.Hour, "24h"
+	}
+	return time.Hour, "1h"
+}
+
+func buildCallHealth(window string, since, until time.Time, records []store.CallRecordView) store.CallHealth {
+	out := store.CallHealth{
+		Window:        window,
+		Since:         since,
+		Until:         until,
+		TopErrorTools: []store.CallHealthToolRank{},
+		TopSlowTools:  []store.CallHealthToolRank{},
+		TopUpstreams:  []store.CallHealthUpstreamRank{},
+	}
+	latencies := make([]int, 0, len(records))
+	toolGroups := make(map[string]*healthToolAggregate)
+	upstreamGroups := make(map[string]*healthUpstreamAggregate)
+	for _, rec := range records {
+		out.TotalCalls++
+		if rec.Success {
+			out.SuccessCalls++
+		} else {
+			out.FailureCalls++
+		}
+		latency := rec.LatencyMS
+		if latency < 0 {
+			latency = 0
+		}
+		latencies = append(latencies, latency)
+		toolKey := rec.UpstreamID + "\x00" + rec.OriginalName
+		tool := toolGroups[toolKey]
+		if tool == nil {
+			tool = &healthToolAggregate{
+				UpstreamID:   rec.UpstreamID,
+				UpstreamName: rec.UpstreamName,
+				OriginalName: rec.OriginalName,
+				ExposedName:  rec.ExposedName,
+			}
+			toolGroups[toolKey] = tool
+		}
+		tool.Count++
+		tool.Latencies = append(tool.Latencies, latency)
+		if !rec.Success {
+			tool.FailureCalls++
+			if rec.ErrorMessage != "" {
+				tool.LastError = rec.ErrorMessage
+			}
+		}
+
+		upstreamKey := rec.UpstreamID
+		upstream := upstreamGroups[upstreamKey]
+		if upstream == nil {
+			upstream = &healthUpstreamAggregate{UpstreamID: rec.UpstreamID, UpstreamName: rec.UpstreamName}
+			upstreamGroups[upstreamKey] = upstream
+		}
+		upstream.TotalCalls++
+		if !rec.Success {
+			upstream.FailureCalls++
+			if rec.ErrorMessage != "" {
+				upstream.LastError = rec.ErrorMessage
+			}
+		}
+	}
+	if out.TotalCalls > 0 {
+		out.SuccessRate = float64(out.SuccessCalls) / float64(out.TotalCalls) * 100
+	}
+	out.P50LatencyMS = percentileLatency(latencies, 0.50)
+	out.P95LatencyMS = percentileLatency(latencies, 0.95)
+
+	tools := make([]store.CallHealthToolRank, 0, len(toolGroups))
+	for _, group := range toolGroups {
+		tools = append(tools, group.rank())
+	}
+	out.TopSlowTools = topSlowTools(tools, healthTopLimit)
+	out.TopErrorTools = topErrorTools(tools, healthTopLimit)
+
+	upstreams := make([]store.CallHealthUpstreamRank, 0, len(upstreamGroups))
+	for _, group := range upstreamGroups {
+		upstreams = append(upstreams, group.rank())
+	}
+	out.TopUpstreams = topFailingUpstreams(upstreams, healthTopLimit)
+	return out
+}
+
+type healthToolAggregate struct {
+	UpstreamID   string
+	UpstreamName string
+	OriginalName string
+	ExposedName  string
+	Count        int64
+	FailureCalls int64
+	Latencies    []int
+	LastError    string
+}
+
+func (g *healthToolAggregate) rank() store.CallHealthToolRank {
+	sum := 0
+	for _, latency := range g.Latencies {
+		sum += latency
+	}
+	avg := 0.0
+	if len(g.Latencies) > 0 {
+		avg = float64(sum) / float64(len(g.Latencies))
+	}
+	return store.CallHealthToolRank{
+		UpstreamID:   g.UpstreamID,
+		UpstreamName: g.UpstreamName,
+		OriginalName: g.OriginalName,
+		ExposedName:  g.ExposedName,
+		Count:        g.Count,
+		FailureCalls: g.FailureCalls,
+		AvgLatencyMS: avg,
+		P95LatencyMS: percentileLatency(g.Latencies, 0.95),
+		LastError:    g.LastError,
+	}
+}
+
+type healthUpstreamAggregate struct {
+	UpstreamID   string
+	UpstreamName string
+	TotalCalls   int64
+	FailureCalls int64
+	LastError    string
+}
+
+func (g *healthUpstreamAggregate) rank() store.CallHealthUpstreamRank {
+	successRate := 0.0
+	if g.TotalCalls > 0 {
+		successRate = float64(g.TotalCalls-g.FailureCalls) / float64(g.TotalCalls) * 100
+	}
+	return store.CallHealthUpstreamRank{
+		UpstreamID:   g.UpstreamID,
+		UpstreamName: g.UpstreamName,
+		TotalCalls:   g.TotalCalls,
+		FailureCalls: g.FailureCalls,
+		SuccessRate:  successRate,
+		LastError:    g.LastError,
+	}
+}
+
+func percentileLatency(values []int, p float64) float64 {
+	if len(values) == 0 {
+		return 0
+	}
+	sorted := append([]int(nil), values...)
+	sort.Ints(sorted)
+	idx := int(float64(len(sorted)-1)*p + 0.5)
+	if idx < 0 {
+		idx = 0
+	}
+	if idx >= len(sorted) {
+		idx = len(sorted) - 1
+	}
+	return float64(sorted[idx])
+}
+
+func topSlowTools(items []store.CallHealthToolRank, limit int) []store.CallHealthToolRank {
+	sort.SliceStable(items, func(i, j int) bool {
+		if items[i].P95LatencyMS != items[j].P95LatencyMS {
+			return items[i].P95LatencyMS > items[j].P95LatencyMS
+		}
+		if items[i].AvgLatencyMS != items[j].AvgLatencyMS {
+			return items[i].AvgLatencyMS > items[j].AvgLatencyMS
+		}
+		return items[i].OriginalName < items[j].OriginalName
+	})
+	return limitedToolRanks(items, limit)
+}
+
+func topErrorTools(items []store.CallHealthToolRank, limit int) []store.CallHealthToolRank {
+	filtered := make([]store.CallHealthToolRank, 0, len(items))
+	for _, item := range items {
+		if item.FailureCalls > 0 {
+			filtered = append(filtered, item)
+		}
+	}
+	sort.SliceStable(filtered, func(i, j int) bool {
+		if filtered[i].FailureCalls != filtered[j].FailureCalls {
+			return filtered[i].FailureCalls > filtered[j].FailureCalls
+		}
+		if filtered[i].Count != filtered[j].Count {
+			return filtered[i].Count > filtered[j].Count
+		}
+		return filtered[i].OriginalName < filtered[j].OriginalName
+	})
+	return limitedToolRanks(filtered, limit)
+}
+
+func topFailingUpstreams(items []store.CallHealthUpstreamRank, limit int) []store.CallHealthUpstreamRank {
+	filtered := make([]store.CallHealthUpstreamRank, 0, len(items))
+	for _, item := range items {
+		if item.FailureCalls > 0 {
+			filtered = append(filtered, item)
+		}
+	}
+	sort.SliceStable(filtered, func(i, j int) bool {
+		if filtered[i].FailureCalls != filtered[j].FailureCalls {
+			return filtered[i].FailureCalls > filtered[j].FailureCalls
+		}
+		if filtered[i].SuccessRate != filtered[j].SuccessRate {
+			return filtered[i].SuccessRate < filtered[j].SuccessRate
+		}
+		return filtered[i].UpstreamName < filtered[j].UpstreamName
+	})
+	if len(filtered) > limit {
+		return filtered[:limit]
+	}
+	return filtered
+}
+
+func limitedToolRanks(items []store.CallHealthToolRank, limit int) []store.CallHealthToolRank {
+	if len(items) > limit {
+		return items[:limit]
+	}
+	return items
 }

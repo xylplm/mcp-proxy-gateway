@@ -67,6 +67,10 @@ func (q *rankingFakeQuerier) ListRecords(context.Context, int, int64, time.Time)
 	return nil, nil
 }
 
+func (q *rankingFakeQuerier) HealthRecords(context.Context, time.Time, time.Time, int) ([]store.CallRecordView, error) {
+	return nil, nil
+}
+
 func (q *rankingFakeQuerier) GetRecord(context.Context, int64) (store.CallRecordView, error) {
 	return store.CallRecordView{}, nil
 }

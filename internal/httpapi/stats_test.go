@@ -23,6 +23,7 @@ type fakeStats struct {
 	daily          []store.DailyCount
 	topErrors      []store.ToolErrorRank
 	apiKeyProfile  store.APIKeyUsageProfile
+	health         store.CallHealth
 	callRecords    []store.CallRecordView
 	callRecord     store.CallRecordView
 	err            error
@@ -31,6 +32,8 @@ type fakeStats struct {
 	gotEnd      time.Time
 	gotTZ       string
 	gotLimit    int
+	gotWindow   string
+	gotNow      time.Time
 	gotAPIKeyID string
 	gotAfterID  int64
 	gotAfterAt  time.Time
@@ -92,6 +95,14 @@ func (f *fakeStats) APIKeyUsageProfile(_ context.Context, apiKeyID string, start
 		return store.APIKeyUsageProfile{}, f.err
 	}
 	return f.apiKeyProfile, nil
+}
+
+func (f *fakeStats) Health(_ context.Context, window string, now time.Time) (store.CallHealth, error) {
+	f.gotWindow, f.gotNow = window, now
+	if f.err != nil {
+		return store.CallHealth{}, f.err
+	}
+	return f.health, nil
 }
 
 func (f *fakeStats) ListRecords(_ context.Context, limit int, afterID int64, afterAt time.Time) ([]store.CallRecordView, error) {
@@ -228,6 +239,26 @@ func TestStatsTopToolsDefaultLimit(t *testing.T) {
 	}
 	if st.gotLimit != 0 {
 		t.Errorf("缺省 limit 期望以 0 透传，实际 %d", st.gotLimit)
+	}
+}
+
+func TestStatsHealthForwardsWindow(t *testing.T) {
+	st := &fakeStats{health: store.CallHealth{Window: "24h", TotalCalls: 9, SuccessRate: 88.8}}
+	e := newTestEngine(Deps{Stats: st})
+
+	w := doJSON(e, http.MethodGet, "/api/admin/stats/health?window=24h", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("期望 HTTP 200，实际 %d，响应体 %s", w.Code, w.Body.String())
+	}
+	if st.gotWindow != "24h" || st.gotNow.IsZero() {
+		t.Fatalf("健康窗口参数未透传：window=%q now=%v", st.gotWindow, st.gotNow)
+	}
+	var got struct {
+		Health store.CallHealth `json:"health"`
+	}
+	unmarshalData(t, w, &got)
+	if got.Health.TotalCalls != 9 || got.Health.SuccessRate != 88.8 {
+		t.Fatalf("健康结果不符合预期：%+v", got.Health)
 	}
 }
 

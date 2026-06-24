@@ -69,6 +69,7 @@ func (r *Router) registerStatsRoutes(g *gin.RouterGroup) {
 	st.GET("/apikeys", r.statsByAPIKey)
 	st.GET("/apikeys/:id/profile", r.statsAPIKeyUsageProfile)
 	st.GET("/tools", r.statsTopTools)
+	st.GET("/health", r.statsHealth)
 	st.GET("/summary", r.statsSummary)
 	st.GET("/daily", r.statsDaily)
 	st.GET("/tool-errors", r.statsTopToolErrors)
@@ -186,6 +187,19 @@ func (r *Router) statsTopTools(c *gin.Context) {
 		return
 	}
 	respondOK(c, gin.H{"tools": ranks})
+}
+
+func (r *Router) statsHealth(c *gin.Context) {
+	if r.stats == nil {
+		respondServiceUnavailable(c, "统计查询服务未就绪")
+		return
+	}
+	health, err := r.stats.Health(c.Request.Context(), c.DefaultQuery("window", "1h"), time.Now().UTC())
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	respondOK(c, gin.H{"health": health})
 }
 
 // statsSummary 返回区间内调用概览。

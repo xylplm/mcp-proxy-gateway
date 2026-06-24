@@ -73,6 +73,42 @@ export interface ToolErrorRank {
   AvgLatencyMS: number
 }
 
+export interface CallHealthToolRank {
+  UpstreamID: string
+  UpstreamName: string
+  OriginalName: string
+  ExposedName: string
+  Count: number
+  FailureCalls: number
+  AvgLatencyMS: number
+  P95LatencyMS: number
+  LastError: string
+}
+
+export interface CallHealthUpstreamRank {
+  UpstreamID: string
+  UpstreamName: string
+  TotalCalls: number
+  FailureCalls: number
+  SuccessRate: number
+  LastError: string
+}
+
+export interface CallHealth {
+  Window: '1h' | '24h' | string
+  Since: string
+  Until: string
+  TotalCalls: number
+  SuccessCalls: number
+  FailureCalls: number
+  SuccessRate: number
+  P50LatencyMS: number
+  P95LatencyMS: number
+  TopErrorTools: CallHealthToolRank[] | null
+  TopSlowTools: CallHealthToolRank[] | null
+  TopUpstreams: CallHealthUpstreamRank[] | null
+}
+
 export interface APIKeyToolUsage {
   UpstreamID: string
   OriginalName: string
@@ -158,6 +194,10 @@ interface DailyResponse {
 
 interface ToolErrorsResponse {
   tools: ToolErrorRank[] | null
+}
+
+interface CallHealthResponse {
+  health: CallHealth
 }
 
 interface APIKeyUsageProfileResponse {
@@ -263,6 +303,26 @@ export async function topToolErrors(
   }
   const res = await request.get<ToolErrorsResponse>('/stats/tool-errors', { params })
   return res.data?.tools ?? []
+}
+
+export async function callHealth(window: '1h' | '24h' = '1h'): Promise<CallHealth> {
+  const res = await request.get<CallHealthResponse>('/stats/health', { params: { window } })
+  return (
+    res.data?.health ?? {
+      Window: window,
+      Since: '',
+      Until: '',
+      TotalCalls: 0,
+      SuccessCalls: 0,
+      FailureCalls: 0,
+      SuccessRate: 0,
+      P50LatencyMS: 0,
+      P95LatencyMS: 0,
+      TopErrorTools: [],
+      TopSlowTools: [],
+      TopUpstreams: [],
+    }
+  )
 }
 
 export async function getAPIKeyUsageProfile(

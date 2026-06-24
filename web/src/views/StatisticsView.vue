@@ -5,12 +5,16 @@ import type { ApexOptions } from 'apexcharts'
 import AdminLayout from '@/components/layout/AdminLayout.vue'
 import PageBreadcrumb from '@/components/common/PageBreadcrumb.vue'
 import {
+  callHealth,
   dailyStats,
   statsByAPIKey,
   statsByUpstream,
   statsSummary,
   topToolErrors,
   topTools,
+  type CallHealth,
+  type CallHealthToolRank,
+  type CallHealthUpstreamRank,
   type DailyCount,
   type DimensionCount,
   type StatsSummary,
@@ -28,6 +32,8 @@ const startLocal = ref('')
 const endLocal = ref('')
 const loading = ref(false)
 const queryError = ref('')
+const healthWindow = ref<'1h' | '24h'>('1h')
+const health = ref<CallHealth>(emptyHealth('1h'))
 const summary = ref<StatsSummary>(emptySummary())
 const daily = ref<DailyCount[]>([])
 const upstreamCounts = ref<DimensionCount[]>([])
@@ -86,6 +92,23 @@ function emptySummary(): StatsSummary {
     UniqueTools: 0,
     AvgLatencyMS: 0,
     P95LatencyMS: 0,
+  }
+}
+
+function emptyHealth(window: '1h' | '24h'): CallHealth {
+  return {
+    Window: window,
+    Since: '',
+    Until: '',
+    TotalCalls: 0,
+    SuccessCalls: 0,
+    FailureCalls: 0,
+    SuccessRate: 0,
+    P50LatencyMS: 0,
+    P95LatencyMS: 0,
+    TopErrorTools: [],
+    TopSlowTools: [],
+    TopUpstreams: [],
   }
 }
 
@@ -158,6 +181,18 @@ function toolLabel(t: Pick<ToolRank, 'UpstreamID' | 'OriginalName'>): string {
   return `${upstreamLabel(t.UpstreamID)} / ${t.OriginalName}`
 }
 
+function healthToolLabel(t: Pick<CallHealthToolRank, 'UpstreamID' | 'UpstreamName' | 'OriginalName' | 'ExposedName'>): string {
+  return t.ExposedName || t.OriginalName || `${t.UpstreamName || upstreamLabel(t.UpstreamID)}`
+}
+
+function healthToolSubLabel(t: Pick<CallHealthToolRank, 'UpstreamID' | 'UpstreamName' | 'OriginalName'>): string {
+  return `${t.UpstreamName || upstreamLabel(t.UpstreamID)} / ${t.OriginalName || '-'}`
+}
+
+function healthUpstreamLabel(item: Pick<CallHealthUpstreamRank, 'UpstreamID' | 'UpstreamName'>): string {
+  return item.UpstreamName || upstreamLabel(item.UpstreamID)
+}
+
 // 工具描述用 "upstreamId:originalName" 做键，缺失时返回空串（指令会自动不显示 tooltip）。
 function toolDescription(t: Pick<ToolRank, 'UpstreamID' | 'OriginalName'>): string {
   return toolDescriptions.value[`${t.UpstreamID}:${t.OriginalName}`] ?? ''
@@ -202,6 +237,15 @@ const weeklyDelta = computed(() => {
 
 const busiestTool = computed(() => toolRanks.value[0] ?? null)
 const topErrorTool = computed(() => toolErrors.value[0] ?? null)
+const healthErrorTools = computed(() => health.value.TopErrorTools ?? [])
+const healthSlowTools = computed(() => health.value.TopSlowTools ?? [])
+const healthUpstreams = computed(() => health.value.TopUpstreams ?? [])
+
+function healthToneClass(rate: number): string {
+  if (rate >= 99) return 'text-success-700 dark:text-success-400'
+  if (rate >= 95) return 'text-warning-700 dark:text-warning-400'
+  return 'text-error-600 dark:text-error-400'
+}
 
 const heatmapDays = computed(() => {
   const byDay = new Map<string, DailyCount>()
@@ -317,12 +361,21 @@ async function loadStats(): Promise<void> {
   }
 }
 
+async function loadHealth(): Promise<void> {
+  try {
+    health.value = await callHealth(healthWindow.value)
+  } catch (err) {
+    queryError.value = err instanceof Error ? err.message : '加载健康数据失败'
+  }
+}
+
 function scheduleLoadStats(): void {
   if (queryTimer !== undefined) window.clearTimeout(queryTimer)
   queryTimer = window.setTimeout(() => void loadStats(), 350)
 }
 
 watch([startLocal, endLocal], scheduleLoadStats)
+watch(healthWindow, () => void loadHealth())
 
 onMounted(async () => {
   // 热力图：nextTick 后 ref 已绑定，再挂 ResizeObserver
@@ -339,7 +392,7 @@ onMounted(async () => {
     onUnmounted(() => ro.disconnect())
   }
   await loadNameMaps()
-  await loadStats()
+  await Promise.all([loadStats(), loadHealth()])
 })
 </script>
 
@@ -372,6 +425,106 @@ onMounted(async () => {
     >
       {{ queryError }}
     </p>
+
+    <section :class="[cardClass, 'mb-6']">
+      <div class="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">调用健康</h3>
+          <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">最近窗口内的成功率、延迟和失败热点。</p>
+        </div>
+        <div class="inline-flex rounded-lg border border-gray-200 p-1 dark:border-gray-800">
+          <button
+            v-for="item in ['1h', '24h']"
+            :key="item"
+            type="button"
+            class="rounded-md px-3 py-1.5 text-sm font-medium transition"
+            :class="healthWindow === item ? 'bg-brand-50 text-brand-700 dark:bg-brand-500/10 dark:text-brand-300' : 'text-gray-500 hover:bg-gray-50 dark:text-gray-400 dark:hover:bg-gray-800'"
+            @click="healthWindow = item as '1h' | '24h'"
+          >
+            {{ item === '1h' ? '最近 1h' : '最近 24h' }}
+          </button>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <div class="rounded-lg bg-gray-50 px-4 py-3 dark:bg-gray-800/60">
+          <div class="text-xs text-gray-500 dark:text-gray-400">成功率</div>
+          <div class="mt-1 text-2xl font-semibold" :class="healthToneClass(health.SuccessRate)">
+            {{ formatPercent(health.SuccessRate) }}
+          </div>
+          <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            {{ formatInt(health.SuccessCalls) }} / {{ formatInt(health.TotalCalls) }} 次成功
+          </div>
+        </div>
+        <div class="rounded-lg bg-gray-50 px-4 py-3 dark:bg-gray-800/60">
+          <div class="text-xs text-gray-500 dark:text-gray-400">延迟 p50 / p95</div>
+          <div class="mt-1 text-2xl font-semibold text-gray-800 dark:text-white/90">
+            {{ formatMs(health.P50LatencyMS) }}
+          </div>
+          <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">p95 {{ formatMs(health.P95LatencyMS) }}</div>
+        </div>
+        <div class="rounded-lg bg-gray-50 px-4 py-3 dark:bg-gray-800/60">
+          <div class="text-xs text-gray-500 dark:text-gray-400">错误工具</div>
+          <div class="mt-1 truncate text-2xl font-semibold text-gray-800 dark:text-white/90">
+            {{ healthErrorTools[0] ? healthToolLabel(healthErrorTools[0]) : '-' }}
+          </div>
+          <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            {{ healthErrorTools[0] ? `${formatInt(healthErrorTools[0].FailureCalls)} 次失败` : '暂无失败' }}
+          </div>
+        </div>
+        <div class="rounded-lg bg-gray-50 px-4 py-3 dark:bg-gray-800/60">
+          <div class="text-xs text-gray-500 dark:text-gray-400">慢工具</div>
+          <div class="mt-1 truncate text-2xl font-semibold text-gray-800 dark:text-white/90">
+            {{ healthSlowTools[0] ? healthToolLabel(healthSlowTools[0]) : '-' }}
+          </div>
+          <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            {{ healthSlowTools[0] ? `p95 ${formatMs(healthSlowTools[0].P95LatencyMS)}` : '暂无调用' }}
+          </div>
+        </div>
+      </div>
+
+      <div class="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-3">
+        <div class="rounded-lg border border-gray-200 p-3 dark:border-gray-800">
+          <h4 class="mb-3 text-sm font-semibold text-gray-800 dark:text-white/90">Top 错误工具</h4>
+          <div class="space-y-2">
+            <div v-for="item in healthErrorTools" :key="`${item.UpstreamID}:${item.OriginalName}`" class="flex items-start justify-between gap-3">
+              <div class="min-w-0">
+                <div class="truncate text-sm text-gray-800 dark:text-white/90">{{ healthToolLabel(item) }}</div>
+                <div class="truncate text-xs text-gray-500 dark:text-gray-400">{{ healthToolSubLabel(item) }}</div>
+              </div>
+              <span class="shrink-0 text-sm font-semibold text-error-600 dark:text-error-400">{{ formatInt(item.FailureCalls) }}</span>
+            </div>
+            <div v-if="healthErrorTools.length === 0" class="py-4 text-center text-sm text-gray-400">暂无错误</div>
+          </div>
+        </div>
+        <div class="rounded-lg border border-gray-200 p-3 dark:border-gray-800">
+          <h4 class="mb-3 text-sm font-semibold text-gray-800 dark:text-white/90">Top 慢工具</h4>
+          <div class="space-y-2">
+            <div v-for="item in healthSlowTools" :key="`${item.UpstreamID}:${item.OriginalName}`" class="flex items-start justify-between gap-3">
+              <div class="min-w-0">
+                <div class="truncate text-sm text-gray-800 dark:text-white/90">{{ healthToolLabel(item) }}</div>
+                <div class="truncate text-xs text-gray-500 dark:text-gray-400">{{ healthToolSubLabel(item) }}</div>
+              </div>
+              <span class="shrink-0 text-sm font-semibold text-gray-800 dark:text-white/90">{{ formatMs(item.P95LatencyMS) }}</span>
+            </div>
+            <div v-if="healthSlowTools.length === 0" class="py-4 text-center text-sm text-gray-400">暂无调用</div>
+          </div>
+        </div>
+        <div class="rounded-lg border border-gray-200 p-3 dark:border-gray-800">
+          <h4 class="mb-3 text-sm font-semibold text-gray-800 dark:text-white/90">上游失败排行</h4>
+          <div class="space-y-2">
+            <div v-for="item in healthUpstreams" :key="item.UpstreamID || item.UpstreamName" class="flex items-start justify-between gap-3">
+              <div class="min-w-0">
+                <div class="truncate text-sm text-gray-800 dark:text-white/90">{{ healthUpstreamLabel(item) }}</div>
+                <div class="truncate text-xs text-gray-500 dark:text-gray-400">成功率 {{ formatPercent(item.SuccessRate) }}</div>
+              </div>
+              <span class="shrink-0 text-sm font-semibold text-error-600 dark:text-error-400">{{ formatInt(item.FailureCalls) }}</span>
+            </div>
+            <div v-if="healthUpstreams.length === 0" class="py-4 text-center text-sm text-gray-400">暂无失败</div>
+          </div>
+        </div>
+      </div>
+    </section>
 
     <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
       <section :class="cardClass">

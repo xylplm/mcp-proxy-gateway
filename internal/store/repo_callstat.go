@@ -138,6 +138,42 @@ type ToolErrorRank struct {
 	AvgLatencyMS float64
 }
 
+type CallHealthToolRank struct {
+	UpstreamID   string
+	UpstreamName string
+	OriginalName string
+	ExposedName  string
+	Count        int64
+	FailureCalls int64
+	AvgLatencyMS float64
+	P95LatencyMS float64
+	LastError    string
+}
+
+type CallHealthUpstreamRank struct {
+	UpstreamID   string
+	UpstreamName string
+	TotalCalls   int64
+	FailureCalls int64
+	SuccessRate  float64
+	LastError    string
+}
+
+type CallHealth struct {
+	Window        string
+	Since         time.Time
+	Until         time.Time
+	TotalCalls    int64
+	SuccessCalls  int64
+	FailureCalls  int64
+	SuccessRate   float64
+	P50LatencyMS  float64
+	P95LatencyMS  float64
+	TopErrorTools []CallHealthToolRank
+	TopSlowTools  []CallHealthToolRank
+	TopUpstreams  []CallHealthUpstreamRank
+}
+
 type APIKeyToolUsage struct {
 	UpstreamID   string
 	OriginalName string
