@@ -21,6 +21,7 @@ type fakeAggregationTools struct {
 	invokeKey   string
 	invokeName  string
 	invokeArgs  json.RawMessage
+	detailKey   string
 }
 
 func (f *fakeAggregationTools) BuildToolSet(context.Context, string) ([]domain.ToolDef, error) {
@@ -31,8 +32,9 @@ func (f *fakeAggregationTools) BuildToolSet(context.Context, string) ([]domain.T
 	return f.tools, nil
 }
 
-func (f *fakeAggregationTools) BuildToolDetails(context.Context, string) ([]domain.ToolDetail, error) {
+func (f *fakeAggregationTools) BuildToolDetails(_ context.Context, apiKeyID string) ([]domain.ToolDetail, error) {
 	f.detailCalls++
+	f.detailKey = apiKeyID
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -101,6 +103,22 @@ func TestListAggregatedToolsUsesToolDetails(t *testing.T) {
 	unmarshalData(t, w, &got)
 	if got.Count != 1 || len(got.Tools) != 1 || len(got.ToolDetails) != 1 {
 		t.Fatalf("完整工具目录响应不符合预期：%+v", got)
+	}
+}
+
+func TestListAggregatedToolsUsesAPIKeyPerspective(t *testing.T) {
+	agg := &fakeAggregationTools{details: []domain.ToolDetail{
+		{Tool: domain.ToolDef{Name: "visible_for_key"}},
+	}}
+	e := newTestEngine(Deps{Aggregation: agg})
+
+	w := doJSON(e, http.MethodGet, "/api/admin/tools/aggregated?apiKeyId=key-42", "")
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("期望 HTTP 200，实际 %d，响应体 %s", w.Code, w.Body.String())
+	}
+	if agg.detailKey != "key-42" {
+		t.Fatalf("应按 API Key 视角构建工具详情，实际 apiKeyID=%q", agg.detailKey)
 	}
 }
 

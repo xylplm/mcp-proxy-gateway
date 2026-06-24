@@ -64,7 +64,8 @@ func (r *Router) listAggregatedTools(c *gin.Context) {
 		respondServiceUnavailable(c, "聚合工具服务未就绪")
 		return
 	}
-	details, err := r.aggregation.BuildToolDetails(c.Request.Context(), "")
+	apiKeyID := c.Query("apiKeyId")
+	details, err := r.aggregation.BuildToolDetails(c.Request.Context(), apiKeyID)
 	if err != nil {
 		respondError(c, err)
 		return

@@ -81,8 +81,10 @@ export async function getToolSummary(): Promise<ToolSummary> {
   }
 }
 
-export async function getAggregatedTools(): Promise<AggregatedToolsResult> {
-  const res = await request.get<AggregatedToolsResponse>('/tools/aggregated')
+export async function getAggregatedTools(params?: { apiKeyId?: string }): Promise<AggregatedToolsResult> {
+  const res = await request.get<AggregatedToolsResponse>('/tools/aggregated', {
+    params: params?.apiKeyId ? { apiKeyId: params.apiKeyId } : undefined,
+  })
   return {
     tools: res.data?.tools ?? [],
     toolDetails: res.data?.toolDetails ?? [],

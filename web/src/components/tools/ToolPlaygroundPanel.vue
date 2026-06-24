@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import { listAPIKeys, type APIKey } from '@/api/apikeys'
 import {
@@ -15,6 +15,7 @@ import {
 
 const props = defineProps<{
   toolName: string
+  initialApiKeyId?: string
 }>()
 
 const toast = useToast()
@@ -35,6 +36,14 @@ const selectedAPIKeyLabel = computed(() => {
   return key?.name || selectedAPIKeyID.value
 })
 const callRecordQuery = computed(() => buildPlaygroundCallRecordQuery(props.toolName))
+
+watch(
+  () => props.initialApiKeyId,
+  (id) => {
+    selectedAPIKeyID.value = id ?? ''
+  },
+  { immediate: true },
+)
 
 onMounted(() => {
   void loadAPIKeys()

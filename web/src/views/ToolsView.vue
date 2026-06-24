@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import AdminLayout from '@/components/layout/AdminLayout.vue'
 import PageBreadcrumb from '@/components/common/PageBreadcrumb.vue'
 import ToolPlaygroundPanel from '@/components/tools/ToolPlaygroundPanel.vue'
+import { listAPIKeys, type APIKey } from '@/api/apikeys'
 import { getAggregatedTools, type ToolDef, type ToolDetail, type ToolSource } from '@/api/tools'
 import type { UpstreamRateLimits } from '@/api/rateLimits'
 import { RefreshIcon } from '@/icons'
@@ -15,6 +16,8 @@ type RiskFilter = 'all' | 'risk'
 const loading = ref(false)
 const refreshing = ref(false)
 const loadError = ref('')
+const apiKeys = ref<APIKey[]>([])
+const selectedAPIKeyID = ref('')
 const toolDetails = ref<ToolDetail[]>([])
 const searchKeyword = ref('')
 const selectedUpstream = ref('')
@@ -50,6 +53,17 @@ const upstreamOptions = computed(() => {
   return Array.from(map.entries())
     .map(([id, name]) => ({ id, name }))
     .sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
+})
+
+const selectedAPIKey = computed(() =>
+  apiKeys.value.find((item) => item.id === selectedAPIKeyID.value) ?? null,
+)
+const perspectiveLabel = computed(() => selectedAPIKey.value?.name ?? '全局视角')
+const perspectiveDescription = computed(() => {
+  if (selectedAPIKey.value === null) {
+    return '展示全部启用上游经过 MCP 级规则处理后的可见工具。'
+  }
+  return '展示该 API Key 叠加专属屏蔽规则后的实际可见工具。'
 })
 
 const visibleToolDetails = computed(() => {
@@ -96,7 +110,7 @@ async function loadTools(showLoading = true): Promise<void> {
   else refreshing.value = true
   loadError.value = ''
   try {
-    const result = await getAggregatedTools()
+    const result = await getAggregatedTools({ apiKeyId: selectedAPIKeyID.value || undefined })
     toolDetails.value = result.toolDetails.length > 0
       ? result.toolDetails
       : result.tools.map((tool) => ({ tool, sources: [] }))
@@ -106,6 +120,17 @@ async function loadTools(showLoading = true): Promise<void> {
   } finally {
     loading.value = false
     refreshing.value = false
+  }
+}
+
+async function loadAPIKeyOptions(): Promise<void> {
+  try {
+    apiKeys.value = await listAPIKeys()
+    if (selectedAPIKeyID.value !== '' && !apiKeys.value.some((key) => key.id === selectedAPIKeyID.value)) {
+      selectedAPIKeyID.value = ''
+    }
+  } catch (err) {
+    loadError.value = err instanceof Error ? err.message : '加载 API Key 失败'
   }
 }
 
@@ -154,6 +179,13 @@ function resetFilters(): void {
   selectedUpstream.value = ''
   conflictFilter.value = 'all'
   riskFilter.value = 'all'
+}
+
+async function changePerspective(): Promise<void> {
+  resetFilters()
+  selectedToolName.value = ''
+  detailOpen.value = false
+  await loadTools()
 }
 
 function sourceCountText(detail: ToolDetail): string {
@@ -228,7 +260,7 @@ function riskNoticeClass(detail: ToolDetail): string {
 }
 
 onMounted(() => {
-  void loadTools()
+  void Promise.all([loadAPIKeyOptions(), loadTools()])
 })
 </script>
 
@@ -291,7 +323,16 @@ onMounted(() => {
     </div>
 
     <section :class="[cardClass, 'mb-5']">
-      <div class="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_220px_170px_160px_auto] lg:items-end">
+      <div class="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-[240px_minmax(0,1fr)_220px_170px_160px_auto] xl:items-end">
+        <label class="block">
+          <span class="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400">调用视角</span>
+          <select v-model="selectedAPIKeyID" :class="[controlClass, 'w-full']" @change="changePerspective">
+            <option value="">全局视角</option>
+            <option v-for="key in apiKeys" :key="key.id" :value="key.id">
+              {{ key.name }}{{ key.enabled ? '' : '（已停用）' }}
+            </option>
+          </select>
+        </label>
         <label class="block">
           <span class="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400">搜索工具</span>
           <input
@@ -327,11 +368,14 @@ onMounted(() => {
         </label>
         <button
           type="button"
-          class="h-10 rounded-lg border border-gray-300 px-4 text-sm font-medium text-gray-700 transition hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+          class="h-10 rounded-lg border border-gray-300 px-4 text-sm font-medium text-gray-700 transition hover:bg-gray-50 md:col-span-2 xl:col-span-1 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
           @click="resetFilters"
         >
           重置
         </button>
+      </div>
+      <div class="mt-4 rounded-lg border border-brand-100 bg-brand-50 px-3 py-2 text-xs leading-5 text-brand-700 dark:border-brand-500/20 dark:bg-brand-500/10 dark:text-brand-300">
+        当前视角：{{ perspectiveLabel }}。{{ perspectiveDescription }}
       </div>
     </section>
 
@@ -534,7 +578,7 @@ onMounted(() => {
               </div>
             </div>
 
-            <ToolPlaygroundPanel :tool-name="selectedToolDetail.tool.name" />
+            <ToolPlaygroundPanel :tool-name="selectedToolDetail.tool.name" :initial-api-key-id="selectedAPIKeyID" />
 
             <details class="mt-4 rounded-lg bg-gray-50 p-3 dark:bg-white/[0.03]">
               <summary class="cursor-pointer text-xs font-medium text-gray-700 dark:text-gray-300">
