@@ -185,6 +185,8 @@ type ToolPolicyRule struct {
 	CacheTTLSeconds int `json:"cacheTtlSeconds,omitempty"`
 	// RiskTags 为用户自定义风险标签，仅用于提示和筛选，不阻断调用。
 	RiskTags []string `json:"riskTags,omitempty"`
+	// IgnoredRiskTags 为用户显式忽略的内置自动风险标签键，仅影响管理台提示。
+	IgnoredRiskTags []string `json:"ignoredRiskTags,omitempty"`
 }
 
 // ToolPolicyView 是管理台工具详情里展示的命中策略快照。
@@ -195,6 +197,7 @@ type ToolPolicyView struct {
 	CacheEnabled    bool                `json:"cacheEnabled"`
 	CacheTTLSeconds int                 `json:"cacheTtlSeconds,omitempty"`
 	RiskTags        []string            `json:"riskTags,omitempty"`
+	IgnoredRiskTags []string            `json:"ignoredRiskTags,omitempty"`
 }
 
 // Upstream 表示已持久化的上游 MCP 服务实例及其运行期状态。

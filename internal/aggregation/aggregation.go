@@ -548,6 +548,7 @@ func toolPolicyView(policy domain.ToolPolicyRule) *domain.ToolPolicyView {
 		CacheEnabled:    policy.CacheEnabled,
 		CacheTTLSeconds: policy.CacheTTLSeconds,
 		RiskTags:        append([]string(nil), policy.RiskTags...),
+		IgnoredRiskTags: append([]string(nil), policy.IgnoredRiskTags...),
 	}
 }
 

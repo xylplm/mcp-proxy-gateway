@@ -111,6 +111,7 @@ type toolPolicyRuleModel struct {
 	CacheEnabled    bool      `gorm:"column:cache_enabled;type:boolean;not null;default:false"`
 	CacheTTLSeconds int       `gorm:"column:cache_ttl_seconds;type:integer;not null;default:0"`
 	RiskTags        JSONB     `gorm:"column:risk_tags;type:jsonb;not null;default:'[]'"`
+	IgnoredRiskTags JSONB     `gorm:"column:ignored_risk_tags;type:jsonb;not null;default:'[]'"`
 	CreatedAt       time.Time `gorm:"column:created_at;type:timestamptz;not null;default:now();autoCreateTime:false"`
 }
 

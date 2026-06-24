@@ -20,9 +20,11 @@ import {
 } from '@/utils/rulePreview'
 import {
   cachePolicyLabel,
+  normalizeIgnoredRiskTags,
   normalizePolicyRiskTags,
   routingStrategyLabel,
   toolPolicyToRequest,
+  TOOL_POLICY_AUTO_RISK_TAGS,
   TOOL_POLICY_RISK_TAG_PRESETS,
 } from '@/utils/toolPolicy'
 
@@ -56,6 +58,7 @@ const form = ref<ToolPolicyRuleRequest>({
   cacheEnabled: false,
   cacheTtlSeconds: 60,
   riskTags: [],
+  ignoredRiskTags: [],
 })
 
 const isEdit = computed(() => editing.value !== null)
@@ -137,6 +140,7 @@ function openCreate(): void {
     cacheEnabled: false,
     cacheTtlSeconds: 60,
     riskTags: [],
+    ignoredRiskTags: [],
   }
   modalOpen.value = true
 }
@@ -150,6 +154,7 @@ function openEdit(rule: ToolPolicyRule): void {
     routingStrategy: rule.routingStrategy ?? '',
     cacheTtlSeconds: rule.cacheTtlSeconds ?? 0,
     riskTags: rule.riskTags ?? [],
+    ignoredRiskTags: rule.ignoredRiskTags ?? [],
   })
   if (form.value.cacheEnabled && form.value.cacheTtlSeconds <= 0) {
     form.value.cacheTtlSeconds = 60
@@ -282,6 +287,13 @@ function togglePresetTag(tag: string): void {
   }
 }
 
+function toggleIgnoredRiskTag(key: string): void {
+  const current = new Set(form.value.ignoredRiskTags)
+  if (current.has(key)) current.delete(key)
+  else current.add(key)
+  form.value.ignoredRiskTags = normalizeIgnoredRiskTags(Array.from(current))
+}
+
 function onTagInputKeydown(event: KeyboardEvent): void {
   if (event.key !== 'Enter') return
   event.preventDefault()
@@ -381,6 +393,16 @@ defineExpose({ reload })
             class="rounded-full bg-warning-50 px-2 py-0.5 text-[11px] text-warning-700 dark:bg-warning-500/10 dark:text-warning-300"
           >
             {{ tag }}
+          </span>
+        </div>
+
+        <div v-if="(rule.ignoredRiskTags ?? []).length > 0" class="mb-3 flex flex-wrap gap-1.5">
+          <span
+            v-for="tag in TOOL_POLICY_AUTO_RISK_TAGS.filter((item) => rule.ignoredRiskTags?.includes(item.key))"
+            :key="tag.key"
+            class="rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-600 dark:bg-gray-800 dark:text-gray-300"
+          >
+            忽略{{ tag.label }}
           </span>
         </div>
 
@@ -557,6 +579,23 @@ defineExpose({ reload })
                   @click="removeTag(tag)"
                 >
                   {{ tag }} ×
+                </button>
+              </div>
+            </div>
+
+            <div class="lg:col-span-2">
+              <span class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">忽略自动风险提示</span>
+              <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <button
+                  v-for="tag in TOOL_POLICY_AUTO_RISK_TAGS"
+                  :key="tag.key"
+                  type="button"
+                  class="rounded-lg border px-3 py-2 text-left text-xs transition"
+                  :class="form.ignoredRiskTags.includes(tag.key) ? 'border-gray-300 bg-gray-100 text-gray-700 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200' : 'border-gray-200 text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800'"
+                  @click="toggleIgnoredRiskTag(tag.key)"
+                >
+                  <span class="block font-medium">{{ form.ignoredRiskTags.includes(tag.key) ? '已忽略' : '自动识别' }}：{{ tag.label }}</span>
+                  <span class="mt-1 block text-[11px] opacity-80">{{ tag.description }}</span>
                 </button>
               </div>
             </div>

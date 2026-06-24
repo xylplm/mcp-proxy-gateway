@@ -37,6 +37,7 @@ func (r *ToolPolicyRepo) Create(ctx context.Context, rule domain.ToolPolicyRule)
 		"cache_enabled":     model.CacheEnabled,
 		"cache_ttl_seconds": model.CacheTTLSeconds,
 		"risk_tags":         model.RiskTags,
+		"ignored_risk_tags": model.IgnoredRiskTags,
 	}).Error; err != nil {
 		return domain.ToolPolicyRule{}, classifyWrite(err, "工具策略规则冲突", "工具策略规则创建失败")
 	}
@@ -97,6 +98,7 @@ func (r *ToolPolicyRepo) Update(ctx context.Context, rule domain.ToolPolicyRule)
 		"cache_enabled":     model.CacheEnabled,
 		"cache_ttl_seconds": model.CacheTTLSeconds,
 		"risk_tags":         model.RiskTags,
+		"ignored_risk_tags": model.IgnoredRiskTags,
 	})
 	if res.Error != nil {
 		return domain.ToolPolicyRule{}, res.Error
@@ -143,6 +145,10 @@ func toolPolicyToModel(rule domain.ToolPolicyRule) (toolPolicyRuleModel, error) 
 	if err != nil {
 		return toolPolicyRuleModel{}, err
 	}
+	rawIgnoredTags, err := json.Marshal(normalizeIgnoredRiskTags(rule.IgnoredRiskTags))
+	if err != nil {
+		return toolPolicyRuleModel{}, err
+	}
 	return toolPolicyRuleModel{
 		ID:              rule.ID,
 		Pattern:         rule.Pattern,
@@ -153,6 +159,7 @@ func toolPolicyToModel(rule domain.ToolPolicyRule) (toolPolicyRuleModel, error) 
 		CacheEnabled:    rule.CacheEnabled,
 		CacheTTLSeconds: rule.CacheTTLSeconds,
 		RiskTags:        JSONB(rawTags),
+		IgnoredRiskTags: JSONB(rawIgnoredTags),
 	}, nil
 }
 
@@ -160,6 +167,12 @@ func modelToToolPolicy(model toolPolicyRuleModel) (domain.ToolPolicyRule, error)
 	var tags []string
 	if len(model.RiskTags) > 0 {
 		if err := json.Unmarshal(model.RiskTags, &tags); err != nil {
+			return domain.ToolPolicyRule{}, err
+		}
+	}
+	var ignoredTags []string
+	if len(model.IgnoredRiskTags) > 0 {
+		if err := json.Unmarshal(model.IgnoredRiskTags, &ignoredTags); err != nil {
 			return domain.ToolPolicyRule{}, err
 		}
 	}
@@ -173,6 +186,7 @@ func modelToToolPolicy(model toolPolicyRuleModel) (domain.ToolPolicyRule, error)
 		CacheEnabled:    model.CacheEnabled,
 		CacheTTLSeconds: model.CacheTTLSeconds,
 		RiskTags:        normalizeRiskTags(tags),
+		IgnoredRiskTags: normalizeIgnoredRiskTags(ignoredTags),
 	}, nil
 }
 
@@ -193,6 +207,38 @@ func normalizeRiskTags(tags []string) []string {
 		seen[tag] = struct{}{}
 		out = append(out, tag)
 		if len(out) >= domain.MaxToolPolicyRiskTags {
+			break
+		}
+	}
+	return out
+}
+
+func normalizeIgnoredRiskTags(tags []string) []string {
+	if len(tags) == 0 {
+		return nil
+	}
+	allowed := map[string]struct{}{
+		"payment": {},
+		"delete":  {},
+		"write":   {},
+		"send":    {},
+	}
+	seen := make(map[string]struct{}, len(tags))
+	out := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		tag = strings.ToLower(strings.TrimSpace(tag))
+		if tag == "" {
+			continue
+		}
+		if _, ok := allowed[tag]; !ok {
+			continue
+		}
+		if _, ok := seen[tag]; ok {
+			continue
+		}
+		seen[tag] = struct{}{}
+		out = append(out, tag)
+		if len(out) >= domain.MaxToolPolicyIgnoredRiskTags {
 			break
 		}
 	}

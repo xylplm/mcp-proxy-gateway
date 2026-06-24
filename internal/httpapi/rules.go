@@ -67,6 +67,7 @@ type toolPolicyRuleRequest struct {
 	CacheEnabled    bool     `json:"cacheEnabled"`
 	CacheTTLSeconds int      `json:"cacheTtlSeconds"`
 	RiskTags        []string `json:"riskTags"`
+	IgnoredRiskTags []string `json:"ignoredRiskTags"`
 }
 
 // registerRuleRoutes 在管理分组下注册别名与 MCP 级屏蔽规则管理端点。
@@ -471,5 +472,6 @@ func toolPolicyFromRequest(req toolPolicyRuleRequest) domain.ToolPolicyRule {
 		CacheEnabled:    req.CacheEnabled,
 		CacheTTLSeconds: req.CacheTTLSeconds,
 		RiskTags:        req.RiskTags,
+		IgnoredRiskTags: req.IgnoredRiskTags,
 	}
 }

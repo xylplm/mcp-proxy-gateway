@@ -76,6 +76,7 @@ export interface ToolPolicyRule {
   cacheEnabled: boolean
   cacheTtlSeconds?: number
   riskTags?: string[]
+  ignoredRiskTags?: string[]
 }
 
 export interface ToolPolicyRuleRequest {
@@ -87,6 +88,7 @@ export interface ToolPolicyRuleRequest {
   cacheEnabled: boolean
   cacheTtlSeconds: number
   riskTags: string[]
+  ignoredRiskTags: string[]
 }
 
 /** 别名规则列表响应体：{ aliases: [...] }。 */

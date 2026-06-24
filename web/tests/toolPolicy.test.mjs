@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   cachePolicyLabel,
+  normalizeIgnoredRiskTags,
   normalizePolicyRiskTags,
   routingStrategyLabel,
   toolPolicyToRequest,
@@ -9,6 +10,10 @@ import {
 
 test('normalizes custom risk tags', () => {
   assert.deepEqual(normalizePolicyRiskTags([' 写入 ', '发送', '写入', '', '支付']), ['写入', '发送', '支付'])
+})
+
+test('normalizes ignored automatic risk tags', () => {
+  assert.deepEqual(normalizeIgnoredRiskTags([' SEND ', 'unknown', 'send', 'payment']), ['send', 'payment'])
 })
 
 test('builds compact tool policy request', () => {
@@ -22,11 +27,13 @@ test('builds compact tool policy request', () => {
     cacheEnabled: true,
     cacheTtlSeconds: 0,
     riskTags: [' 标签 ', '标签'],
+    ignoredRiskTags: [' SEND ', 'unknown', 'send'],
   })
 
   assert.equal(payload.cacheTtlSeconds, 1)
   assert.equal(payload.routingStrategy, 'priority_fill')
   assert.deepEqual(payload.riskTags, ['标签'])
+  assert.deepEqual(payload.ignoredRiskTags, ['send'])
 })
 
 test('formats routing and cache labels', () => {

@@ -34,6 +34,7 @@ export interface ToolPolicyView {
   cacheEnabled: boolean
   cacheTtlSeconds?: number
   riskTags?: string[]
+  ignoredRiskTags?: string[]
 }
 
 export interface ToolDetail {

@@ -266,6 +266,7 @@ func TestBuildToolDetailsIncludesMatchedToolPolicy(t *testing.T) {
 			CacheEnabled:    true,
 			CacheTTLSeconds: 30,
 			RiskTags:        []string{"外发"},
+			IgnoredRiskTags: []string{"send"},
 		}},
 	)
 
@@ -276,7 +277,7 @@ func TestBuildToolDetailsIncludesMatchedToolPolicy(t *testing.T) {
 	if len(details) != 1 || details[0].Policy == nil {
 		t.Fatalf("应返回命中的工具策略：%+v", details)
 	}
-	if details[0].Policy.RuleID != "policy-1" || details[0].Policy.RiskTags[0] != "外发" {
+	if details[0].Policy.RuleID != "policy-1" || details[0].Policy.RiskTags[0] != "外发" || details[0].Policy.IgnoredRiskTags[0] != "send" {
 		t.Fatalf("策略详情不符合预期：%+v", details[0].Policy)
 	}
 }

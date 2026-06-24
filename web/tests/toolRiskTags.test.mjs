@@ -174,3 +174,49 @@ test('merges custom policy risk tags without raising severity', () => {
   )
   assert.equal(highestRiskLevel(tags), 'low')
 })
+
+test('ignores selected automatic policy risk tags', () => {
+  const item = detail({ name: 'send_message', description: '发布通知并更新状态' })
+  item.policy = {
+    ruleId: 'policy-1',
+    pattern: 'send_message',
+    cacheEnabled: false,
+    ignoredRiskTags: ['send'],
+  }
+
+  assert.deepEqual(
+    toolRiskTags(item).map((tag) => tag.key),
+    ['write'],
+  )
+})
+
+test('restores automatic risk tags when ignored keys are cleared', () => {
+  const item = detail({ name: 'send_message', description: '发布通知并更新状态' })
+  item.policy = {
+    ruleId: 'policy-1',
+    pattern: 'send_message',
+    cacheEnabled: false,
+    ignoredRiskTags: [],
+  }
+
+  assert.deepEqual(
+    toolRiskTags(item).map((tag) => tag.key),
+    ['write', 'send'],
+  )
+})
+
+test('keeps custom risk tags after ignoring automatic tags', () => {
+  const item = detail({ name: 'send_message', description: '发布通知并更新状态' })
+  item.policy = {
+    ruleId: 'policy-1',
+    pattern: 'send_message',
+    cacheEnabled: false,
+    riskTags: ['内部数据'],
+    ignoredRiskTags: ['send'],
+  }
+
+  assert.deepEqual(
+    toolRiskTags(item).map((tag) => tag.key),
+    ['write', 'custom:内部数据'],
+  )
+})

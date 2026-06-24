@@ -4,11 +4,32 @@ import AdminLayout from '@/components/layout/AdminLayout.vue'
 import PageBreadcrumb from '@/components/common/PageBreadcrumb.vue'
 import ToolPlaygroundPanel from '@/components/tools/ToolPlaygroundPanel.vue'
 import { listAPIKeys, type APIKey } from '@/api/apikeys'
+import {
+  createToolPolicy,
+  listToolPolicies,
+  updateToolPolicy,
+  type ToolPolicyRule,
+  type ToolPolicyRuleRequest,
+} from '@/api/rules'
 import { getAggregatedTools, type ToolDef, type ToolDetail, type ToolSource } from '@/api/tools'
 import type { UpstreamRateLimits } from '@/api/rateLimits'
 import { RefreshIcon } from '@/icons'
 import { explainToolGovernance, type ToolGovernanceTone } from '@/utils/toolGovernanceExplain'
-import { highestRiskLevel, toolRiskTags, type ToolRiskLevel, type ToolRiskTag } from '@/utils/toolRiskTags'
+import {
+  automaticToolRiskTags,
+  highestRiskLevel,
+  toolRiskTags,
+  type ToolRiskLevel,
+  type ToolRiskTag,
+} from '@/utils/toolRiskTags'
+import {
+  normalizeIgnoredRiskTags,
+  normalizePolicyRiskTags,
+  toolPolicyToRequest,
+  TOOL_POLICY_AUTO_RISK_TAGS,
+  TOOL_POLICY_RISK_TAG_PRESETS,
+  type AutoRiskTagKey,
+} from '@/utils/toolPolicy'
 
 type ConflictFilter = 'all' | 'conflict' | 'multi'
 type RiskFilter = 'all' | 'risk'
@@ -25,6 +46,9 @@ const conflictFilter = ref<ConflictFilter>('all')
 const riskFilter = ref<RiskFilter>('all')
 const selectedToolName = ref('')
 const detailOpen = ref(false)
+const riskSaving = ref(false)
+const riskError = ref('')
+const riskTagInput = ref('')
 
 const cardClass =
   'rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03]'
@@ -171,11 +195,15 @@ function toolSearchText(detail: ToolDetail): string {
 
 function openDetail(detail: ToolDetail): void {
   selectedToolName.value = detail.tool.name
+  riskError.value = ''
+  riskTagInput.value = ''
   detailOpen.value = true
 }
 
 function closeDetail(): void {
   detailOpen.value = false
+  riskError.value = ''
+  riskTagInput.value = ''
 }
 
 function resetFilters(): void {
@@ -268,6 +296,130 @@ function governanceToneClass(tone: ToolGovernanceTone): string {
 
 function riskTags(detail: ToolDetail): ToolRiskTag[] {
   return toolRiskTags(detail)
+}
+
+function automaticRiskTags(detail: ToolDetail): ToolRiskTag[] {
+  return automaticToolRiskTags(detail)
+}
+
+function ignoredRiskTags(detail: ToolDetail): AutoRiskTagKey[] {
+  return normalizeIgnoredRiskTags(detail.policy?.ignoredRiskTags ?? [])
+}
+
+function customRiskTags(detail: ToolDetail): string[] {
+  return normalizePolicyRiskTags(detail.policy?.riskTags ?? [])
+}
+
+function autoRiskTagDetected(detail: ToolDetail, key: string): boolean {
+  return automaticRiskTags(detail).some((tag) => tag.key === key)
+}
+
+function autoRiskTagIgnored(detail: ToolDetail, key: string): boolean {
+  return ignoredRiskTags(detail).includes(key as AutoRiskTagKey)
+}
+
+function nextExactPolicySortOrder(policies: ToolPolicyRule[]): number {
+  if (policies.length === 0) return 0
+  return Math.min(...policies.map((policy) => policy.sortOrder)) - 1
+}
+
+function baseRiskPolicy(detail: ToolDetail, policies: ToolPolicyRule[]): {
+  exact: ToolPolicyRule | null
+  payload: ToolPolicyRuleRequest
+} {
+  const exact = policies.find((policy) => !policy.isRegex && policy.pattern === detail.tool.name) ?? null
+  const matched = detail.policy?.ruleId ? policies.find((policy) => policy.id === detail.policy?.ruleId) : null
+  const exactIsActive = exact !== null && detail.policy?.ruleId === exact.id
+  const source = exactIsActive ? exact : (matched ?? exact)
+  const payload = toolPolicyToRequest(
+    source ?? {
+      pattern: detail.tool.name,
+      isRegex: false,
+      enabled: true,
+      sortOrder: nextExactPolicySortOrder(policies),
+      routingStrategy: detail.policy?.routingStrategy ?? '',
+      cacheEnabled: detail.policy?.cacheEnabled ?? false,
+      cacheTtlSeconds: detail.policy?.cacheTtlSeconds ?? 0,
+      riskTags: detail.policy?.riskTags ?? [],
+      ignoredRiskTags: detail.policy?.ignoredRiskTags ?? [],
+    },
+  )
+  payload.pattern = detail.tool.name
+  payload.isRegex = false
+  payload.enabled = true
+  if (exact === null || !exactIsActive) {
+    payload.sortOrder = nextExactPolicySortOrder(policies)
+  }
+  return { exact, payload }
+}
+
+async function saveRiskPolicy(mutator: (payload: ToolPolicyRuleRequest) => void): Promise<void> {
+  const detail = selectedToolDetail.value
+  if (detail === null || riskSaving.value) return
+  riskSaving.value = true
+  riskError.value = ''
+  try {
+    const policies = await listToolPolicies()
+    const { exact, payload } = baseRiskPolicy(detail, policies)
+    mutator(payload)
+    const normalized = toolPolicyToRequest(payload)
+    if (exact !== null) {
+      await updateToolPolicy(exact.id, normalized)
+    } else {
+      await createToolPolicy(normalized)
+    }
+    riskTagInput.value = ''
+    await loadTools(false)
+  } catch (err) {
+    riskError.value = err instanceof Error ? err.message : '保存风险提示失败'
+  } finally {
+    riskSaving.value = false
+  }
+}
+
+async function toggleAutoRiskTagIgnore(key: AutoRiskTagKey): Promise<void> {
+  await saveRiskPolicy((payload) => {
+    const current = new Set(normalizeIgnoredRiskTags(payload.ignoredRiskTags))
+    if (current.has(key)) current.delete(key)
+    else current.add(key)
+    payload.ignoredRiskTags = Array.from(current)
+  })
+}
+
+async function toggleCustomRiskTag(tag: string): Promise<void> {
+  await saveRiskPolicy((payload) => {
+    const current = new Set(normalizePolicyRiskTags(payload.riskTags))
+    if (current.has(tag)) current.delete(tag)
+    else current.add(tag)
+    payload.riskTags = Array.from(current)
+  })
+}
+
+async function addCustomRiskTag(tag: string): Promise<void> {
+  const value = tag.trim()
+  if (value === '') return
+  await saveRiskPolicy((payload) => {
+    payload.riskTags = normalizePolicyRiskTags([...payload.riskTags, value])
+  })
+}
+
+async function removeCustomRiskTag(tag: string): Promise<void> {
+  await saveRiskPolicy((payload) => {
+    payload.riskTags = normalizePolicyRiskTags(payload.riskTags.filter((item) => item !== tag))
+  })
+}
+
+async function restoreAutomaticRiskTags(): Promise<void> {
+  await saveRiskPolicy((payload) => {
+    payload.riskTags = []
+    payload.ignoredRiskTags = []
+  })
+}
+
+function onRiskTagInputKeydown(event: KeyboardEvent): void {
+  if (event.key !== 'Enter') return
+  event.preventDefault()
+  void addCustomRiskTag(riskTagInput.value)
 }
 
 function riskTagClass(level: ToolRiskLevel): string {
@@ -553,6 +705,103 @@ onMounted(() => {
             >
               该工具名称或描述包含可能改变数据、发送消息或触发财务动作的关键词；网关仅做提示与筛选，不会默认拦截。
             </div>
+
+            <section class="mt-4 rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-white/[0.02]">
+              <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div class="min-w-0">
+                  <h4 class="text-sm font-semibold text-gray-800 dark:text-white/90">风险提示修正</h4>
+                  <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
+                    调整当前工具的提示标签，仅影响展示和筛选，不改变调用行为。
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  class="shrink-0 rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-50 disabled:opacity-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+                  :disabled="riskSaving"
+                  @click="restoreAutomaticRiskTags"
+                >
+                  恢复自动识别
+                </button>
+              </div>
+
+              <p
+                v-if="riskError !== ''"
+                class="mt-3 rounded-lg bg-error-50 px-3 py-2 text-xs text-error-600 dark:bg-error-500/10 dark:text-error-400"
+              >
+                {{ riskError }}
+              </p>
+
+              <div class="mt-4">
+                <p class="mb-2 text-xs font-medium text-gray-600 dark:text-gray-300">自动标签</p>
+                <div class="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                  <button
+                    v-for="tag in TOOL_POLICY_AUTO_RISK_TAGS"
+                    :key="tag.key"
+                    type="button"
+                    class="rounded-lg border px-3 py-2 text-left text-xs transition disabled:cursor-not-allowed disabled:opacity-50"
+                    :class="autoRiskTagIgnored(selectedToolDetail, tag.key)
+                      ? 'border-gray-300 bg-gray-100 text-gray-700 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200'
+                      : autoRiskTagDetected(selectedToolDetail, tag.key)
+                        ? 'border-warning-200 bg-warning-50 text-warning-700 hover:bg-warning-100 dark:border-warning-500/30 dark:bg-warning-500/10 dark:text-warning-300'
+                        : 'border-gray-200 text-gray-500 dark:border-gray-800 dark:text-gray-500'"
+                    :disabled="riskSaving || !autoRiskTagDetected(selectedToolDetail, tag.key)"
+                    @click="toggleAutoRiskTagIgnore(tag.key)"
+                  >
+                    <span class="block font-medium">
+                      {{ autoRiskTagIgnored(selectedToolDetail, tag.key) ? '已忽略' : autoRiskTagDetected(selectedToolDetail, tag.key) ? '已识别' : '未识别' }}：{{ tag.label }}
+                    </span>
+                    <span class="mt-1 block text-[11px] opacity-80">{{ tag.description }}</span>
+                  </button>
+                </div>
+              </div>
+
+              <div class="mt-4">
+                <p class="mb-2 text-xs font-medium text-gray-600 dark:text-gray-300">手动标签</p>
+                <div class="mb-2 flex flex-wrap gap-2">
+                  <button
+                    v-for="tag in TOOL_POLICY_RISK_TAG_PRESETS"
+                    :key="tag"
+                    type="button"
+                    class="rounded-full border px-2.5 py-1 text-xs font-medium transition disabled:opacity-50"
+                    :class="customRiskTags(selectedToolDetail).includes(tag) ? 'border-warning-300 bg-warning-50 text-warning-700 dark:border-warning-500/30 dark:bg-warning-500/10 dark:text-warning-300' : 'border-gray-200 text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800'"
+                    :disabled="riskSaving"
+                    @click="toggleCustomRiskTag(tag)"
+                  >
+                    {{ tag }}
+                  </button>
+                </div>
+                <div class="flex gap-2">
+                  <input
+                    v-model="riskTagInput"
+                    type="text"
+                    placeholder="自定义标签"
+                    class="min-w-0 flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-800 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 focus:outline-none disabled:opacity-50 dark:border-gray-700 dark:bg-gray-800 dark:text-white/90"
+                    :disabled="riskSaving"
+                    @keydown="onRiskTagInputKeydown"
+                  />
+                  <button
+                    type="button"
+                    class="rounded-lg border border-gray-300 px-3 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:opacity-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+                    :disabled="riskSaving"
+                    @click="addCustomRiskTag(riskTagInput)"
+                  >
+                    添加
+                  </button>
+                </div>
+                <div v-if="customRiskTags(selectedToolDetail).length > 0" class="mt-2 flex flex-wrap gap-1.5">
+                  <button
+                    v-for="tag in customRiskTags(selectedToolDetail)"
+                    :key="tag"
+                    type="button"
+                    class="rounded-full bg-warning-50 px-2 py-0.5 text-xs text-warning-700 transition hover:bg-warning-100 disabled:opacity-50 dark:bg-warning-500/10 dark:text-warning-300"
+                    :disabled="riskSaving"
+                    @click="removeCustomRiskTag(tag)"
+                  >
+                    {{ tag }} ×
+                  </button>
+                </div>
+              </div>
+            </section>
 
             <div
               v-if="selectedToolDetail.tool.schemaConflict"

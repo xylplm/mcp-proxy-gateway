@@ -1,4 +1,5 @@
 import type { ToolDetail } from '@/api/tools'
+import { normalizeIgnoredRiskTags, type AutoRiskTagKey } from './toolPolicy.ts'
 
 export type ToolRiskLevel = 'high' | 'medium' | 'low'
 
@@ -107,7 +108,7 @@ const sendDescriptionActions = [
   enActionPattern('email|notify|post|publish|send|sms|webhook'),
 ]
 
-export function toolRiskTags(detail: ToolDetail): ToolRiskTag[] {
+export function automaticToolRiskTags(detail: ToolDetail): ToolRiskTag[] {
   const nameGroups = toolNameTokenGroups(detail)
   const descriptions = toolDescriptions(detail)
   const nameActions = {
@@ -138,6 +139,12 @@ export function toolRiskTags(detail: ToolDetail): ToolRiskTag[] {
   if (nameActions.delete || descriptionActions.delete) tags.push(riskMeta.delete)
   if (nameActions.write || descriptionActions.write) tags.push(riskMeta.write)
   if (nameActions.send || descriptionActions.send) tags.push(riskMeta.send)
+  return tags
+}
+
+export function toolRiskTags(detail: ToolDetail): ToolRiskTag[] {
+  const ignored = new Set(normalizeIgnoredRiskTags(detail.policy?.ignoredRiskTags ?? []))
+  const tags = automaticToolRiskTags(detail).filter((tag) => !ignored.has(tag.key as AutoRiskTagKey))
   return mergeCustomRiskTags(tags, detail.policy?.riskTags ?? [])
 }
 

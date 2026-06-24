@@ -80,6 +80,7 @@ func TestToolPolicyCRUDRoutes(t *testing.T) {
 		CacheEnabled:    true,
 		CacheTTLSeconds: 30,
 		RiskTags:        []string{"外发"},
+		IgnoredRiskTags: []string{"send"},
 	}}}
 	e := newTestEngine(Deps{RuleValidator: fakeRuleValidator{}, ToolPolicyStore: store})
 
@@ -91,23 +92,23 @@ func TestToolPolicyCRUDRoutes(t *testing.T) {
 		ToolPolicies []domain.ToolPolicyRule `json:"toolPolicies"`
 	}
 	unmarshalData(t, w, &list)
-	if len(list.ToolPolicies) != 1 || list.ToolPolicies[0].RiskTags[0] != "外发" {
+	if len(list.ToolPolicies) != 1 || list.ToolPolicies[0].RiskTags[0] != "外发" || list.ToolPolicies[0].IgnoredRiskTags[0] != "send" {
 		t.Fatalf("工具策略列表不符合预期：%+v", list)
 	}
 
-	w = doJSON(e, http.MethodPost, "/api/admin/tool-policies", `{"pattern":"read_.+","isRegex":true,"enabled":true,"routingStrategy":"priority_fill","cacheEnabled":true,"cacheTtlSeconds":15,"riskTags":["只读缓存"]}`)
+	w = doJSON(e, http.MethodPost, "/api/admin/tool-policies", `{"pattern":"read_.+","isRegex":true,"enabled":true,"routingStrategy":"priority_fill","cacheEnabled":true,"cacheTtlSeconds":15,"riskTags":["只读缓存"],"ignoredRiskTags":["write"]}`)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("创建期望 HTTP 201，实际 %d，响应体 %s", w.Code, w.Body.String())
 	}
-	if store.created.Pattern != "read_.+" || store.created.RoutingStrategy != domain.ToolRoutingPriorityFill || store.created.CacheTTLSeconds != 15 {
+	if store.created.Pattern != "read_.+" || store.created.RoutingStrategy != domain.ToolRoutingPriorityFill || store.created.CacheTTLSeconds != 15 || store.created.IgnoredRiskTags[0] != "write" {
 		t.Fatalf("创建参数未正确传递：%+v", store.created)
 	}
 
-	w = doJSON(e, http.MethodPut, "/api/admin/tool-policies/policy-1", `{"pattern":"write","enabled":false,"sortOrder":7,"riskTags":["写入"]}`)
+	w = doJSON(e, http.MethodPut, "/api/admin/tool-policies/policy-1", `{"pattern":"write","enabled":false,"sortOrder":7,"riskTags":["写入"],"ignoredRiskTags":["delete"]}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("更新期望 HTTP 200，实际 %d，响应体 %s", w.Code, w.Body.String())
 	}
-	if store.updated.ID != "policy-1" || store.updated.Pattern != "write" || store.updated.SortOrder != 7 {
+	if store.updated.ID != "policy-1" || store.updated.Pattern != "write" || store.updated.SortOrder != 7 || store.updated.IgnoredRiskTags[0] != "delete" {
 		t.Fatalf("更新参数未正确传递：%+v", store.updated)
 	}
 
@@ -125,6 +126,19 @@ func TestToolPolicyCRUDRoutes(t *testing.T) {
 	}
 	if store.deleted != "policy-1" {
 		t.Fatalf("删除目标不符合预期：%q", store.deleted)
+	}
+}
+
+func TestCreateToolPolicyRejectsInvalidIgnoredRiskTag(t *testing.T) {
+	e := newTestEngine(Deps{RuleValidator: fakeRuleValidator{}, ToolPolicyStore: &fakeToolPolicyStore{}})
+
+	w := doJSON(e, http.MethodPost, "/api/admin/tool-policies", `{"pattern":"read","enabled":true,"ignoredRiskTags":["unknown"]}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("非法忽略标签期望 HTTP 400，实际 %d，响应体 %s", w.Code, w.Body.String())
+	}
+	_, _, fields := parseErrorEnvelope(t, w)
+	if fields["ignoredRiskTags[0]"] == "" {
+		t.Fatalf("应返回 ignoredRiskTags 字段错误：%+v", fields)
 	}
 }
 
