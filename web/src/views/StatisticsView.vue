@@ -25,6 +25,7 @@ import {
 import { listAPIKeys } from '@/api/apikeys'
 import { listUpstreams } from '@/api/upstreams'
 import { getAggregatedTools } from '@/api/tools'
+import { statsToolCallsQuery, statsToolFailuresQuery } from '@/utils/statsDrilldown'
 
 const ApexChart = defineAsyncComponent(() => import('vue3-apexcharts'))
 
@@ -135,6 +136,10 @@ function localDayKey(date: Date, tz: string): string {
 
 function range(): TimeRangeQuery {
   return { start: toRFC3339(startLocal.value), end: toRFC3339(endLocal.value), tz: statsTZ }
+}
+
+function currentStatsRange(): TimeRangeQuery {
+  return range()
 }
 
 function formatInt(value: number): string {
@@ -756,10 +761,11 @@ onMounted(async () => {
           </span>
         </div>
         <div v-if="toolRanks.length > 0" class="space-y-3">
-          <div
+          <RouterLink
             v-for="(item, index) in toolRanks"
             :key="`${item.UpstreamID}:${item.OriginalName}`"
-            class="rounded-lg border border-gray-200 p-3 dark:border-gray-800"
+            :to="{ name: 'CallRecords', query: statsToolCallsQuery(currentStatsRange(), item) }"
+            class="block rounded-lg border border-gray-200 p-3 transition hover:border-brand-300 hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-400 dark:border-gray-800 dark:hover:border-brand-500/40 dark:hover:bg-gray-800/40"
           >
             <div class="flex items-start justify-between gap-3">
               <div class="flex min-w-0 items-start gap-2">
@@ -798,7 +804,7 @@ onMounted(async () => {
                 :style="{ width: `${toolRankMax === 0 ? 0 : (item.Count / toolRankMax) * 100}%` }"
               ></div>
             </div>
-          </div>
+          </RouterLink>
         </div>
         <div v-else class="py-12 text-center text-sm text-gray-400 dark:text-gray-500">
           暂无工具调用记录
@@ -816,10 +822,11 @@ onMounted(async () => {
           </span>
         </div>
         <div class="space-y-3">
-          <div
+          <RouterLink
             v-for="item in toolErrors"
             :key="`${item.UpstreamID}:${item.OriginalName}`"
-            class="rounded-lg border border-gray-200 p-3 dark:border-gray-800"
+            :to="{ name: 'CallRecords', query: statsToolFailuresQuery(currentStatsRange(), item) }"
+            class="block rounded-lg border border-gray-200 p-3 transition hover:border-error-300 hover:bg-error-50/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-error-300 dark:border-gray-800 dark:hover:border-error-500/40 dark:hover:bg-error-500/[0.06]"
           >
             <div class="flex items-start justify-between gap-3">
               <div class="min-w-0">
@@ -841,7 +848,7 @@ onMounted(async () => {
               <span>总调用 {{ formatInt(item.TotalCalls) }}</span>
               <span>平均耗时 {{ formatMs(item.AvgLatencyMS) }}</span>
             </div>
-          </div>
+          </RouterLink>
           <div
             v-if="toolErrors.length === 0"
             class="py-10 text-center text-sm text-gray-400 dark:text-gray-500"
