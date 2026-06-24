@@ -29,6 +29,30 @@ export type TemplateCategory =
 /** 占位参数取值类别，与后端 template.ParamKind 对齐。 */
 export type ParamKind = 'string' | 'url' | 'secret' | 'int'
 
+export type TemplateTrustLevel = 'curated' | string
+export type TemplateRuntime = 'remote' | 'docker' | 'node' | 'python' | 'uvx' | 'local' | string
+export type TemplateCredentialType =
+  | 'none'
+  | 'api_key'
+  | 'oauth'
+  | 'token'
+  | 'connection_string'
+  | 'service_url'
+  | string
+export type TemplateToolType =
+  | 'search'
+  | 'file'
+  | 'database'
+  | 'browser'
+  | 'project_management'
+  | 'collaboration'
+  | 'automation'
+  | 'ai'
+  | 'dev_tools'
+  | 'maps'
+  | 'other'
+  | string
+
 /** 占位参数校验规则，与后端 template.ParamRule 对齐。 */
 export interface ParamRule {
   /** 取值类别（决定基础校验方式）。 */
@@ -69,6 +93,11 @@ export interface Template {
   docUrl: string
   /** 生成上游时使用的传输类型。 */
   transport: TransportType
+  trustLevel?: TemplateTrustLevel
+  runtimes?: TemplateRuntime[]
+  credentialTypes?: TemplateCredentialType[]
+  containerReady?: boolean
+  toolTypes?: TemplateToolType[]
   /** 预设连接参数（用于表单预填充，含 ${name} 占位引用）。 */
   presetParams: ConnParams
   /** 占位参数定义集合（标记需用户填写的字段）。 */

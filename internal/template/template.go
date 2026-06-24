@@ -97,6 +97,54 @@ type ParamRule struct {
 	MaxLen int `json:"maxLen,omitempty"`
 }
 
+// TrustLevel 表示模板来源可信度提示，仅用于管理台展示与筛选辅助。
+type TrustLevel string
+
+const (
+	TrustCurated TrustLevel = "curated"
+)
+
+// RuntimeTag 表示运行模板所需或推荐的运行环境。
+type RuntimeTag string
+
+const (
+	RuntimeRemote RuntimeTag = "remote"
+	RuntimeDocker RuntimeTag = "docker"
+	RuntimeNode   RuntimeTag = "node"
+	RuntimePython RuntimeTag = "python"
+	RuntimeUVX    RuntimeTag = "uvx"
+	RuntimeLocal  RuntimeTag = "local"
+)
+
+// CredentialType 表示接入模板时需要的凭证或配置类型。
+type CredentialType string
+
+const (
+	CredentialNone             CredentialType = "none"
+	CredentialAPIKey           CredentialType = "api_key"
+	CredentialOAuth            CredentialType = "oauth"
+	CredentialToken            CredentialType = "token"
+	CredentialConnectionString CredentialType = "connection_string"
+	CredentialServiceURL       CredentialType = "service_url"
+)
+
+// ToolType 表示模板大致提供的工具能力类型。
+type ToolType string
+
+const (
+	ToolTypeSearch            ToolType = "search"
+	ToolTypeFile              ToolType = "file"
+	ToolTypeDatabase          ToolType = "database"
+	ToolTypeBrowser           ToolType = "browser"
+	ToolTypeProjectManagement ToolType = "project_management"
+	ToolTypeCollaboration     ToolType = "collaboration"
+	ToolTypeAutomation        ToolType = "automation"
+	ToolTypeAI                ToolType = "ai"
+	ToolTypeDevTools          ToolType = "dev_tools"
+	ToolTypeMaps              ToolType = "maps"
+	ToolTypeOther             ToolType = "other"
+)
+
 // Placeholder 表示模板中需由管理员填写的占位参数定义（Req 14.1）。
 //
 // 占位参数区别于预设连接参数：后者由模板预先固定并用于表单预填充，前者必须由管理员
@@ -132,6 +180,16 @@ type Template struct {
 	DocURL string `json:"docUrl"`
 	// Transport 为该模板生成上游时使用的传输类型。
 	Transport domain.TransportType `json:"transport"`
+	// TrustLevel 为内置模板来源可信度提示。
+	TrustLevel TrustLevel `json:"trustLevel"`
+	// Runtimes 为运行该模板依赖的环境标签。
+	Runtimes []RuntimeTag `json:"runtimes"`
+	// CredentialTypes 为接入该模板需要的凭证或配置类型。
+	CredentialTypes []CredentialType `json:"credentialTypes"`
+	// ContainerReady 表示该模板是否天然适合在容器/远程环境内运行。
+	ContainerReady bool `json:"containerReady"`
+	// ToolTypes 为模板提供的工具能力类型。
+	ToolTypes []ToolType `json:"toolTypes"`
 	// PresetParams 为预设连接参数，用于表单预填充；不含需用户填写的占位参数。
 	PresetParams map[string]any `json:"presetParams"`
 	// Placeholders 为占位参数定义集合，标记需用户填写的字段及其校验规则。
@@ -152,6 +210,15 @@ func (t Template) clone() Template {
 		phs := make([]Placeholder, len(t.Placeholders))
 		copy(phs, t.Placeholders)
 		cp.Placeholders = phs
+	}
+	if t.Runtimes != nil {
+		cp.Runtimes = append([]RuntimeTag(nil), t.Runtimes...)
+	}
+	if t.CredentialTypes != nil {
+		cp.CredentialTypes = append([]CredentialType(nil), t.CredentialTypes...)
+	}
+	if t.ToolTypes != nil {
+		cp.ToolTypes = append([]ToolType(nil), t.ToolTypes...)
 	}
 	return cp
 }

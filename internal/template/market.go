@@ -30,10 +30,145 @@ func newMarket(templates []Template) *Market {
 	idx := make(map[string]int, len(templates))
 	stored := make([]Template, 0, len(templates))
 	for _, t := range templates {
+		t = enrichTemplate(t)
 		stored = append(stored, t.clone())
 		idx[t.ID] = len(stored) - 1
 	}
 	return &Market{templates: stored, index: idx}
+}
+
+func enrichTemplate(t Template) Template {
+	if t.TrustLevel == "" {
+		t.TrustLevel = TrustCurated
+	}
+	if len(t.Runtimes) == 0 {
+		t.Runtimes = inferRuntimes(t)
+	}
+	if len(t.CredentialTypes) == 0 {
+		t.CredentialTypes = inferCredentialTypes(t)
+	}
+	if !t.ContainerReady {
+		t.ContainerReady = inferContainerReady(t)
+	}
+	if len(t.ToolTypes) == 0 {
+		t.ToolTypes = inferToolTypes(t)
+	}
+	return t
+}
+
+func inferRuntimes(t Template) []RuntimeTag {
+	if t.Transport != domain.TransportStdio {
+		return []RuntimeTag{RuntimeRemote}
+	}
+	command, _ := t.PresetParams["command"].(string)
+	switch strings.ToLower(command) {
+	case "docker":
+		return []RuntimeTag{RuntimeDocker}
+	case "npx", "node":
+		return []RuntimeTag{RuntimeNode}
+	case "python", "python3":
+		return []RuntimeTag{RuntimePython}
+	case "uvx":
+		return []RuntimeTag{RuntimeUVX, RuntimePython}
+	default:
+		return []RuntimeTag{RuntimeLocal}
+	}
+}
+
+func inferCredentialTypes(t Template) []CredentialType {
+	out := make([]CredentialType, 0)
+	seen := map[CredentialType]struct{}{}
+	add := func(c CredentialType) {
+		if _, ok := seen[c]; ok {
+			return
+		}
+		seen[c] = struct{}{}
+		out = append(out, c)
+	}
+	for _, ph := range t.Placeholders {
+		name := strings.ToLower(ph.Name + " " + ph.Label)
+		switch {
+		case strings.Contains(name, "oauth"):
+			add(CredentialOAuth)
+		case ph.Rule.Kind == ParamSecret && (strings.Contains(name, "key") || strings.Contains(name, "api")):
+			add(CredentialAPIKey)
+		case strings.Contains(name, "dsn") || strings.Contains(name, "连接字符串") || strings.Contains(name, "redisurl"):
+			add(CredentialConnectionString)
+		case strings.Contains(name, "url") || strings.Contains(name, "地址"):
+			add(CredentialServiceURL)
+		case strings.Contains(name, "token") || strings.Contains(name, "令牌"):
+			add(CredentialToken)
+		case ph.Rule.Kind == ParamSecret:
+			add(CredentialAPIKey)
+		}
+	}
+	if len(out) == 0 {
+		return []CredentialType{CredentialNone}
+	}
+	return out
+}
+
+func inferContainerReady(t Template) bool {
+	if t.Transport != domain.TransportStdio {
+		return true
+	}
+	runtimes := t.Runtimes
+	if len(runtimes) == 0 {
+		runtimes = inferRuntimes(t)
+	}
+	for _, runtime := range runtimes {
+		if runtime == RuntimeDocker {
+			return true
+		}
+	}
+	return false
+}
+
+func inferToolTypes(t Template) []ToolType {
+	if types, ok := templateToolTypeOverrides[t.ID]; ok {
+		return append([]ToolType(nil), types...)
+	}
+	switch t.Category {
+	case CategorySearch:
+		return []ToolType{ToolTypeSearch}
+	case CategoryDatabase:
+		return []ToolType{ToolTypeDatabase}
+	case CategoryFileSystem:
+		return []ToolType{ToolTypeFile}
+	case CategoryCollaboration:
+		return []ToolType{ToolTypeCollaboration}
+	case CategoryAutomation:
+		return []ToolType{ToolTypeAutomation}
+	case CategoryAIModel:
+		return []ToolType{ToolTypeAI}
+	case CategoryDevTools:
+		return []ToolType{ToolTypeDevTools}
+	default:
+		return []ToolType{ToolTypeOther}
+	}
+}
+
+var templateToolTypeOverrides = map[string][]ToolType{
+	"brave-search":            {ToolTypeSearch},
+	"firecrawl-mcp":           {ToolTypeSearch},
+	"exa-search-mcp":          {ToolTypeSearch},
+	"tavily-search":           {ToolTypeSearch},
+	"github-mcp":              {ToolTypeDevTools, ToolTypeProjectManagement},
+	"playwright-mcp":          {ToolTypeBrowser},
+	"puppeteer-mcp":           {ToolTypeBrowser},
+	"context7-mcp":            {ToolTypeDevTools, ToolTypeSearch},
+	"postgres-mcp":            {ToolTypeDatabase},
+	"redis-mcp":               {ToolTypeDatabase},
+	"filesystem-mcp":          {ToolTypeFile},
+	"memory-mcp":              {ToolTypeAI},
+	"sequential-thinking-mcp": {ToolTypeAI},
+	"openai-compatible-mcp":   {ToolTypeAI},
+	"slack-mcp":               {ToolTypeCollaboration},
+	"notion-mcp":              {ToolTypeCollaboration, ToolTypeProjectManagement},
+	"media-saber-mcp":         {ToolTypeAutomation, ToolTypeSearch},
+	"zapier-mcp":              {ToolTypeAutomation},
+	"google-maps-mcp":         {ToolTypeMaps, ToolTypeSearch},
+	"fetch-mcp":               {ToolTypeSearch},
 }
 
 // List 返回模板市场中的全部模板；集合为空时返回空列表而非错误（Req 14.13）。

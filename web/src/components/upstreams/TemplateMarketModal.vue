@@ -31,6 +31,7 @@ import {
   type TemplateMarketPrefs,
   type TemplateMarketViewFilter,
 } from '@/utils/templateMarketPrefs'
+import { templateCardChips, templateMetaChips, templateMetadataSearchText, type TemplateMetaChip } from '@/utils/templateMetadata'
 
 const props = defineProps<{ open: boolean }>()
 const emit = defineEmits<{
@@ -56,20 +57,29 @@ const errorMessage = ref('')
 const selecting = ref(false)
 const prefs = ref<TemplateMarketPrefs>(loadTemplateMarketPrefs())
 
+const locallyFilteredTemplates = computed(() => {
+  const kw = keyword.value.trim().toLowerCase()
+  if (kw === '') return templates.value
+  return templates.value.filter((template) => {
+    const text = `${template.name} ${template.summary} ${templateMetadataSearchText(template)}`.toLowerCase()
+    return text.includes(kw)
+  })
+})
+
 const visibleTemplates = computed(() =>
-  filterTemplatesByPreference(templates.value, prefs.value, viewFilter.value),
+  filterTemplatesByPreference(locallyFilteredTemplates.value, prefs.value, viewFilter.value),
 )
 
 const favoriteCount = computed(() =>
-  templates.value.filter((template) => prefs.value.favoriteIds.includes(template.id)).length,
+  locallyFilteredTemplates.value.filter((template) => prefs.value.favoriteIds.includes(template.id)).length,
 )
 
 const recentCount = computed(() =>
-  templates.value.filter((template) => prefs.value.recentIds.includes(template.id)).length,
+  locallyFilteredTemplates.value.filter((template) => prefs.value.recentIds.includes(template.id)).length,
 )
 
 const filterTabs = computed<Array<{ key: TemplateMarketViewFilter; label: string; count: number }>>(() => [
-  { key: 'all', label: '全部', count: templates.value.length },
+  { key: 'all', label: '全部', count: locallyFilteredTemplates.value.length },
   { key: 'favorites', label: '收藏', count: favoriteCount.value },
   { key: 'recent', label: '最近使用', count: recentCount.value },
 ])
@@ -96,6 +106,13 @@ function transportLabel(value: string): string {
 /** 分类显示名（兜底用本地映射）。 */
 function categoryLabel(cat: TemplateCategory): string {
   return CATEGORY_LABELS[cat] ?? cat
+}
+
+function chipClass(chip: TemplateMetaChip): string {
+  if (chip.tone === 'brand') return 'bg-brand-50 text-brand-700 dark:bg-brand-500/10 dark:text-brand-300'
+  if (chip.tone === 'success') return 'bg-success-50 text-success-700 dark:bg-success-500/10 dark:text-success-300'
+  if (chip.tone === 'warning') return 'bg-warning-50 text-warning-700 dark:bg-warning-500/10 dark:text-warning-300'
+  return 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300'
 }
 
 /** 拉取模板列表（按当前分类与关键字）。 */
@@ -340,6 +357,17 @@ watch(
                   </a>
                 </div>
 
+                <div class="flex flex-wrap gap-1.5">
+                  <span
+                    v-for="chip in templateMetaChips(detail)"
+                    :key="chip.key"
+                    class="rounded-full px-2 py-0.5 text-xs font-medium"
+                    :class="chipClass(chip)"
+                  >
+                    {{ chip.label }}
+                  </span>
+                </div>
+
                 <div v-if="(detail.placeholders ?? []).length > 0">
                   <p class="mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">需填写参数</p>
                   <ul class="space-y-2">
@@ -386,6 +414,16 @@ watch(
                       最近使用
                     </span>
                     <p class="line-clamp-2 flex-1 text-xs text-gray-500 dark:text-gray-400">{{ tpl.summary }}</p>
+                    <div class="mt-3 flex flex-wrap gap-1.5">
+                      <span
+                        v-for="chip in templateCardChips(tpl)"
+                        :key="chip.key"
+                        class="rounded-full px-2 py-0.5 text-[11px] font-medium"
+                        :class="chipClass(chip)"
+                      >
+                        {{ chip.label }}
+                      </span>
+                    </div>
                     <span class="mt-3 inline-block text-xs text-brand-600 dark:text-brand-400">查看详情 →</span>
                   </button>
                   <button

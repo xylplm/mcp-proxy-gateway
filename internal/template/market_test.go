@@ -195,12 +195,62 @@ func TestBuiltinMarket_CoversAtLeastEightCategories(t *testing.T) {
 		if tm.ID == "" || tm.Name == "" || tm.Summary == "" || tm.DocURL == "" || tm.Transport == "" {
 			t.Errorf("内置模板 %q 关键字段不应为空：%+v", tm.ID, tm)
 		}
+		if tm.TrustLevel == "" || len(tm.Runtimes) == 0 || len(tm.CredentialTypes) == 0 || len(tm.ToolTypes) == 0 {
+			t.Errorf("内置模板 %q 应包含可信度、运行环境、凭证类型和工具类型标签：%+v", tm.ID, tm)
+		}
 		for _, ph := range tm.Placeholders {
 			if ph.Name == "" {
 				t.Errorf("模板 %s 的占位参数缺少参数名", tm.ID)
 			}
 		}
 	}
+}
+
+func TestBuiltinTemplateMetadataTags(t *testing.T) {
+	m := New()
+
+	tavily, err := m.Get("tavily-search")
+	if err != nil {
+		t.Fatalf("查询 tavily-search 失败：%v", err)
+	}
+	assertTemplateMetaContains(t, tavily.CredentialTypes, CredentialAPIKey)
+	assertTemplateMetaContains(t, tavily.Runtimes, RuntimeRemote)
+	assertTemplateMetaContains(t, tavily.ToolTypes, ToolTypeSearch)
+	if !tavily.ContainerReady {
+		t.Fatal("远程 HTTP 模板应适合容器内运行")
+	}
+
+	github, err := m.Get("github-mcp")
+	if err != nil {
+		t.Fatalf("查询 github-mcp 失败：%v", err)
+	}
+	assertTemplateMetaContains(t, github.Runtimes, RuntimeDocker)
+	assertTemplateMetaContains(t, github.CredentialTypes, CredentialToken)
+	assertTemplateMetaContains(t, github.ToolTypes, ToolTypeProjectManagement)
+	if !github.ContainerReady {
+		t.Fatal("Docker 模板应标记为适合容器内运行")
+	}
+
+	playwright, err := m.Get("playwright-mcp")
+	if err != nil {
+		t.Fatalf("查询 playwright-mcp 失败：%v", err)
+	}
+	assertTemplateMetaContains(t, playwright.Runtimes, RuntimeNode)
+	assertTemplateMetaContains(t, playwright.CredentialTypes, CredentialNone)
+	assertTemplateMetaContains(t, playwright.ToolTypes, ToolTypeBrowser)
+	if playwright.ContainerReady {
+		t.Fatal("本地 npx 浏览器模板不应默认标记为容器友好")
+	}
+}
+
+func assertTemplateMetaContains[T comparable](t *testing.T, values []T, want T) {
+	t.Helper()
+	for _, value := range values {
+		if value == want {
+			return
+		}
+	}
+	t.Fatalf("标签列表 %v 未包含 %v", values, want)
 }
 
 func TestListByCategories_CoversAllCategoriesInOrder(t *testing.T) {
