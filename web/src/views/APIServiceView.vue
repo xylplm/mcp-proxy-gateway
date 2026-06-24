@@ -27,8 +27,12 @@ import { useClipboard } from '@/composables/useClipboard'
 import { useToast } from '@/composables/useToast'
 import {
   buildMCPClientConfig,
+  getMCPClientPreset,
+  MCP_CLIENT_PRESETS,
   normalizeMCPServerName,
   type MCPClientConfigKind,
+  type MCPClientPreset,
+  type MCPClientPresetKey,
 } from '@/utils/mcpClientConfig'
 import {
   DEFAULT_MCP_HTTP_ORIGIN,
@@ -76,6 +80,7 @@ const loadError = ref('')
 const formError = ref('')
 const copiedKey = ref('')
 const guideOpen = ref(false)
+const selectedGuidePreset = ref<MCPClientPresetKey>('generic')
 const guideMode = ref<'full' | 'smart'>('full')
 const selectedGuideEndpoint = ref<EndpointKey>('http')
 const selectedGuideAuth = ref<AuthKey>('bearer')
@@ -278,6 +283,8 @@ const activeEndpoints = computed(() => endpointTab.value === 'smart' ? smartEndp
 const guideHTTPOrigin = computed(() => mcpHTTPOrigin(guideOrigin.value))
 const guideWSOrigin = computed(() => mcpWSOrigin(guideOrigin.value))
 const guideOriginDisplay = computed(() => normalizeMCPOrigin(guideOrigin.value) || HTTP_ORIGIN)
+const guidePresetOptions = MCP_CLIENT_PRESETS
+const selectedPreset = computed<MCPClientPreset>(() => getMCPClientPreset(selectedGuidePreset.value))
 const guideEndpoints = computed<EndpointItem[]>(() => {
   const httpOrigin = guideHTTPOrigin.value
   const wsOrigin = guideWSOrigin.value
@@ -376,10 +383,10 @@ const guideAddressHint = computed(() => {
 const guideSnippets = computed<GuideSnippet[]>(() => [
   {
     key: 'client-config',
-    title: guideConfigKind.value === 'mcp-json' ? 'MCP 客户端配置' : 'MCP 服务条目',
+    title: guideConfigKind.value === 'mcp-json' ? `${selectedPreset.value.label} 配置` : `${selectedPreset.value.label} 服务条目`,
     desc: guideConfigKind.value === 'mcp-json'
-      ? '适用于支持远程 MCP 的客户端。'
-      : '复制到已有 mcpServers 对象中使用。',
+      ? selectedPreset.value.hint
+      : '复制到已有服务列表或 mcpServers 对象中使用。',
     code: clientConfigSnippet(),
   },
   {
@@ -445,6 +452,16 @@ function openGuide(): void {
     guideOrigin.value = guideOriginHistory.value.origins[0] ?? inferCurrentOrigin()
   }
   guideOpen.value = true
+}
+
+function applyGuidePreset(key: MCPClientPresetKey): void {
+  const preset = getMCPClientPreset(key)
+  selectedGuidePreset.value = preset.key
+  guideMode.value = preset.mode
+  selectedGuideEndpoint.value = preset.endpoint
+  selectedGuideAuth.value = preset.auth
+  guideConfigKind.value = preset.configKind
+  guideServerName.value = preset.serverName
 }
 
 function closeGuide(): void {
@@ -1368,6 +1385,31 @@ const errClass = 'mt-1 text-xs text-error-500'
                 <div>
                   <div class="mb-3 flex items-center gap-2">
                     <span class="flex h-6 w-6 items-center justify-center rounded-full bg-brand-50 text-xs font-semibold text-brand-600 dark:bg-brand-500/10 dark:text-brand-400">1</span>
+                    <h4 class="text-sm font-semibold text-gray-800 dark:text-white/90">客户端预设</h4>
+                  </div>
+                  <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    <button
+                      v-for="preset in guidePresetOptions"
+                      :key="preset.key"
+                      type="button"
+                      class="rounded-xl border p-3 text-left transition"
+                      :class="selectedGuidePreset === preset.key
+                        ? 'border-brand-300 bg-brand-50/60 dark:border-brand-500/50 dark:bg-brand-500/[0.08]'
+                        : 'border-gray-200 hover:border-brand-300 hover:bg-brand-50/40 dark:border-gray-800 dark:hover:border-brand-500/40 dark:hover:bg-brand-500/[0.06]'"
+                      @click="applyGuidePreset(preset.key)"
+                    >
+                      <span class="flex items-center justify-between gap-2">
+                        <span class="truncate text-sm font-semibold text-gray-800 dark:text-white/90">{{ preset.label }}</span>
+                        <span class="shrink-0 rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-600 dark:bg-white/5 dark:text-gray-400">{{ preset.badge }}</span>
+                      </span>
+                      <span class="mt-1.5 block line-clamp-2 text-xs leading-5 text-gray-500 dark:text-gray-400">{{ preset.desc }}</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <div class="mb-3 flex items-center gap-2">
+                    <span class="flex h-6 w-6 items-center justify-center rounded-full bg-brand-50 text-xs font-semibold text-brand-600 dark:bg-brand-500/10 dark:text-brand-400">2</span>
                     <h4 class="text-sm font-semibold text-gray-800 dark:text-white/90">访问地址</h4>
                   </div>
                   <div class="rounded-xl border border-gray-200 p-4 dark:border-gray-800">
@@ -1411,7 +1453,7 @@ const errClass = 'mt-1 text-xs text-error-500'
 
                 <div>
                   <div class="mb-3 flex items-center gap-2">
-                    <span class="flex h-6 w-6 items-center justify-center rounded-full bg-brand-50 text-xs font-semibold text-brand-600 dark:bg-brand-500/10 dark:text-brand-400">2</span>
+                    <span class="flex h-6 w-6 items-center justify-center rounded-full bg-brand-50 text-xs font-semibold text-brand-600 dark:bg-brand-500/10 dark:text-brand-400">3</span>
                     <h4 class="text-sm font-semibold text-gray-800 dark:text-white/90">服务模式</h4>
                   </div>
                   <div class="grid grid-cols-1 gap-3">
@@ -1444,7 +1486,7 @@ const errClass = 'mt-1 text-xs text-error-500'
 
                 <div>
                   <div class="mb-3 flex items-center gap-2">
-                    <span class="flex h-6 w-6 items-center justify-center rounded-full bg-brand-50 text-xs font-semibold text-brand-600 dark:bg-brand-500/10 dark:text-brand-400">3</span>
+                    <span class="flex h-6 w-6 items-center justify-center rounded-full bg-brand-50 text-xs font-semibold text-brand-600 dark:bg-brand-500/10 dark:text-brand-400">4</span>
                     <h4 class="text-sm font-semibold text-gray-800 dark:text-white/90">接口方式</h4>
                   </div>
                   <div class="grid grid-cols-1 gap-3">
@@ -1471,7 +1513,7 @@ const errClass = 'mt-1 text-xs text-error-500'
 
                 <div>
                   <div class="mb-3 flex items-center gap-2">
-                    <span class="flex h-6 w-6 items-center justify-center rounded-full bg-brand-50 text-xs font-semibold text-brand-600 dark:bg-brand-500/10 dark:text-brand-400">4</span>
+                    <span class="flex h-6 w-6 items-center justify-center rounded-full bg-brand-50 text-xs font-semibold text-brand-600 dark:bg-brand-500/10 dark:text-brand-400">5</span>
                     <h4 class="text-sm font-semibold text-gray-800 dark:text-white/90">认证方式</h4>
                   </div>
                   <div class="grid grid-cols-1 gap-3">
@@ -1498,7 +1540,7 @@ const errClass = 'mt-1 text-xs text-error-500'
 
                 <div>
                   <div class="mb-3 flex items-center gap-2">
-                    <span class="flex h-6 w-6 items-center justify-center rounded-full bg-brand-50 text-xs font-semibold text-brand-600 dark:bg-brand-500/10 dark:text-brand-400">5</span>
+                    <span class="flex h-6 w-6 items-center justify-center rounded-full bg-brand-50 text-xs font-semibold text-brand-600 dark:bg-brand-500/10 dark:text-brand-400">6</span>
                     <h4 class="text-sm font-semibold text-gray-800 dark:text-white/90">配置生成</h4>
                   </div>
                   <div class="rounded-xl border border-gray-200 p-4 dark:border-gray-800">
@@ -1548,7 +1590,7 @@ const errClass = 'mt-1 text-xs text-error-500'
                     <div>
                       <h4 class="text-sm font-semibold text-gray-800 dark:text-white/90">当前对接信息</h4>
                       <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                        {{ selectedEndpoint.name }} · {{ selectedAuth.label }}
+                        {{ selectedPreset.label }} · {{ selectedEndpoint.name }} · {{ selectedAuth.label }}
                       </p>
                     </div>
                     <button
@@ -1563,6 +1605,9 @@ const errClass = 'mt-1 text-xs text-error-500'
                     </button>
                   </div>
                   <div class="mt-4 rounded-lg bg-gray-50 p-3 dark:bg-gray-900/60">
+                    <p class="mb-2 text-[11px] leading-5 text-gray-500 dark:text-gray-400">
+                      {{ selectedPreset.hint }}
+                    </p>
                     <p class="break-all font-mono text-xs leading-5 text-gray-700 dark:text-gray-200">{{ guideAddress }}</p>
                     <p class="mt-2 text-[11px] leading-5 text-gray-400 dark:text-gray-500">
                       {{ guideAddressHint }}

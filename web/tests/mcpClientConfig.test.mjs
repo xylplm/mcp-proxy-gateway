@@ -3,6 +3,8 @@ import test from 'node:test'
 import {
   buildMCPClientConfig,
   buildMCPServerConfig,
+  getMCPClientPreset,
+  MCP_CLIENT_PRESETS,
   normalizeMCPServerName,
 } from '../src/utils/mcpClientConfig.ts'
 
@@ -54,4 +56,21 @@ test('buildMCPServerConfig keeps the minimal shape stable', () => {
     }),
     { type: 'sse', url: 'https://example.com/mcp/sse' },
   )
+})
+
+test('client presets cover common clients with stable defaults', () => {
+  const keys = MCP_CLIENT_PRESETS.map((item) => item.key)
+  assert.deepEqual(keys, ['generic', 'claude', 'cursor', 'vscode', 'cherry-studio'])
+
+  const generic = getMCPClientPreset('generic')
+  assert.equal(generic.endpoint, 'http')
+  assert.equal(generic.auth, 'bearer')
+  assert.equal(generic.configKind, 'mcp-json')
+
+  const cherry = getMCPClientPreset('cherry-studio')
+  assert.equal(cherry.configKind, 'server-entry')
+})
+
+test('unknown client preset falls back to generic', () => {
+  assert.equal(getMCPClientPreset('missing').key, 'generic')
 })
