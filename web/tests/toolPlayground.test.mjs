@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { parsePlaygroundArgs, prettifyPlaygroundValue } from '../src/utils/toolPlayground.ts'
+import {
+  buildPlaygroundCallRecordQuery,
+  parsePlaygroundArgs,
+  prettifyPlaygroundValue,
+} from '../src/utils/toolPlayground.ts'
 
 test('parses empty playground arguments as object', () => {
   const got = parsePlaygroundArgs('   ')
@@ -33,4 +37,9 @@ test('rejects malformed playground arguments', () => {
 test('prettifies playground values', () => {
   assert.equal(prettifyPlaygroundValue({ ok: true }), '{\n  "ok": true\n}')
   assert.equal(prettifyPlaygroundValue('{"ok":true}'), '{\n  "ok": true\n}')
+})
+
+test('builds call record query for playground results', () => {
+  assert.deepEqual(buildPlaygroundCallRecordQuery(' read_file '), { q: 'read_file' })
+  assert.deepEqual(buildPlaygroundCallRecordQuery(' '), {})
 })

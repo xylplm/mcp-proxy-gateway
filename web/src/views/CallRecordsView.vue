@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import AdminLayout from '@/components/layout/AdminLayout.vue'
 import PageBreadcrumb from '@/components/common/PageBreadcrumb.vue'
 import AppTooltip from '@/components/common/AppTooltip.vue'
@@ -11,6 +12,7 @@ import { useToast } from '@/composables/useToast'
 
 const toast = useToast()
 const { confirm } = useConfirm()
+const route = useRoute()
 
 const records = ref<CallRecord[]>([])
 const loading = ref(false)
@@ -20,7 +22,7 @@ const errorMessage = ref('')
 const newCount = ref(0)
 const autoRefresh = ref(true)
 const clearing = ref(false)
-const searchKeyword = ref('')
+const searchKeyword = ref(initialSearchKeyword())
 let pollTimer: number | undefined
 const pageLimit = 30
 const maxLocalRecords = 120
@@ -319,6 +321,12 @@ onUnmounted(() => {
 
 const cardClass =
   'rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03]'
+
+function initialSearchKeyword(): string {
+  const q = route.query.q
+  if (Array.isArray(q)) return q[0] ?? ''
+  return typeof q === 'string' ? q : ''
+}
 </script>
 
 <template>

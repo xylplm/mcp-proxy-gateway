@@ -42,6 +42,11 @@ export function prettifyPlaygroundValue(value: unknown): string {
   }
 }
 
+export function buildPlaygroundCallRecordQuery(toolName: string): Record<string, string> {
+  const q = toolName.trim()
+  return q === '' ? {} : { q }
+}
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }

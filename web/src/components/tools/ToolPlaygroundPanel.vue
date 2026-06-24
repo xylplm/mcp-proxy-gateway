@@ -1,12 +1,17 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { RouterLink } from 'vue-router'
 import { listAPIKeys, type APIKey } from '@/api/apikeys'
 import {
   invokeToolPlayground,
   type ToolPlaygroundResponse,
 } from '@/api/tools'
 import { useToast } from '@/composables/useToast'
-import { parsePlaygroundArgs, prettifyPlaygroundValue } from '@/utils/toolPlayground'
+import {
+  buildPlaygroundCallRecordQuery,
+  parsePlaygroundArgs,
+  prettifyPlaygroundValue,
+} from '@/utils/toolPlayground'
 
 const props = defineProps<{
   toolName: string
@@ -29,6 +34,7 @@ const selectedAPIKeyLabel = computed(() => {
   const key = apiKeys.value.find((item) => item.id === selectedAPIKeyID.value)
   return key?.name || selectedAPIKeyID.value
 })
+const callRecordQuery = computed(() => buildPlaygroundCallRecordQuery(props.toolName))
 
 onMounted(() => {
   void loadAPIKeys()
@@ -189,6 +195,12 @@ function formatLatency(value: number): string {
               {{ result.errorCode }}
             </span>
           </div>
+          <RouterLink
+            class="mt-3 inline-flex rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+            :to="{ name: 'CallRecords', query: callRecordQuery }"
+          >
+            查看调用记录
+          </RouterLink>
           <p v-if="result.error" class="mt-3 rounded-lg bg-error-50 px-3 py-2 text-xs leading-5 text-error-600 dark:bg-error-500/10 dark:text-error-400">
             {{ result.error }}
           </p>
