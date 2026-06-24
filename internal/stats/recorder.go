@@ -319,6 +319,11 @@ func (r *Recorder) shutdown(pending []store.CallStatRecord) {
 //
 // 任一环节失败均静默丢弃、不向调用方报错（Req 16.9）。
 func (r *Recorder) flush(ctx context.Context, pending []store.CallStatRecord) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			safego.LogRecovered(r.log, "统计批量落库 panic 已恢复，丢弃本批记录", recovered)
+		}
+	}()
 	if len(pending) > 0 {
 		r.log.Debug("批量落库调用统计", "count", len(pending), "hasBuffer", r.buffer != nil)
 	}
@@ -359,6 +364,11 @@ func (r *Recorder) pushToBuffer(ctx context.Context, recs []store.CallStatRecord
 // 注意：RPOP 已将记录从缓冲移除，若随后 INSERT 失败则该批记录丢失——这正是「写入失败
 // 静默丢弃、不影响主流程」的预期降级行为（Req 16.9）。
 func (r *Recorder) drainBuffer(ctx context.Context) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			safego.LogRecovered(r.log, "统计缓冲消费 panic 已恢复，跳过本轮消费", recovered)
+		}
+	}()
 	if r.buffer == nil {
 		return
 	}

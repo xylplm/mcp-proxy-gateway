@@ -9,7 +9,7 @@
  *
  * 数据来源：@/api/templates（后端 Template_Market 服务，路由待暴露，见该模块说明）。
  */
-import { computed, ref, watch } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import {
   listTemplates,
   listTemplateCategories,
@@ -152,10 +152,17 @@ function selectCategory(cat: TemplateCategory | null): void {
 
 /** 防抖检索定时器。 */
 let searchTimer: ReturnType<typeof setTimeout> | null = null
+
+function clearSearchTimer(): void {
+  if (searchTimer === null) return
+  clearTimeout(searchTimer)
+  searchTimer = null
+}
 /** 关键字变更时防抖检索。 */
 function onKeywordInput(): void {
-  if (searchTimer !== null) clearTimeout(searchTimer)
+  clearSearchTimer()
   searchTimer = setTimeout(() => {
+    searchTimer = null
     detail.value = null
     void fetchTemplates()
   }, 300)
@@ -209,10 +216,14 @@ watch(
       prefs.value = loadTemplateMarketPrefs()
       void fetchCategories()
       void fetchTemplates()
+    } else {
+      clearSearchTimer()
     }
   },
   { immediate: true },
 )
+
+onUnmounted(clearSearchTimer)
 </script>
 
 <template>

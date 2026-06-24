@@ -110,43 +110,65 @@ func (a *App) httpServers() []httpServerSpec {
 // startBackground 启动各后台服务（Req 7、16）。
 func (a *App) startBackground(ctx context.Context) {
 	// 恢复数据库中已有上游的连接状态机登记，确保进程重启后可直接重连与展示状态。
-	if err := a.mgr.RestoreConnections(ctx); err != nil {
-		a.logger.Error("恢复上游连接状态失败，后续启用或重连时将按需恢复", "error", err)
-	}
-	if a.securityGuard != nil {
+	a.runBackgroundStep("恢复上游连接状态", func() {
+		if err := a.mgr.RestoreConnections(ctx); err != nil {
+			a.logger.Error("恢复上游连接状态失败，后续启用或重连时将按需恢复", "error", err)
+		}
+	})
+	a.runBackgroundStep("恢复安全封禁缓存", func() {
+		if a.securityGuard == nil {
+			return
+		}
 		if err := a.securityGuard.RestoreActiveBlocks(ctx); err != nil {
 			a.logger.Warn("恢复安全封禁缓存失败，后续新触发封禁仍会生效", "error", err)
 		}
-	}
+	})
 
 	// 统计异步落库 worker 与保留期清理（Req 16.8、16.10）。
-	a.statRecorder.Start(ctx)
-	a.statCleaner.Start(ctx)
+	a.runBackgroundStep("启动统计落库 worker", func() { a.statRecorder.Start(ctx) })
+	a.runBackgroundStep("启动统计保留期清理", func() { a.statCleaner.Start(ctx) })
 	// 审计异步落库 worker（登录/增删改/访问被拒旁路，Req 22）。
-	if a.auditRecorder != nil {
-		a.auditRecorder.Start(ctx)
-	}
+	a.runBackgroundStep("启动审计落库 worker", func() {
+		if a.auditRecorder != nil {
+			a.auditRecorder.Start(ctx)
+		}
+	})
 
 	// 同步 cron 调度：注册周期同步任务并启动调度器（Req 7）。
-	syncCron := a.cfg.Config().Sync.Cron
-	if err := a.scheduler.UpdateSchedule(syncCron, func() {
-		runCtx, cancel := context.WithTimeout(context.Background(), a.syncTimeout)
-		defer cancel()
-		a.syncer.SyncEnabledAutoSync(runCtx)
-	}); err != nil {
-		a.logger.Error("注册同步 cron 调度失败，周期同步未启用", "cron", syncCron, "error", err)
-	} else {
-		a.scheduler.Start()
-	}
+	a.runBackgroundStep("启动周期同步调度", func() {
+		syncCron := a.cfg.Config().Sync.Cron
+		if err := a.scheduler.UpdateSchedule(syncCron, func() {
+			runCtx, cancel := context.WithTimeout(context.Background(), a.syncTimeout)
+			defer cancel()
+			a.syncer.SyncEnabledAutoSync(runCtx)
+		}); err != nil {
+			a.logger.Error("注册同步 cron 调度失败，周期同步未启用", "cron", syncCron, "error", err)
+		} else {
+			a.scheduler.Start()
+		}
+	})
 
 	// 审计保留期清理：以 24 小时为周期独立运行（Req 22.5）。
-	a.startAuditRetention(ctx)
+	a.runBackgroundStep("启动审计保留期清理", func() { a.startAuditRetention(ctx) })
 
 	// 小智接入：启用时连出到接入点并持续按退避重连（Req 15）。
-	if a.xiaozhiConn.Enabled() {
-		if err := a.xiaozhiConn.Start(ctx); err != nil {
-			a.logger.Error("启动小智接入连接失败", "error", err)
+	a.runBackgroundStep("启动小智接入连接", func() {
+		if a.xiaozhiConn.Enabled() {
+			if err := a.xiaozhiConn.Start(ctx); err != nil {
+				a.logger.Error("启动小智接入连接失败", "error", err)
+			}
 		}
+	})
+}
+
+func (a *App) runBackgroundStep(name string, step func()) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			safego.LogRecovered(a.logger, "后台服务启动步骤 panic 已恢复，继续启动其他组件", recovered, "step", name)
+		}
+	}()
+	if step != nil {
+		step()
 	}
 }
 
@@ -247,20 +269,27 @@ func (a *App) startAuditRetention(ctx context.Context) {
 		ticker := time.NewTicker(24 * time.Hour)
 		defer ticker.Stop()
 		// 启动即清理一次，使重启后及时回收超期记录。
-		if _, err := a.auditSvc.Cleanup(ctx); err != nil {
-			a.logger.Warn("审计日志保留期清理失败", "error", err)
-		}
+		a.runAuditRetentionCleanup(ctx)
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				if _, err := a.auditSvc.Cleanup(ctx); err != nil {
-					a.logger.Warn("审计日志保留期清理失败", "error", err)
-				}
+				a.runAuditRetentionCleanup(ctx)
 			}
 		}
 	}()
+}
+
+func (a *App) runAuditRetentionCleanup(ctx context.Context) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			safego.LogRecovered(a.logger, "审计保留期清理 panic 已恢复，等待下一轮重试", recovered)
+		}
+	}()
+	if _, err := a.auditSvc.Cleanup(ctx); err != nil {
+		a.logger.Warn("审计日志保留期清理失败", "error", err)
+	}
 }
 
 // shutdown 优雅停止 HTTP 服务与全部后台服务，并释放基础设施连接。

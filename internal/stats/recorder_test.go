@@ -83,6 +83,8 @@ type fakeWriter struct {
 	insertErr error
 	block     chan struct{} // 非 nil 时 Insert 阻塞直至该通道关闭/收到信号
 	calls     int
+	panicOnce bool
+	panicCnt  int
 }
 
 func (w *fakeWriter) Insert(_ context.Context, records []store.CallStatRecord) error {
@@ -90,8 +92,14 @@ func (w *fakeWriter) Insert(_ context.Context, records []store.CallStatRecord) e
 		<-w.block
 	}
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	w.calls++
+	if w.panicOnce {
+		w.panicOnce = false
+		w.panicCnt++
+		w.mu.Unlock()
+		panic("stat writer panic")
+	}
+	defer w.mu.Unlock()
 	if w.insertErr != nil {
 		return w.insertErr
 	}
@@ -103,6 +111,12 @@ func (w *fakeWriter) count() int {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return len(w.records)
+}
+
+func (w *fakeWriter) panics() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.panicCnt
 }
 
 // sampleRecord 构造一条测试用调用统计记录。
@@ -313,6 +327,22 @@ func TestRecordAsyncFillsTimestamp(t *testing.T) {
 	if rec.CalledAt.IsZero() {
 		t.Error("CalledAt 零值时应被回填为当前时刻（Req 16.1）")
 	}
+}
+
+func TestWorkerContinuesAfterInsertPanic(t *testing.T) {
+	writer := &fakeWriter{panicOnce: true}
+	r := New(nil, writer, WithQueueSize(8), WithBatchSize(1), WithFlushInterval(5*time.Millisecond))
+	r.Start(context.Background())
+	defer r.Stop()
+
+	r.RecordAsync(context.Background(), sampleRecord("panic-once"))
+	waitFor(t, time.Second, func() bool { return writer.panics() == 1 })
+	if !r.Running() {
+		t.Fatal("统计落库 panic 不应导致 worker 退出")
+	}
+
+	r.RecordAsync(context.Background(), sampleRecord("after-panic"))
+	waitFor(t, time.Second, func() bool { return writer.count() == 1 })
 }
 
 func TestDropBeforeDropsQueuedAndBufferedOldRecords(t *testing.T) {

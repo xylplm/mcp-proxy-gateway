@@ -24,12 +24,20 @@ type fakeMaintainer struct {
 	delCutoffs []time.Time
 	delErr     error
 	deletedRet int64
+	panicOnce  bool
+	panicCnt   int
 }
 
 func (m *fakeMaintainer) DeleteOlderThan(_ context.Context, cutoff time.Time) (int64, error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	m.delCutoffs = append(m.delCutoffs, cutoff)
+	if m.panicOnce {
+		m.panicOnce = false
+		m.panicCnt++
+		m.mu.Unlock()
+		panic("cleanup panic")
+	}
+	defer m.mu.Unlock()
 	if m.delErr != nil {
 		return 0, m.delErr
 	}
@@ -40,6 +48,12 @@ func (m *fakeMaintainer) deleteCount() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return len(m.delCutoffs)
+}
+
+func (m *fakeMaintainer) panicCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.panicCnt
 }
 
 // fakeCfg 是 CleanerConfigProvider 的内存实现：返回固定的统计保留天数。
@@ -170,4 +184,18 @@ func TestCleanupResilientWhenLoopErrors(t *testing.T) {
 		t.Error("清理失败不应导致循环退出")
 	}
 	c.Stop()
+}
+
+func TestCleanupResilientWhenCleanupPanics(t *testing.T) {
+	repo := &fakeMaintainer{panicOnce: true}
+	c := NewCleaner(repo, fakeCfg{retentionDays: 30},
+		WithCleanerClock(fixedClock(time.Now())), WithCleanInterval(10*time.Millisecond))
+
+	c.Start(context.Background())
+	defer c.Stop()
+
+	waitFor(t, 2*time.Second, func() bool { return repo.panicCount() == 1 && repo.deleteCount() >= 2 })
+	if !c.Running() {
+		t.Error("清理 panic 不应导致循环退出")
+	}
 }

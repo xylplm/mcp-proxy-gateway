@@ -204,6 +204,11 @@ func (c *Cleaner) run(ctx context.Context) {
 
 // runOnce 执行单次清理并记录结果；失败仅记日志、不中断循环（Req 16.10）。
 func (c *Cleaner) runOnce(ctx context.Context) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			safego.LogRecovered(c.log, "统计保留期清理 panic 已恢复，等待下一轮重试", recovered)
+		}
+	}()
 	deleted, err := c.Cleanup(ctx)
 	if err != nil {
 		c.log.Warn("统计保留期清理失败", "error", err)

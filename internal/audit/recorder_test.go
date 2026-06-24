@@ -21,9 +21,16 @@ type recorderTestRepo struct {
 
 	insertErr   error // 注入 Insert 失败。
 	failedCount int64 // 因失败被丢弃的条数（由 Insert 返回错误计数）。
+	panicOnce   bool
+	panicCount  int64
 }
 
 func (r *recorderTestRepo) Insert(_ context.Context, rec store.AuditRecord) (store.AuditRecord, error) {
+	if r.panicOnce {
+		r.panicOnce = false
+		atomic.AddInt64(&r.panicCount, 1)
+		panic("audit repo panic")
+	}
 	if r.insertErr != nil {
 		atomic.AddInt64(&r.failedCount, 1)
 		return store.AuditRecord{}, r.insertErr
@@ -197,6 +204,30 @@ func TestRecorder_InsertError_DropsSilently(t *testing.T) {
 	}
 	if repo.count() != 0 {
 		t.Errorf("落库失败时不应写入任何记录，实际 %d 条", repo.count())
+	}
+}
+
+func TestRecorder_InsertPanic_ContinuesWorker(t *testing.T) {
+	repo := &recorderTestRepo{panicOnce: true}
+	rec := newTestRecorder(repo, WithBatchSize(1), WithFlushInterval(5*time.Millisecond))
+	rec.Start(context.Background())
+	defer rec.Stop()
+
+	if err := rec.RecordLogin(context.Background(), "panic-once", true); err != nil {
+		t.Fatalf("RecordLogin 不应返回错误：%v", err)
+	}
+	if !waitFor(func() bool { return atomic.LoadInt64(&repo.panicCount) == 1 }, time.Second) {
+		t.Fatal("应观察到一次审计落库 panic")
+	}
+	if !rec.Running() {
+		t.Fatal("审计落库 panic 不应导致 worker 退出")
+	}
+
+	if err := rec.RecordLogin(context.Background(), "after-panic", true); err != nil {
+		t.Fatalf("RecordLogin 不应返回错误：%v", err)
+	}
+	if !waitFor(func() bool { return repo.count() == 1 }, time.Second) {
+		t.Fatalf("panic 后的审计记录应继续落库，实际 %d 条", repo.count())
 	}
 }
 

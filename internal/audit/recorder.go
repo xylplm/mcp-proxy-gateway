@@ -322,6 +322,11 @@ func (r *Recorder) shutdown(pending []store.AuditRecord) {
 
 // flush 逐条落库一批待发记录；任一条失败均静默丢弃该条、不向调用方报错（审计旁路降级）。
 func (r *Recorder) flush(ctx context.Context, pending []store.AuditRecord) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			safego.LogRecovered(r.log, "审计批量落库 panic 已恢复，丢弃本批记录", recovered)
+		}
+	}()
 	if len(pending) == 0 {
 		return
 	}
