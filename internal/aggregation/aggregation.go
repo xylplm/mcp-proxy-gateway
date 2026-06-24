@@ -151,6 +151,7 @@ const (
 	defaultSourceFailureThreshold = 3
 	defaultSourceFailureCooldown  = 30 * time.Second
 	maxResultCacheEntries         = 512
+	maxCachedToolResultBytes      = 1 << 20
 )
 
 type sourceFailureState struct {
@@ -570,6 +571,9 @@ func (s *Service) getCachedToolResult(apiKeyID, exposedName string, args json.Ra
 
 func (s *Service) setCachedToolResult(apiKeyID, exposedName string, args json.RawMessage, result domain.ToolResult, ttl time.Duration) {
 	if ttl <= 0 {
+		return
+	}
+	if len(result.Content) > maxCachedToolResultBytes {
 		return
 	}
 	key := toolResultCacheKey(apiKeyID, exposedName, args)

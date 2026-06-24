@@ -3,6 +3,7 @@ package mcpapi
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
@@ -174,6 +175,60 @@ func TestEndpointsStreamableHTTPFullMode(t *testing.T) {
 
 	if len(agg.gotBuildIDs) == 0 || agg.gotBuildIDs[0] != "key-http" {
 		t.Fatalf("应按已鉴权 API Key 视角构建 server，got=%v", agg.gotBuildIDs)
+	}
+}
+
+func TestEndpointsRejectOversizedPostBody(t *testing.T) {
+	oldLimit := mcpRequestBodyLimit
+	mcpRequestBodyLimit = 32
+	t.Cleanup(func() { mcpRequestBodyLimit = oldLimit })
+
+	agg := &epFakeAggregation{buildResult: epToolDefs()}
+	srv := epNewTestServer(t, agg)
+
+	for _, path := range []string{PathSSE, PathHTTP, PathSmartSSE, PathSmartHTTP} {
+		t.Run(path, func(t *testing.T) {
+			req, err := http.NewRequest(http.MethodPost, srv.URL+path+"?api_key=key-large", strings.NewReader(strings.Repeat("x", 33)))
+			if err != nil {
+				t.Fatalf("构造请求失败：%v", err)
+			}
+			req.Header.Set("Content-Type", "application/json")
+
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatalf("发送请求失败：%v", err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != http.StatusRequestEntityTooLarge {
+				t.Fatalf("超大 POST 应在入口层返回 413，got=%d", resp.StatusCode)
+			}
+		})
+	}
+}
+
+func TestWebSocketPlainGETDoesNotBuildServer(t *testing.T) {
+	agg := &epFakeAggregation{buildResult: epToolDefs()}
+	srv := epNewTestServer(t, agg)
+
+	for _, path := range []string{PathWS, PathSmartWS} {
+		t.Run(path, func(t *testing.T) {
+			resp, err := http.Get(srv.URL + path + "?api_key=key-plain")
+			if err != nil {
+				t.Fatalf("发送普通 GET 失败：%v", err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != http.StatusUpgradeRequired {
+				t.Fatalf("普通 GET 访问 WS 入口应返回 426，got=%d", resp.StatusCode)
+			}
+		})
+	}
+
+	agg.mu.Lock()
+	defer agg.mu.Unlock()
+	if len(agg.gotBuildIDs) != 0 {
+		t.Fatalf("普通 GET 不应触发 MCP server 构建，got=%v", agg.gotBuildIDs)
 	}
 }
 

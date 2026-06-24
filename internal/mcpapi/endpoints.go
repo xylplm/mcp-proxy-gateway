@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/coder/websocket"
@@ -52,6 +53,11 @@ const (
 // 与上游 WS 客户端会话保持一致（32MiB）：聚合工具列表/调用结果可能较大，放宽默认上限
 // 以兼顾安全与可用。
 const wsServerReadLimit = 32 << 20
+
+// mcpRequestBodyLimit limits public MCP POST bodies before handing them to the
+// SDK transport. Normal JSON-RPC tool arguments have plenty of room, while
+// malformed or oversized requests are stopped before they can pressure memory.
+var mcpRequestBodyLimit int64 = 8 << 20
 
 // modeContextKey 用于把 MCP 模式注入 *http.Request 上下文。
 type modeContextKey struct{}
@@ -162,13 +168,63 @@ func (e *Endpoints) withAPIKey(c *gin.Context, mode string) *http.Request {
 // handleSSE 以 SSE 传输对外暴露聚合能力（Req 11.8）。委派给 SDK 的 SSEHandler，
 // 构建 server 前已注入 API Key 视角（Req 11.9）。
 func (e *Endpoints) handleSSE(c *gin.Context) {
+	if !limitRequestBody(c) {
+		return
+	}
 	e.sseHandler.ServeHTTP(c.Writer, e.withAPIKey(c, ModeFull))
 }
 
 // handleHTTP 以 Streamable-HTTP 传输对外暴露聚合能力（Req 11.8）。委派给 SDK 的
 // StreamableHTTPHandler，构建 server 前已注入 API Key 视角（Req 11.9）。
 func (e *Endpoints) handleHTTP(c *gin.Context) {
+	if !limitRequestBody(c) {
+		return
+	}
 	e.httpHandler.ServeHTTP(c.Writer, e.withAPIKey(c, ModeFull))
+}
+
+func limitRequestBody(c *gin.Context) bool {
+	if c == nil || c.Request == nil || c.Request.Body == nil || c.Request.Method != http.MethodPost {
+		return true
+	}
+	if mcpRequestBodyLimit <= 0 {
+		return true
+	}
+	if c.Request.ContentLength > mcpRequestBodyLimit {
+		c.AbortWithStatus(http.StatusRequestEntityTooLarge)
+		return false
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, mcpRequestBodyLimit)
+	return true
+}
+
+func requireWebSocketUpgrade(c *gin.Context) bool {
+	if c == nil || c.Request == nil || isWebSocketUpgrade(c.Request) {
+		return true
+	}
+	c.Header("Connection", "Upgrade")
+	c.Header("Upgrade", "websocket")
+	c.AbortWithStatus(http.StatusUpgradeRequired)
+	return false
+}
+
+func isWebSocketUpgrade(req *http.Request) bool {
+	if req == nil {
+		return false
+	}
+	return headerHasToken(req.Header, "Connection", "Upgrade") &&
+		headerHasToken(req.Header, "Upgrade", "websocket")
+}
+
+func headerHasToken(header http.Header, key, token string) bool {
+	for _, value := range header.Values(key) {
+		for _, part := range strings.Split(value, ",") {
+			if strings.EqualFold(strings.TrimSpace(part), token) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // handleWS 以 WebSocket 传输对外暴露聚合能力（Req 11.8）。
@@ -184,6 +240,9 @@ func (e *Endpoints) handleWS(c *gin.Context) {
 		if id, ok := e.resolveKey(c); ok {
 			apiKeyID = id
 		}
+	}
+	if !requireWebSocketUpgrade(c) {
+		return
 	}
 
 	srv, err := e.svc.BuildServer(c.Request.Context(), apiKeyID, ModeFull)
@@ -204,6 +263,7 @@ func (e *Endpoints) handleWS(c *gin.Context) {
 
 	// 连接生命周期上下文：Close 时取消以解除阻塞的 Read。
 	connCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	transport := &wsServerTransport{conn: &wsServerConn{conn: conn, ctx: connCtx, cancel: cancel}}
 
 	session, err := srv.Connect(c.Request.Context(), transport, nil)
@@ -213,6 +273,7 @@ func (e *Endpoints) handleWS(c *gin.Context) {
 		cancel()
 		return
 	}
+	defer session.Close()
 
 	// 阻塞至会话结束（客户端断开或服务端关闭）。
 	if werr := session.Wait(); werr != nil {
@@ -289,10 +350,16 @@ func (e *Endpoints) RegisterSmart(rg gin.IRoutes) {
 }
 
 func (e *Endpoints) handleSmartSSE(c *gin.Context) {
+	if !limitRequestBody(c) {
+		return
+	}
 	e.sseHandler.ServeHTTP(c.Writer, e.withAPIKey(c, ModeSmart))
 }
 
 func (e *Endpoints) handleSmartHTTP(c *gin.Context) {
+	if !limitRequestBody(c) {
+		return
+	}
 	e.httpHandler.ServeHTTP(c.Writer, e.withAPIKey(c, ModeSmart))
 }
 
@@ -302,6 +369,9 @@ func (e *Endpoints) handleSmartWS(c *gin.Context) {
 		if id, ok := e.resolveKey(c); ok {
 			apiKeyID = id
 		}
+	}
+	if !requireWebSocketUpgrade(c) {
+		return
 	}
 
 	srv, err := e.svc.BuildServer(c.Request.Context(), apiKeyID, ModeSmart)
@@ -319,6 +389,7 @@ func (e *Endpoints) handleSmartWS(c *gin.Context) {
 	conn.SetReadLimit(wsServerReadLimit)
 
 	connCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	transport := &wsServerTransport{conn: &wsServerConn{conn: conn, ctx: connCtx, cancel: cancel}}
 
 	session, err := srv.Connect(c.Request.Context(), transport, nil)
@@ -328,6 +399,7 @@ func (e *Endpoints) handleSmartWS(c *gin.Context) {
 		cancel()
 		return
 	}
+	defer session.Close()
 
 	if werr := session.Wait(); werr != nil {
 		e.logger.Debug("智能模式 WebSocket 会话结束", "apiKeyID", apiKeyID, "error", werr)

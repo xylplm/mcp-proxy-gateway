@@ -15,6 +15,7 @@ import (
 type routeRecordingInvoker struct {
 	available     map[string]bool
 	errByUpstream map[string]error
+	returnResult  domain.ToolResult
 	mu            sync.Mutex
 	calls         []string
 }
@@ -34,6 +35,9 @@ func (i *routeRecordingInvoker) CallUpstream(_ context.Context, upstreamID, orig
 		if err := i.errByUpstream[upstreamID]; err != nil {
 			return domain.ToolResult{}, err
 		}
+	}
+	if i.returnResult.Content != nil || i.returnResult.IsError {
+		return i.returnResult, nil
 	}
 	return domain.ToolResult{Content: json.RawMessage(`[]`)}, nil
 }
@@ -248,6 +252,36 @@ func TestToolPolicyCachesSuccessfulResult(t *testing.T) {
 	}
 	if got := invoker.callCount(); got != 2 {
 		t.Fatalf("不同参数不应复用缓存，got calls=%d", got)
+	}
+}
+
+func TestToolPolicySkipsOversizedCachedResult(t *testing.T) {
+	largeContent := json.RawMessage(`[{"type":"text","text":"` + strings.Repeat("x", maxCachedToolResultBytes) + `"}]`)
+	invoker := &routeRecordingInvoker{
+		available:    map[string]bool{"up-a": true},
+		returnResult: domain.ToolResult{Content: largeContent},
+	}
+	svc := routeServiceWithPolicies(
+		map[string][]domain.ToolDef{
+			"up-a": {{OriginalName: "read", Name: "read", InputSchema: []byte("{}")}},
+		},
+		[]domain.Upstream{invEnabledUpstream("up-a", 0)},
+		invoker,
+		[]domain.ToolPolicyRule{{
+			Pattern:         "read",
+			Enabled:         true,
+			CacheEnabled:    true,
+			CacheTTLSeconds: 60,
+		}},
+	)
+
+	for i := 0; i < 2; i++ {
+		if _, err := svc.InvokeTool(context.Background(), "", "read", json.RawMessage(`{"q":1}`)); err != nil {
+			t.Fatalf("第 %d 次超大结果调用失败：%v", i+1, err)
+		}
+	}
+	if got := invoker.callCount(); got != 2 {
+		t.Fatalf("超大结果不应写入短 TTL 缓存，第二次应重新调用上游，got calls=%d", got)
 	}
 }
 
