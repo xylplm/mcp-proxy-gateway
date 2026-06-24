@@ -426,53 +426,53 @@ onMounted(async () => {
       {{ queryError }}
     </p>
 
-    <div class="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(360px,0.85fr)]">
-      <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <section :class="cardClass">
-          <div class="text-sm text-gray-500 dark:text-gray-400">总调用</div>
-          <div class="mt-2 text-2xl font-semibold text-gray-800 dark:text-white/90">
-            {{ formatInt(summary.TotalCalls) }}
-          </div>
-          <div class="mt-2 text-xs text-gray-500 dark:text-gray-400">
-            近 7 日 {{ weeklyDelta >= 0 ? '+' : '' }}{{ formatPercent(weeklyDelta) }}
-          </div>
-        </section>
-        <section :class="cardClass">
-          <div class="text-sm text-gray-500 dark:text-gray-400">成功率</div>
-          <div class="mt-2 text-2xl font-semibold" :class="healthToneClass(successRate())">
-            {{ formatPercent(successRate()) }}
-          </div>
-          <div class="mt-2 text-xs text-gray-500 dark:text-gray-400">
-            失败 {{ formatInt(summary.FailureCalls) }} 次，{{ formatPercent(failureRate()) }}
-          </div>
-        </section>
-        <section :class="cardClass">
-          <div class="text-sm text-gray-500 dark:text-gray-400">响应耗时</div>
-          <div class="mt-2 text-2xl font-semibold text-gray-800 dark:text-white/90">
-            {{ formatMs(summary.P95LatencyMS) }}
-          </div>
-          <div class="mt-2 text-xs text-gray-500 dark:text-gray-400">
-            平均 {{ formatMs(summary.AvgLatencyMS) }}
-          </div>
-        </section>
-        <section :class="cardClass">
-          <div class="text-sm text-gray-500 dark:text-gray-400">活跃资源</div>
-          <div class="mt-2 text-2xl font-semibold text-gray-800 dark:text-white/90">
-            {{ formatInt(summary.UniqueTools) }} 工具
-          </div>
-          <div class="mt-2 text-xs text-gray-500 dark:text-gray-400">
-            {{ formatInt(summary.ActiveUpstreams) }} 上游 / {{ formatInt(summary.ActiveAPIKeys) }} Key
-          </div>
-        </section>
-      </div>
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <section :class="cardClass">
+        <div class="text-sm text-gray-500 dark:text-gray-400">总调用</div>
+        <div class="mt-2 text-2xl font-semibold text-gray-800 dark:text-white/90">
+          {{ formatInt(summary.TotalCalls) }}
+        </div>
+        <div class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+          近 7 日 {{ weeklyDelta >= 0 ? '+' : '' }}{{ formatPercent(weeklyDelta) }}
+        </div>
+      </section>
+      <section :class="cardClass">
+        <div class="text-sm text-gray-500 dark:text-gray-400">成功率</div>
+        <div class="mt-2 text-2xl font-semibold" :class="healthToneClass(successRate())">
+          {{ formatPercent(successRate()) }}
+        </div>
+        <div class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+          失败 {{ formatInt(summary.FailureCalls) }} 次，{{ formatPercent(failureRate()) }}
+        </div>
+      </section>
+      <section :class="cardClass">
+        <div class="text-sm text-gray-500 dark:text-gray-400">响应耗时</div>
+        <div class="mt-2 text-2xl font-semibold text-gray-800 dark:text-white/90">
+          {{ formatMs(summary.P95LatencyMS) }}
+        </div>
+        <div class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+          平均 {{ formatMs(summary.AvgLatencyMS) }}
+        </div>
+      </section>
+      <section :class="cardClass">
+        <div class="text-sm text-gray-500 dark:text-gray-400">活跃资源</div>
+        <div class="mt-2 text-2xl font-semibold text-gray-800 dark:text-white/90">
+          {{ formatInt(summary.UniqueTools) }} 工具
+        </div>
+        <div class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+          {{ formatInt(summary.ActiveUpstreams) }} 上游 / {{ formatInt(summary.ActiveAPIKeys) }} Key
+        </div>
+      </section>
+    </div>
 
-      <section :class="[cardClass, 'flex flex-col']">
-        <div class="flex flex-wrap items-start justify-between gap-3">
+    <section :class="[cardClass, 'mt-5']">
+      <div class="grid grid-cols-1 gap-4 xl:grid-cols-[220px_minmax(0,1fr)] xl:items-start">
+        <div class="flex flex-wrap items-start justify-between gap-3 xl:block">
           <div>
             <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">近期健康</h3>
             <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">快速判断当前窗口是否异常。</p>
           </div>
-          <div class="inline-flex rounded-lg border border-gray-200 p-1 dark:border-gray-800">
+          <div class="inline-flex rounded-lg border border-gray-200 p-1 dark:border-gray-800 xl:mt-4">
             <button
               v-for="item in ['1h', '24h']"
               :key="item"
@@ -486,7 +486,7 @@ onMounted(async () => {
           </div>
         </div>
 
-        <div class="mt-4 grid grid-cols-2 gap-3">
+        <div class="grid grid-cols-1 gap-3 md:grid-cols-2 2xl:grid-cols-4">
           <div class="rounded-lg bg-gray-50 px-3 py-2.5 dark:bg-gray-800/60">
             <div class="text-xs text-gray-500 dark:text-gray-400">成功率</div>
             <div class="mt-1 text-xl font-semibold" :class="healthToneClass(health.SuccessRate)">
@@ -505,9 +505,6 @@ onMounted(async () => {
               p50 {{ formatMs(health.P50LatencyMS) }}
             </div>
           </div>
-        </div>
-
-        <div class="mt-4 space-y-3">
           <div class="rounded-lg border border-gray-200 p-3 dark:border-gray-800">
             <div class="mb-2 flex items-center justify-between gap-2">
               <span class="text-xs font-medium text-gray-500 dark:text-gray-400">主要异常</span>
@@ -528,7 +525,7 @@ onMounted(async () => {
             <div class="mb-2 text-xs font-medium text-gray-500 dark:text-gray-400">失败上游</div>
             <div class="space-y-2">
               <div
-                v-for="item in healthUpstreams.slice(0, 3)"
+                v-for="item in healthUpstreams.slice(0, 2)"
                 :key="item.UpstreamID || item.UpstreamName"
                 class="flex items-start justify-between gap-3"
               >
@@ -542,8 +539,8 @@ onMounted(async () => {
             </div>
           </div>
         </div>
-      </section>
-    </div>
+      </div>
+    </section>
 
     <div class="mt-6 grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.6fr)_minmax(360px,1fr)]">
       <section :class="cardClass">
