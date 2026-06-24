@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/config"
+	"github.com/myGithub/mcp-proxy-gateway/internal/safego"
 )
 
 // 统计保留期约束：默认 90 天，可配置范围 1 至 3650 天（Req 16.10）。
@@ -177,6 +178,15 @@ func (c *Cleaner) Running() bool {
 // run 是后台清理循环：启动即清理一次，随后每 interval 执行一次，直至上下文取消（Req 16.10）。
 func (c *Cleaner) run(ctx context.Context) {
 	defer c.wg.Done()
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			safego.LogRecovered(c.log, "统计保留期清理 worker panic 已恢复", recovered)
+			c.mu.Lock()
+			c.started = false
+			c.cancel = nil
+			c.mu.Unlock()
+		}
+	}()
 
 	c.runOnce(ctx)
 

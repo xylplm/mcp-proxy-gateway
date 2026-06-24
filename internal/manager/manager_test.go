@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -71,6 +72,15 @@ func (c *reconnectTestConn) Wait(ctx context.Context) error {
 func (c *reconnectTestConn) Close() error {
 	c.closeOnce.Do(func() { close(c.closed) })
 	return nil
+}
+
+type panicDialer struct {
+	calls atomic.Int32
+}
+
+func (d *panicDialer) Dial(context.Context, string, domain.UpstreamConfig) (Conn, error) {
+	d.calls.Add(1)
+	panic("dial detail")
 }
 
 func waitReconnectDial(t *testing.T, d *reconnectTestDialer, label string) *reconnectTestConn {
@@ -1069,4 +1079,30 @@ func TestReconnectRestoresMissingConnectionFromStore(t *testing.T) {
 	}
 	waitReconnectDial(t, dialer, "重连恢复")
 	waitManagerState(t, m, "up-recover-reconnect", domain.ConnAvailable)
+}
+
+func TestConnectionLoopRecoversDialPanic(t *testing.T) {
+	cfg := testValidConfig()
+	cfg.Enabled = true
+	row := testUpstreamRowWithID("up-panic-dial")
+	row.Config = cfg
+	repo := &testUpstreamRepo{listRows: []store.UpstreamRow{row}}
+	dialer := &panicDialer{}
+	m := New(repo, &testToolCacheCleaner{}, nil, nil,
+		WithDialer(dialer),
+		WithRetryPolicy(RetryPolicy{InitialBackoff: time.Hour, MaxBackoff: time.Hour, Multiplier: 2, FailureThreshold: 1}),
+	)
+	defer m.Shutdown()
+
+	if err := m.RestoreConnections(context.Background()); err != nil {
+		t.Fatalf("恢复连接不应返回错误：%v", err)
+	}
+	waitManagerState(t, m, "up-panic-dial", domain.ConnSuspended)
+	if dialer.calls.Load() != 1 {
+		t.Fatalf("panic 拨号应记录一次失败并进入 suspended，实际拨号次数=%d", dialer.calls.Load())
+	}
+	_, lastErr := m.GetState("up-panic-dial")
+	if !strings.Contains(lastErr, "拨号异常") {
+		t.Fatalf("panic 应记录为连接失败原因，实际=%q", lastErr)
+	}
 }

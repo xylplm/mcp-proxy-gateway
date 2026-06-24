@@ -11,6 +11,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
+	"github.com/myGithub/mcp-proxy-gateway/internal/safego"
 )
 
 // 本文件为四种具体传输（stdio/SSE/Streamable-HTTP/WebSocket，任务 8.3-8.6）提供
@@ -72,6 +73,14 @@ func connectWithTimeout(ctx context.Context, transport mcp.Transport) (mcpClient
 	}
 	resultCh := make(chan connectResult, 1)
 	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				safego.LogRecovered(nil, "上游 MCP SDK 连接 panic 已恢复", recovered)
+				resultCh <- connectResult{
+					err: domain.NewError(domain.CodeUpstreamUnavailable, "上游 MCP 连接异常"),
+				}
+			}
+		}()
 		session, err := client.Connect(connCtx, transport, nil)
 		resultCh <- connectResult{session: session, err: err}
 	}()
@@ -88,6 +97,11 @@ func connectWithTimeout(ctx context.Context, transport mcp.Transport) (mcpClient
 		cancel()
 		// 兜底：若握手在竞态下刚好成功，关闭其会话以释放资源（如 stdio 子进程）。
 		go func() {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					safego.LogRecovered(nil, "上游 MCP SDK 超时清理 panic 已恢复", recovered)
+				}
+			}()
 			if res := <-resultCh; res.session != nil {
 				_ = res.session.Close()
 			}

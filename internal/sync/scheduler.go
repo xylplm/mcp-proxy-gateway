@@ -3,6 +3,7 @@ package syncsvc
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 
@@ -66,8 +67,39 @@ type Scheduler struct {
 // 一定能被调度器注册」，二者对合法性的判定保持一致。
 func NewScheduler() *Scheduler {
 	return &Scheduler{
-		cron: cron.New(cron.WithParser(cronParser)),
+		cron: cron.New(
+			cron.WithParser(cronParser),
+			cron.WithChain(cron.Recover(slogCronLogger{})),
+		),
 	}
+}
+
+type slogCronLogger struct{}
+
+func (slogCronLogger) Info(msg string, keysAndValues ...interface{}) {
+	slog.Default().Info("cron "+msg, normalizeCronLogAttrs(keysAndValues...)...)
+}
+
+func (slogCronLogger) Error(err error, msg string, keysAndValues ...interface{}) {
+	attrs := append([]any{"error", err}, normalizeCronLogAttrs(keysAndValues...)...)
+	slog.Default().Error("cron "+msg, attrs...)
+}
+
+func normalizeCronLogAttrs(keysAndValues ...interface{}) []any {
+	out := make([]any, 0, len(keysAndValues))
+	for i := 0; i < len(keysAndValues); i += 2 {
+		key, ok := keysAndValues[i].(string)
+		if !ok || key == "" {
+			key = fmt.Sprintf("arg%d", i)
+		}
+		out = append(out, key)
+		if i+1 < len(keysAndValues) {
+			out = append(out, keysAndValues[i+1])
+		} else {
+			out = append(out, "")
+		}
+	}
+	return out
 }
 
 // UpdateSchedule 校验并注册（或重载）周期同步任务（Req 7.6、7.7）。

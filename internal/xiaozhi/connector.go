@@ -10,6 +10,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
+	"github.com/myGithub/mcp-proxy-gateway/internal/safego"
 )
 
 // 本文件（任务 21.1）实现小智接入服务（XiaoZhi_Connector）的核心：连接生命周期管理、
@@ -348,6 +349,11 @@ func (c *Connector) Reconfigure(endpoint string, enabled bool, mode string) erro
 func (c *Connector) run(ctx context.Context) {
 	defer c.wg.Done()
 	defer c.markStopped()
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			safego.LogRecovered(c.log, "小智接入连接 worker panic 已恢复", recovered)
+		}
+	}()
 
 	for {
 		if ctx.Err() != nil {

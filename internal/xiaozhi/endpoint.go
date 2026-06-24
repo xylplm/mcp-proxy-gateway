@@ -9,6 +9,9 @@ import (
 	"github.com/coder/websocket"
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
+	"github.com/myGithub/mcp-proxy-gateway/internal/safego"
 )
 
 // 本文件（任务 21.1）提供 EndpointConnector 的生产实现 wsConnector：以出站 WebSocket 客户端
@@ -85,6 +88,11 @@ func serveServer(ctx context.Context, endpoint string, srv *mcp.Server) error {
 	stop := make(chan struct{})
 	defer close(stop)
 	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				safego.LogRecovered(nil, "小智 MCP 会话关闭 panic 已恢复", recovered)
+			}
+		}()
 		select {
 		case <-ctx.Done():
 			_ = session.Close()
@@ -124,7 +132,15 @@ func BuildServer(ctx context.Context, handler EndpointHandler) (*mcp.Server, err
 // 使用低层 ToolHandler（而非泛型 AddTool）以原始字节透传入参、原样回传结果，贴合
 // 「原始参数透传、结果原样返回」的契约（Req 15.3、10.3）。
 func newToolHandler(handler EndpointHandler, exposedName string) mcp.ToolHandler {
-	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return func(ctx context.Context, req *mcp.CallToolRequest) (result *mcp.CallToolResult, err error) {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				safego.LogRecovered(nil, "小智 MCP 工具处理 panic 已恢复", recovered, "tool", exposedName)
+				result = nil
+				err = domain.NewError(domain.CodeInternal, "服务器内部错误")
+			}
+		}()
+
 		var args json.RawMessage
 		if req != nil && req.Params != nil {
 			args = req.Params.Arguments

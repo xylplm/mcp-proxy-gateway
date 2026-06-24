@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/myGithub/mcp-proxy-gateway/internal/safego"
 	"github.com/myGithub/mcp-proxy-gateway/internal/store"
 )
 
@@ -264,6 +265,15 @@ func (r *Recorder) Running() bool {
 // 收尾落库，尽力不丢失已入队记录（队列满被丢弃的记录除外，属正常背压降级）。
 func (r *Recorder) run(ctx context.Context) {
 	defer r.wg.Done()
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			safego.LogRecovered(r.log, "审计落库 worker panic 已恢复", recovered)
+			r.mu.Lock()
+			r.started = false
+			r.cancel = nil
+			r.mu.Unlock()
+		}
+	}()
 
 	ticker := time.NewTicker(r.flushInterval)
 	defer ticker.Stop()

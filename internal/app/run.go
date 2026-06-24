@@ -11,6 +11,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/config"
+	"github.com/myGithub/mcp-proxy-gateway/internal/safego"
 )
 
 var ErrRestart = errors.New("restart requested")
@@ -45,6 +46,12 @@ func (a *App) Run(ctx context.Context) error {
 	errCh := make(chan error, len(servers))
 	for _, spec := range servers {
 		go func(spec httpServerSpec) {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					safego.LogRecovered(a.logger, "HTTP 服务 worker panic 已恢复", recovered, "name", spec.name, "addr", spec.server.Addr)
+					errCh <- fmt.Errorf("%s HTTP 服务异常退出：%v", spec.name, recovered)
+				}
+			}()
 			a.logger.Info("HTTP 服务开始监听", "name", spec.name, "addr", spec.server.Addr)
 			if err := spec.server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				errCh <- fmt.Errorf("%s HTTP 服务异常退出：%w", spec.name, err)
@@ -232,6 +239,11 @@ func slogLevel(s string) slog.Level {
 // startAuditRetention starts audit retention cleanup.
 func (a *App) startAuditRetention(ctx context.Context) {
 	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				safego.LogRecovered(a.logger, "审计保留期清理 worker panic 已恢复", recovered)
+			}
+		}()
 		ticker := time.NewTicker(24 * time.Hour)
 		defer ticker.Stop()
 		// 启动即清理一次，使重启后及时回收超期记录。

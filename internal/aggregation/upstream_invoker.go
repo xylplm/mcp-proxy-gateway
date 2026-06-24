@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
+	"github.com/myGithub/mcp-proxy-gateway/internal/safego"
 )
 
 // 本文件（任务 11.1）提供 UpstreamInvoker 的真实实现，把聚合服务在反向映射后还原出的
@@ -137,6 +138,13 @@ func (in *SessionInvoker) CallUpstream(ctx context.Context, upstreamID, original
 	// cancel（defer）会取消 callCtx，向遵循上下文的底层调用传播中止信号。
 	done := make(chan outcome, 1)
 	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				safego.LogRecovered(in.log, "上游 MCP 工具调用 panic 已恢复",
+					recovered, "upstreamID", upstreamID, "originalName", originalName)
+				done <- outcome{err: domain.NewError(domain.CodeInternal, "上游 MCP 调用异常")}
+			}
+		}()
 		res, err := session.CallTool(callCtx, originalName, args)
 		done <- outcome{result: res, err: err}
 	}()

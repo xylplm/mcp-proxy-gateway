@@ -70,6 +70,18 @@ func (f *fakeAggregation) InvokeTool(_ context.Context, apiKeyID, exposedName st
 	return f.invokeResult, nil
 }
 
+type panicEndpointHandler struct {
+	tools []domain.ToolDef
+}
+
+func (h panicEndpointHandler) ListTools(context.Context) ([]domain.ToolDef, error) {
+	return h.tools, nil
+}
+
+func (h panicEndpointHandler) CallTool(context.Context, string, json.RawMessage) (domain.ToolResult, error) {
+	panic("hidden xiaozhi detail")
+}
+
 // fakeConnector 是可控的 EndpointConnector：记录调用、可配置阻塞直到 ctx 取消。
 type fakeConnector struct {
 	mu sync.Mutex
@@ -251,6 +263,20 @@ func TestCallToolPassesThroughUpstreamError(t *testing.T) {
 	}
 	if !containsText(res.Content, "上游报告的错误") {
 		t.Fatalf("错误结果内容未原样透传，content=%+v", res.Content)
+	}
+}
+
+func TestCallToolRecoversHandlerPanic(t *testing.T) {
+	cs := connectInMemory(t, panicEndpointHandler{
+		tools: []domain.ToolDef{{OriginalName: "raw_panic", Name: "panic_tool", Description: "panic 工具"}},
+	})
+
+	_, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "panic_tool", Arguments: json.RawMessage(`{}`)})
+	if err == nil {
+		t.Fatal("handler panic 应转换为协议级错误")
+	}
+	if strings.Contains(err.Error(), "hidden xiaozhi detail") {
+		t.Fatalf("panic 明细不应暴露给调用方：%v", err)
 	}
 }
 

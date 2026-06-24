@@ -82,6 +82,12 @@ func (s *siEchoSession) CallTool(ctx context.Context, _ string, args json.RawMes
 	return domain.ToolResult{Content: content}, nil
 }
 
+type siPanicSession struct{}
+
+func (s siPanicSession) CallTool(context.Context, string, json.RawMessage) (domain.ToolResult, error) {
+	panic("sdk call panic")
+}
+
 // assertUpstreamErrorCode 断言 err 是指定错误码的 *domain.APIError。
 func assertUpstreamErrorCode(t *testing.T, err error, want domain.ErrorCode) {
 	t.Helper()
@@ -227,5 +233,20 @@ func TestSessionInvokerDefaultTimeout(t *testing.T) {
 	}
 	if _, err := invoker.CallUpstream(context.Background(), "up-a", "read_file", json.RawMessage(`{}`)); err != nil {
 		t.Fatalf("默认超时下成功调用不应返回错误，got err=%v", err)
+	}
+}
+
+func TestSessionInvokerRecoversSessionPanic(t *testing.T) {
+	invoker := NewSessionInvoker(
+		&siFakeStates{state: domain.ConnAvailable},
+		&siFakeSessions{session: siPanicSession{}, ok: true},
+		30*time.Second,
+		nil,
+	)
+
+	got, err := invoker.CallUpstream(context.Background(), "up-a", "panic_tool", json.RawMessage(`{}`))
+	assertUpstreamErrorCode(t, err, domain.CodeInternal)
+	if got.IsError || got.Content != nil {
+		t.Fatalf("panic 兜底不应返回部分结果：got=%+v", got)
 	}
 }

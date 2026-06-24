@@ -2,10 +2,12 @@ package manager
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
+	"github.com/myGithub/mcp-proxy-gateway/internal/safego"
 )
 
 // 本文件（任务 9.5）实现连接生命周期状态机与指数退避重试，是 MCP_Manager 连接编排
@@ -288,6 +290,21 @@ func (m *Manager) startLoop(c *Connection) {
 	go func() {
 		defer m.loopWG.Done()
 		defer close(done)
+		defer func() {
+			c.mu.Lock()
+			if c.done == done {
+				c.running = false
+				c.cancel = nil
+				c.done = nil
+			}
+			c.mu.Unlock()
+		}()
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				safego.LogRecovered(m.logger, "上游连接生命周期 worker panic 已恢复", recovered, "upstreamID", c.id)
+				c.fail(fmt.Sprintf("连接生命周期异常：%v", recovered), m.policy.FailureThreshold)
+			}
+		}()
 		m.runLoop(ctx, c)
 	}()
 }
@@ -330,19 +347,25 @@ func (m *Manager) runLoop(ctx context.Context, c *Connection) {
 		}
 
 		c.beginConnecting()
-		conn, err := m.dialer.Dial(ctx, c.id, c.config())
+		conn, err := m.safeDial(ctx, c)
+
+		if err == nil {
+			if conn == nil {
+				err = fmt.Errorf("拨号器返回空连接")
+			}
+		}
 
 		if err == nil {
 			if ctx.Err() != nil {
-				_ = conn.Close()
+				_ = m.safeClose(c.id, conn)
 				return
 			}
 			// 连接建立成功：恢复可用并重置失败计数（Req 5.5）。
 			c.succeed()
 
 			// 阻塞等待运行期断开或 ctx 取消（Req 5.2）。
-			waitErr := conn.Wait(ctx)
-			_ = conn.Close()
+			waitErr := m.safeWait(ctx, c.id, conn)
+			_ = m.safeClose(c.id, conn)
 			if ctx.Err() != nil {
 				return
 			}
@@ -374,6 +397,36 @@ func (m *Manager) runLoop(ctx context.Context, c *Connection) {
 			return
 		}
 	}
+}
+
+func (m *Manager) safeDial(ctx context.Context, c *Connection) (conn Conn, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			safego.LogRecovered(m.logger, "上游连接拨号 panic 已恢复", recovered, "upstreamID", c.id)
+			err = fmt.Errorf("上游连接拨号异常：%v", recovered)
+		}
+	}()
+	return m.dialer.Dial(ctx, c.id, c.config())
+}
+
+func (m *Manager) safeWait(ctx context.Context, upstreamID string, conn Conn) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			safego.LogRecovered(m.logger, "上游连接等待 panic 已恢复", recovered, "upstreamID", upstreamID)
+			err = fmt.Errorf("上游连接等待异常：%v", recovered)
+		}
+	}()
+	return conn.Wait(ctx)
+}
+
+func (m *Manager) safeClose(upstreamID string, conn Conn) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			safego.LogRecovered(m.logger, "上游连接关闭 panic 已恢复", recovered, "upstreamID", upstreamID)
+			err = fmt.Errorf("上游连接关闭异常：%v", recovered)
+		}
+	}()
+	return conn.Close()
 }
 
 // onFailure 记录一次连接失败并在达到阈值转 suspended 时记录告警事件（Req 5.4、5.6）。
