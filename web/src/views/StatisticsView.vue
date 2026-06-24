@@ -46,6 +46,7 @@ const apiKeyNames = ref<Record<string, string>>({})
 const toolDescriptions = ref<Record<string, string>>({})
 let queryTimer: number | undefined
 let statsRequestSeq = 0
+let heatmapResizeObserver: ResizeObserver | null = null
 const heatmapLegendLevels = [0, 1, 2, 3, 4] as const
 const heatmapContainerRef = ref<HTMLElement | null>(null)
 const heatmapContainerWidth = ref(0)
@@ -419,16 +420,25 @@ onMounted(async () => {
   const el = heatmapContainerRef.value
   if (el) {
     heatmapContainerWidth.value = el.clientWidth
-    const ro = new ResizeObserver((entries) => {
+    heatmapResizeObserver = new ResizeObserver((entries) => {
       for (const entry of entries) {
         heatmapContainerWidth.value = entry.contentRect.width
       }
     })
-    ro.observe(el)
-    onUnmounted(() => ro.disconnect())
+    heatmapResizeObserver.observe(el)
   }
   await loadNameMaps()
   await Promise.all([loadStats(), loadHealth()])
+})
+
+onUnmounted(() => {
+  if (queryTimer !== undefined) {
+    window.clearTimeout(queryTimer)
+    queryTimer = undefined
+  }
+  heatmapResizeObserver?.disconnect()
+  heatmapResizeObserver = null
+  statsRequestSeq += 1
 })
 </script>
 
