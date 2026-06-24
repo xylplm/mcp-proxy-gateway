@@ -294,6 +294,93 @@ func TestSourceFailureCooldownSkipsRecentlyFailingSource(t *testing.T) {
 	}
 }
 
+func TestBuildToolDetailsMarksTemporarilyDegradedSource(t *testing.T) {
+	upstreamErr := domain.NewError(domain.CodeUpstreamUnavailable, "连接不可用")
+	invoker := &routeRecordingInvoker{
+		available:     map[string]bool{"up-a": true, "up-b": true},
+		errByUpstream: map[string]error{"up-a": upstreamErr},
+	}
+	svc := routeService(
+		map[string][]domain.ToolDef{
+			"up-a": {{OriginalName: "write", Name: "write", InputSchema: []byte("{}")}},
+			"up-b": {{OriginalName: "write", Name: "write", InputSchema: []byte("{}")}},
+		},
+		[]domain.Upstream{invEnabledUpstream("up-a", 0), invEnabledUpstream("up-b", 1)},
+		invoker,
+	).SetRoutingStrategy(domain.ToolRoutingPriorityFill)
+	base := time.Date(2026, 6, 23, 10, 30, 0, 0, time.UTC)
+	svc.now = func() time.Time { return base }
+
+	for i := 0; i < defaultSourceFailureThreshold; i++ {
+		_, _ = svc.InvokeTool(context.Background(), "", "write", json.RawMessage(`{}`))
+	}
+
+	details, err := svc.BuildToolDetails(context.Background(), "")
+	if err != nil {
+		t.Fatalf("构建工具详情不应失败：%v", err)
+	}
+	if len(details) != 1 {
+		t.Fatalf("应返回 1 个工具详情，got=%d", len(details))
+	}
+
+	sources := map[string]domain.ToolSourceView{}
+	for _, source := range details[0].Sources {
+		sources[source.UpstreamID] = source
+	}
+	if !sources["up-a"].TemporarilyDegraded {
+		t.Fatalf("连续失败来源应标记为临时降级：%+v", sources["up-a"])
+	}
+	if sources["up-a"].RoutingAvailable {
+		t.Fatalf("临时降级来源在多来源工具中不应继续标记为可参与路由：%+v", sources["up-a"])
+	}
+	if sources["up-a"].DegradationReason == "" || sources["up-a"].DegradationUntil == nil {
+		t.Fatalf("临时降级来源应带有可读原因和结束时间：%+v", sources["up-a"])
+	}
+	if !sources["up-b"].RoutingAvailable || sources["up-b"].TemporarilyDegraded {
+		t.Fatalf("健康来源应保持可路由且不被标记降级：%+v", sources["up-b"])
+	}
+}
+
+func TestBuildToolDetailsDoesNotMarkIncompatibleSourceAsDegraded(t *testing.T) {
+	upstreamErr := domain.NewError(domain.CodeUpstreamUnavailable, "连接不可用")
+	svc := routeService(
+		map[string][]domain.ToolDef{
+			"up-a": {{OriginalName: "query", Name: "query", InputSchema: []byte(`{"type":"object"}`)}},
+			"up-b": {{OriginalName: "query", Name: "query", InputSchema: []byte(`{"type":"string"}`)}},
+		},
+		[]domain.Upstream{invEnabledUpstream("up-a", 0), invEnabledUpstream("up-b", 1)},
+		&routeRecordingInvoker{available: map[string]bool{"up-a": true, "up-b": true}},
+	)
+	svc.recordSourceResult(ToolCandidate{
+		UpstreamID:   "up-b",
+		OriginalName: "query",
+		Compatible:   false,
+	}, upstreamErr)
+	svc.recordSourceResult(ToolCandidate{
+		UpstreamID:   "up-b",
+		OriginalName: "query",
+		Compatible:   false,
+	}, upstreamErr)
+	svc.recordSourceResult(ToolCandidate{
+		UpstreamID:   "up-b",
+		OriginalName: "query",
+		Compatible:   false,
+	}, upstreamErr)
+
+	details, err := svc.BuildToolDetails(context.Background(), "")
+	if err != nil {
+		t.Fatalf("构建工具详情不应失败：%v", err)
+	}
+	if len(details) != 1 {
+		t.Fatalf("应返回 1 个工具详情，got=%d", len(details))
+	}
+	for _, source := range details[0].Sources {
+		if source.UpstreamID == "up-b" && source.TemporarilyDegraded {
+			t.Fatalf("Schema 不兼容来源本来不参与路由，不应叠加临时降级状态：%+v", source)
+		}
+	}
+}
+
 func TestSourceFailureCooldownExpiresAndRetriesOriginalSource(t *testing.T) {
 	upstreamErr := domain.NewError(domain.CodeUpstreamUnavailable, "连接不可用")
 	invoker := &routeRecordingInvoker{

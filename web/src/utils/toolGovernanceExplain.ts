@@ -19,10 +19,13 @@ export function explainToolGovernance(detail: ToolDetail): ToolGovernanceSummary
   const sources = detail.sources ?? []
   const compatibleSources = sources.filter((source) => source.compatible)
   const incompatibleSources = sources.filter((source) => !source.compatible)
+  const degradedSources = sources.filter((source) => source.temporarilyDegraded)
   const rateLimitedSources = sources.filter((source) => source.rateLimits?.enabled)
   const renamedSources = sources.filter((source) => source.originalName !== detail.tool.name)
   const descriptionDiffSources = sources.filter(
-    (source) => normalized(source.description) !== '' && normalized(source.description) !== normalized(detail.tool.description),
+    (source) =>
+      normalized(source.description) !== '' &&
+      normalized(source.description) !== normalized(detail.tool.description),
   )
 
   const items: ToolGovernanceItem[] = [
@@ -36,18 +39,29 @@ export function explainToolGovernance(detail: ToolDetail): ToolGovernanceSummary
   if (detail.tool.schemaConflict || incompatibleSources.length > 0) {
     items.push(schemaItem(compatibleSources.length, incompatibleSources))
   }
+  if (degradedSources.length > 0) {
+    items.push(degradationItem(degradedSources))
+  }
   if (rateLimitedSources.length > 0) {
     items.push(rateLimitItem(rateLimitedSources))
   }
 
   return {
-    title: summaryTitle(detail, sources, incompatibleSources),
-    description: summaryDescription(detail, compatibleSources, incompatibleSources),
+    title: summaryTitle(detail, sources, incompatibleSources, degradedSources),
+    description: summaryDescription(
+      detail,
+      compatibleSources,
+      incompatibleSources,
+      degradedSources,
+    ),
     items,
   }
 }
 
-function sourceMergeItem(detail: ToolDetail, sources: NonNullable<ToolDetail['sources']>): ToolGovernanceItem {
+function sourceMergeItem(
+  detail: ToolDetail,
+  sources: NonNullable<ToolDetail['sources']>,
+): ToolGovernanceItem {
   if (sources.length <= 1) {
     return {
       key: 'source',
@@ -117,8 +131,13 @@ function schemaItem(
   compatibleCount: number,
   incompatibleSources: NonNullable<ToolDetail['sources']>,
 ): ToolGovernanceItem {
-  const names = unique(incompatibleSources.map((source) => source.upstreamName || source.upstreamId)).slice(0, 3)
-  const suffix = incompatibleSources.length > names.length ? ` 等 ${incompatibleSources.length} 个来源` : names.join('、')
+  const names = unique(
+    incompatibleSources.map((source) => source.upstreamName || source.upstreamId),
+  ).slice(0, 3)
+  const suffix =
+    incompatibleSources.length > names.length
+      ? ` 等 ${incompatibleSources.length} 个来源`
+      : names.join('、')
   return {
     key: 'schema',
     title: 'Schema 需要关注',
@@ -128,7 +147,10 @@ function schemaItem(
 }
 
 function rateLimitItem(sources: NonNullable<ToolDetail['sources']>): ToolGovernanceItem {
-  const names = unique(sources.map((source) => source.upstreamName || source.upstreamId)).slice(0, 3)
+  const names = unique(sources.map((source) => source.upstreamName || source.upstreamId)).slice(
+    0,
+    3,
+  )
   const suffix = sources.length > names.length ? ` 等 ${sources.length} 个来源` : names.join('、')
   return {
     key: 'rate-limit',
@@ -138,12 +160,28 @@ function rateLimitItem(sources: NonNullable<ToolDetail['sources']>): ToolGoverna
   }
 }
 
+function degradationItem(sources: NonNullable<ToolDetail['sources']>): ToolGovernanceItem {
+  const names = unique(sources.map((source) => source.upstreamName || source.upstreamId)).slice(
+    0,
+    3,
+  )
+  const suffix = sources.length > names.length ? ` 等 ${sources.length} 个来源` : names.join('、')
+  return {
+    key: 'degradation',
+    title: '失败来源已短暂降级',
+    description: `${suffix} 近期连续失败，网关会优先选择其他健康来源，冷却结束后自动恢复尝试。`,
+    tone: 'warning',
+  }
+}
+
 function summaryTitle(
   detail: ToolDetail,
   sources: NonNullable<ToolDetail['sources']>,
   incompatibleSources: NonNullable<ToolDetail['sources']>,
+  degradedSources: NonNullable<ToolDetail['sources']>,
 ): string {
   if (sources.length === 0) return '缺少来源信息'
+  if (degradedSources.length > 0) return '可调用，部分来源短暂降级'
   if (incompatibleSources.length > 0 || detail.tool.schemaConflict) return '可见，但存在治理提醒'
   if (sources.length > 1) return '多来源工具，当前可正常调用'
   return '当前可正常调用'
@@ -153,9 +191,16 @@ function summaryDescription(
   detail: ToolDetail,
   compatibleSources: NonNullable<ToolDetail['sources']>,
   incompatibleSources: NonNullable<ToolDetail['sources']>,
+  degradedSources: NonNullable<ToolDetail['sources']>,
 ): string {
   if ((detail.sources ?? []).length === 0) {
     return '当前聚合结果没有返回来源明细，可刷新工具目录后再查看。'
+  }
+  if (degradedSources.length > 0) {
+    const availableCount = compatibleSources.filter(
+      (source) => source.routingAvailable !== false,
+    ).length
+    return `${availableCount} 个来源当前可参与调用，${degradedSources.length} 个来源因近期连续失败被短暂降级。`
   }
   if (incompatibleSources.length > 0) {
     return `${compatibleSources.length} 个来源可参与调用，${incompatibleSources.length} 个来源因 Schema 差异被标记为需关注。`

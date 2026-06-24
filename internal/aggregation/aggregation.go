@@ -265,17 +265,42 @@ func (s *Service) BuildToolDetails(ctx context.Context, apiKeyID string) ([]doma
 	for _, tool := range tools {
 		entry := reverse[tool.Name]
 		sources := make([]domain.ToolSourceView, 0, len(entry.Candidates))
+		routableSourceCount := 0
+		for _, c := range entry.Candidates {
+			if c.Compatible {
+				routableSourceCount++
+			}
+		}
+		canDegrade := routableSourceCount > 1
 		for _, c := range entry.Candidates {
 			cfg, _ := s.upstreamConfig(c.UpstreamID)
+			degraded, reason, until := s.sourceDegradation(c)
+			sourceDegraded := c.Compatible && canDegrade && degraded
+			routingAvailable := c.Compatible
+			if sourceDegraded {
+				routingAvailable = false
+			}
+			var degradationUntil *time.Time
+			if sourceDegraded && !until.IsZero() {
+				degradationUntil = &until
+			}
+			degradationReason := ""
+			if sourceDegraded {
+				degradationReason = reason
+			}
 			sources = append(sources, domain.ToolSourceView{
-				UpstreamID:     c.UpstreamID,
-				UpstreamName:   c.UpstreamName,
-				OriginalName:   c.OriginalName,
-				Description:    c.Tool.Description,
-				InputSchema:    c.Tool.InputSchema,
-				Compatible:     c.Compatible,
-				SchemaConflict: c.SchemaConflict,
-				RateLimits:     cfg.RateLimits,
+				UpstreamID:          c.UpstreamID,
+				UpstreamName:        c.UpstreamName,
+				OriginalName:        c.OriginalName,
+				Description:         c.Tool.Description,
+				InputSchema:         c.Tool.InputSchema,
+				Compatible:          c.Compatible,
+				SchemaConflict:      c.SchemaConflict,
+				RoutingAvailable:    routingAvailable,
+				TemporarilyDegraded: sourceDegraded,
+				DegradationReason:   degradationReason,
+				DegradationUntil:    degradationUntil,
+				RateLimits:          cfg.RateLimits,
 			})
 		}
 		out = append(out, domain.ToolDetail{Tool: tool, Sources: sources})
@@ -424,8 +449,13 @@ func (s *Service) selectCandidate(ctx context.Context, entry ReverseEntry) (Tool
 }
 
 func (s *Service) sourceTemporarilyDegraded(c ToolCandidate) (bool, string) {
+	degraded, reason, _ := s.sourceDegradation(c)
+	return degraded, reason
+}
+
+func (s *Service) sourceDegradation(c ToolCandidate) (bool, string, time.Time) {
 	if s == nil {
-		return false, ""
+		return false, "", time.Time{}
 	}
 	now := s.currentTime()
 	key := sourceFailureKey(c)
@@ -433,15 +463,15 @@ func (s *Service) sourceTemporarilyDegraded(c ToolCandidate) (bool, string) {
 	defer s.sourceFailureMu.Unlock()
 	state, ok := s.sourceFailures[key]
 	if !ok {
-		return false, ""
+		return false, "", time.Time{}
 	}
 	if !state.SuspendedUntil.IsZero() {
 		if state.SuspendedUntil.After(now) {
-			return true, "部分上游近期连续失败，已短暂降级到其他健康来源"
+			return true, "部分上游近期连续失败，已短暂降级到其他健康来源", state.SuspendedUntil
 		}
 		delete(s.sourceFailures, key)
 	}
-	return false, ""
+	return false, "", time.Time{}
 }
 
 func (s *Service) recordSourceResult(c ToolCandidate, err error) {

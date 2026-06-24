@@ -67,14 +67,18 @@ type ToolResult struct {
 
 // ToolSourceView 是管理台展示某个对外工具来源上游的只读视图。
 type ToolSourceView struct {
-	UpstreamID     string             `json:"upstreamId"`
-	UpstreamName   string             `json:"upstreamName"`
-	OriginalName   string             `json:"originalName"`
-	Description    string             `json:"description"`
-	InputSchema    json.RawMessage    `json:"inputSchema"`
-	Compatible     bool               `json:"compatible"`
-	SchemaConflict bool               `json:"schemaConflict"`
-	RateLimits     UpstreamRateLimits `json:"rateLimits,omitempty"`
+	UpstreamID          string             `json:"upstreamId"`
+	UpstreamName        string             `json:"upstreamName"`
+	OriginalName        string             `json:"originalName"`
+	Description         string             `json:"description"`
+	InputSchema         json.RawMessage    `json:"inputSchema"`
+	Compatible          bool               `json:"compatible"`
+	SchemaConflict      bool               `json:"schemaConflict"`
+	RoutingAvailable    bool               `json:"routingAvailable"`
+	TemporarilyDegraded bool               `json:"temporarilyDegraded,omitempty"`
+	DegradationReason   string             `json:"degradationReason,omitempty"`
+	DegradationUntil    *time.Time         `json:"degradationUntil,omitempty"`
+	RateLimits          UpstreamRateLimits `json:"rateLimits,omitempty"`
 }
 
 // ToolDetail 是管理台工具列表的只读详情视图。

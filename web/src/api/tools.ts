@@ -20,6 +20,10 @@ export interface ToolSource {
   inputSchema: unknown
   compatible: boolean
   schemaConflict: boolean
+  routingAvailable?: boolean
+  temporarilyDegraded?: boolean
+  degradationReason?: string
+  degradationUntil?: string
   rateLimits?: UpstreamRateLimits
 }
 
@@ -81,7 +85,9 @@ export async function getToolSummary(): Promise<ToolSummary> {
   }
 }
 
-export async function getAggregatedTools(params?: { apiKeyId?: string }): Promise<AggregatedToolsResult> {
+export async function getAggregatedTools(params?: {
+  apiKeyId?: string
+}): Promise<AggregatedToolsResult> {
   const res = await request.get<AggregatedToolsResponse>('/tools/aggregated', {
     params: params?.apiKeyId ? { apiKeyId: params.apiKeyId } : undefined,
   })

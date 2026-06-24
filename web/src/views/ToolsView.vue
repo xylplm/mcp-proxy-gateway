@@ -98,6 +98,9 @@ const schemaConflictCount = computed(
   () => toolDetails.value.filter((detail) => detail.tool.schemaConflict === true).length,
 )
 const riskToolCount = computed(() => toolDetails.value.filter((detail) => toolRiskTags(detail).length > 0).length)
+const degradedSourceCount = computed(() =>
+  toolDetails.value.reduce((sum, detail) => sum + degradedSources(detail).length, 0),
+)
 const visibleCountLabel = computed(() => {
   if (hasSearchKeyword.value || selectedUpstream.value !== '' || conflictFilter.value !== 'all' || riskFilter.value !== 'all') {
     return `${visibleToolDetails.value.length.toLocaleString('zh-CN')} / ${toolDetails.value.length.toLocaleString('zh-CN')}`
@@ -154,6 +157,7 @@ function toolSearchText(detail: ToolDetail): string {
     detail.tool.originalName,
     toolDescription(detail.tool),
     ...toolRiskTags(detail).map((tag) => tag.label),
+    ...degradedSources(detail).map(() => '临时降级 来源降级'),
     ...(detail.sources ?? []).flatMap((source) => [
       source.upstreamId,
       source.upstreamName,
@@ -221,7 +225,32 @@ function sourceStatusClass(source: ToolSource): string {
   if (!source.compatible) {
     return 'bg-warning-50 text-warning-700 dark:bg-warning-500/10 dark:text-warning-400'
   }
+  if (source.temporarilyDegraded) {
+    return 'bg-warning-50 text-warning-700 dark:bg-warning-500/10 dark:text-warning-400'
+  }
+  if (source.routingAvailable === false) {
+    return 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300'
+  }
   return 'bg-success-50 text-success-700 dark:bg-success-500/10 dark:text-success-400'
+}
+
+function sourceStatusLabel(source: ToolSource): string {
+  if (!source.compatible) return 'Schema 不一致'
+  if (source.temporarilyDegraded) return '临时降级'
+  if (source.routingAvailable === false) return '暂不路由'
+  return '可参与路由'
+}
+
+function degradedSources(detail: ToolDetail): ToolSource[] {
+  return (detail.sources ?? []).filter((source) => source.temporarilyDegraded)
+}
+
+function degradationText(source: ToolSource): string {
+  const reason = source.degradationReason?.trim() || '该来源近期连续失败，网关会优先尝试其他健康来源。'
+  if (!source.degradationUntil) return reason
+  const until = new Date(source.degradationUntil)
+  if (Number.isNaN(until.getTime())) return reason
+  return `${reason} 预计 ${until.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })} 后恢复尝试。`
 }
 
 function governanceToneClass(tone: ToolGovernanceTone): string {
@@ -313,11 +342,11 @@ onMounted(() => {
       </section>
       <section :class="cardClass">
         <p class="text-sm text-gray-500 dark:text-gray-400">需关注</p>
-        <p class="mt-2 text-2xl font-semibold" :class="schemaConflictCount + riskToolCount > 0 ? 'text-warning-700 dark:text-warning-400' : 'text-success-700 dark:text-success-400'">
-          {{ (schemaConflictCount + riskToolCount).toLocaleString('zh-CN') }}
+        <p class="mt-2 text-2xl font-semibold" :class="schemaConflictCount + riskToolCount + degradedSourceCount > 0 ? 'text-warning-700 dark:text-warning-400' : 'text-success-700 dark:text-success-400'">
+          {{ (schemaConflictCount + riskToolCount + degradedSourceCount).toLocaleString('zh-CN') }}
         </p>
         <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-          风险提示 {{ riskToolCount.toLocaleString('zh-CN') }} 个
+          风险提示 {{ riskToolCount.toLocaleString('zh-CN') }} 个，降级来源 {{ degradedSourceCount.toLocaleString('zh-CN') }} 个
         </p>
       </section>
     </div>
@@ -430,6 +459,12 @@ onMounted(() => {
               Schema 不一致
             </span>
             <span
+              v-if="degradedSources(detail).length > 0"
+              class="rounded-full bg-warning-50 px-2 py-0.5 text-[11px] font-medium text-warning-700 dark:bg-warning-500/10 dark:text-warning-400"
+            >
+              来源降级
+            </span>
+            <span
               v-for="tag in riskTags(detail).slice(0, 2)"
               :key="tag.key"
               class="rounded-full px-2 py-0.5 text-[11px] font-medium"
@@ -496,6 +531,12 @@ onMounted(() => {
                 Schema 不一致
               </span>
               <span
+                v-if="degradedSources(selectedToolDetail).length > 0"
+                class="rounded-full bg-warning-50 px-2.5 py-1 text-xs font-medium text-warning-700 dark:bg-warning-500/10 dark:text-warning-400"
+              >
+                {{ degradedSources(selectedToolDetail).length }} 个来源降级
+              </span>
+              <span
                 v-for="tag in riskTags(selectedToolDetail)"
                 :key="tag.key"
                 class="rounded-full px-2.5 py-1 text-xs font-medium"
@@ -518,6 +559,13 @@ onMounted(() => {
               class="mt-4 rounded-lg border border-warning-200 bg-warning-50 px-3 py-2 text-xs leading-5 text-warning-700 dark:border-warning-500/30 dark:bg-warning-500/10 dark:text-warning-300"
             >
               同名来源的入参 Schema 不完全一致，调用时只会选择与当前展示 Schema 一致的来源。
+            </div>
+
+            <div
+              v-if="degradedSources(selectedToolDetail).length > 0"
+              class="mt-4 rounded-lg border border-warning-200 bg-warning-50 px-3 py-2 text-xs leading-5 text-warning-700 dark:border-warning-500/30 dark:bg-warning-500/10 dark:text-warning-300"
+            >
+              部分来源近期连续失败，网关正在优先选择其他健康来源；冷却结束后会自动恢复尝试。
             </div>
 
             <section
@@ -566,7 +614,7 @@ onMounted(() => {
                     </p>
                   </div>
                   <span class="rounded-full px-2 py-0.5 text-[11px] font-medium" :class="sourceStatusClass(source)">
-                    {{ source.compatible ? '可调用' : 'Schema 不一致' }}
+                    {{ sourceStatusLabel(source) }}
                   </span>
                 </div>
                 <p class="mt-2 line-clamp-3 text-xs leading-5 text-gray-500 dark:text-gray-400">
@@ -574,6 +622,12 @@ onMounted(() => {
                 </p>
                 <p class="mt-2 text-[11px] leading-5 text-gray-400 dark:text-gray-500">
                   限流额度：{{ formatRateLimits(source.rateLimits) }}
+                </p>
+                <p
+                  v-if="source.temporarilyDegraded"
+                  class="mt-2 rounded-md bg-warning-50 px-2 py-1 text-[11px] leading-5 text-warning-700 dark:bg-warning-500/10 dark:text-warning-300"
+                >
+                  {{ degradationText(source) }}
                 </p>
               </div>
             </div>

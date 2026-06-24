@@ -78,7 +78,10 @@ test('explains alias and multiple routed sources', () => {
   )
 
   assert.equal(summary.title, '多来源工具，当前可正常调用')
-  assert.match(summary.items.find((item) => item.key === 'source')?.description ?? '', /2 个上游来源/)
+  assert.match(
+    summary.items.find((item) => item.key === 'source')?.description ?? '',
+    /2 个上游来源/,
+  )
   assert.equal(summary.items.find((item) => item.key === 'alias')?.title, '名称 / 描述已治理')
   assert.equal(summary.items.find((item) => item.key === 'rate-limit')?.title, '上游限流参与路由')
 })
@@ -124,5 +127,59 @@ test('keeps schema conflicts visible without marking all sources unusable', () =
   assert.equal(summary.title, '可见，但存在治理提醒')
   assert.match(summary.description, /1 个来源可参与调用/)
   assert.equal(summary.items.find((item) => item.key === 'schema')?.tone, 'warning')
-  assert.match(summary.items.find((item) => item.key === 'routing')?.description ?? '', /1 个来源可参与路由/)
+  assert.match(
+    summary.items.find((item) => item.key === 'routing')?.description ?? '',
+    /1 个来源可参与路由/,
+  )
+})
+
+test('explains temporarily degraded sources without hiding healthy fallbacks', () => {
+  const summary = explainToolGovernance(
+    detail({
+      tool: {
+        originalName: 'search',
+        name: 'search',
+        description: '搜索',
+        inputSchema: { type: 'object' },
+        upstreamId: 'up-1',
+        order: 0,
+        sourceCount: 2,
+        schemaConflict: false,
+      },
+      sources: [
+        {
+          upstreamId: 'up-1',
+          upstreamName: '搜索 A',
+          originalName: 'search',
+          description: '搜索',
+          inputSchema: { type: 'object' },
+          compatible: true,
+          schemaConflict: false,
+          routingAvailable: false,
+          temporarilyDegraded: true,
+          degradationReason: '部分上游近期连续失败，已短暂降级到其他健康来源',
+          rateLimits: { enabled: false },
+        },
+        {
+          upstreamId: 'up-2',
+          upstreamName: '搜索 B',
+          originalName: 'search',
+          description: '搜索',
+          inputSchema: { type: 'object' },
+          compatible: true,
+          schemaConflict: false,
+          routingAvailable: true,
+          rateLimits: { enabled: false },
+        },
+      ],
+    }),
+  )
+
+  assert.equal(summary.title, '可调用，部分来源短暂降级')
+  assert.match(summary.description, /1 个来源当前可参与调用/)
+  assert.equal(summary.items.find((item) => item.key === 'degradation')?.tone, 'warning')
+  assert.match(
+    summary.items.find((item) => item.key === 'degradation')?.description ?? '',
+    /搜索 A/,
+  )
 })
