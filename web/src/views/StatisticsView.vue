@@ -426,141 +426,121 @@ onMounted(async () => {
       {{ queryError }}
     </p>
 
-    <section :class="[cardClass, 'mb-6']">
-      <div class="mb-4 flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">调用健康</h3>
-          <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">最近窗口内的成功率、延迟和失败热点。</p>
-        </div>
-        <div class="inline-flex rounded-lg border border-gray-200 p-1 dark:border-gray-800">
-          <button
-            v-for="item in ['1h', '24h']"
-            :key="item"
-            type="button"
-            class="rounded-md px-3 py-1.5 text-sm font-medium transition"
-            :class="healthWindow === item ? 'bg-brand-50 text-brand-700 dark:bg-brand-500/10 dark:text-brand-300' : 'text-gray-500 hover:bg-gray-50 dark:text-gray-400 dark:hover:bg-gray-800'"
-            @click="healthWindow = item as '1h' | '24h'"
-          >
-            {{ item === '1h' ? '最近 1h' : '最近 24h' }}
-          </button>
-        </div>
+    <div class="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(360px,0.85fr)]">
+      <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <section :class="cardClass">
+          <div class="text-sm text-gray-500 dark:text-gray-400">总调用</div>
+          <div class="mt-2 text-2xl font-semibold text-gray-800 dark:text-white/90">
+            {{ formatInt(summary.TotalCalls) }}
+          </div>
+          <div class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+            近 7 日 {{ weeklyDelta >= 0 ? '+' : '' }}{{ formatPercent(weeklyDelta) }}
+          </div>
+        </section>
+        <section :class="cardClass">
+          <div class="text-sm text-gray-500 dark:text-gray-400">成功率</div>
+          <div class="mt-2 text-2xl font-semibold" :class="healthToneClass(successRate())">
+            {{ formatPercent(successRate()) }}
+          </div>
+          <div class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+            失败 {{ formatInt(summary.FailureCalls) }} 次，{{ formatPercent(failureRate()) }}
+          </div>
+        </section>
+        <section :class="cardClass">
+          <div class="text-sm text-gray-500 dark:text-gray-400">响应耗时</div>
+          <div class="mt-2 text-2xl font-semibold text-gray-800 dark:text-white/90">
+            {{ formatMs(summary.P95LatencyMS) }}
+          </div>
+          <div class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+            平均 {{ formatMs(summary.AvgLatencyMS) }}
+          </div>
+        </section>
+        <section :class="cardClass">
+          <div class="text-sm text-gray-500 dark:text-gray-400">活跃资源</div>
+          <div class="mt-2 text-2xl font-semibold text-gray-800 dark:text-white/90">
+            {{ formatInt(summary.UniqueTools) }} 工具
+          </div>
+          <div class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+            {{ formatInt(summary.ActiveUpstreams) }} 上游 / {{ formatInt(summary.ActiveAPIKeys) }} Key
+          </div>
+        </section>
       </div>
 
-      <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <div class="rounded-lg bg-gray-50 px-4 py-3 dark:bg-gray-800/60">
-          <div class="text-xs text-gray-500 dark:text-gray-400">成功率</div>
-          <div class="mt-1 text-2xl font-semibold" :class="healthToneClass(health.SuccessRate)">
-            {{ formatPercent(health.SuccessRate) }}
+      <section :class="[cardClass, 'flex flex-col']">
+        <div class="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">近期健康</h3>
+            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">快速判断当前窗口是否异常。</p>
           </div>
-          <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-            {{ formatInt(health.SuccessCalls) }} / {{ formatInt(health.TotalCalls) }} 次成功
-          </div>
-        </div>
-        <div class="rounded-lg bg-gray-50 px-4 py-3 dark:bg-gray-800/60">
-          <div class="text-xs text-gray-500 dark:text-gray-400">延迟 p50 / p95</div>
-          <div class="mt-1 text-2xl font-semibold text-gray-800 dark:text-white/90">
-            {{ formatMs(health.P50LatencyMS) }}
-          </div>
-          <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">p95 {{ formatMs(health.P95LatencyMS) }}</div>
-        </div>
-        <div class="rounded-lg bg-gray-50 px-4 py-3 dark:bg-gray-800/60">
-          <div class="text-xs text-gray-500 dark:text-gray-400">错误工具</div>
-          <div class="mt-1 truncate text-2xl font-semibold text-gray-800 dark:text-white/90">
-            {{ healthErrorTools[0] ? healthToolLabel(healthErrorTools[0]) : '-' }}
-          </div>
-          <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-            {{ healthErrorTools[0] ? `${formatInt(healthErrorTools[0].FailureCalls)} 次失败` : '暂无失败' }}
+          <div class="inline-flex rounded-lg border border-gray-200 p-1 dark:border-gray-800">
+            <button
+              v-for="item in ['1h', '24h']"
+              :key="item"
+              type="button"
+              class="rounded-md px-3 py-1.5 text-xs font-medium transition"
+              :class="healthWindow === item ? 'bg-brand-50 text-brand-700 dark:bg-brand-500/10 dark:text-brand-300' : 'text-gray-500 hover:bg-gray-50 dark:text-gray-400 dark:hover:bg-gray-800'"
+              @click="healthWindow = item as '1h' | '24h'"
+            >
+              {{ item === '1h' ? '1h' : '24h' }}
+            </button>
           </div>
         </div>
-        <div class="rounded-lg bg-gray-50 px-4 py-3 dark:bg-gray-800/60">
-          <div class="text-xs text-gray-500 dark:text-gray-400">慢工具</div>
-          <div class="mt-1 truncate text-2xl font-semibold text-gray-800 dark:text-white/90">
-            {{ healthSlowTools[0] ? healthToolLabel(healthSlowTools[0]) : '-' }}
-          </div>
-          <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-            {{ healthSlowTools[0] ? `p95 ${formatMs(healthSlowTools[0].P95LatencyMS)}` : '暂无调用' }}
-          </div>
-        </div>
-      </div>
 
-      <div class="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-3">
-        <div class="rounded-lg border border-gray-200 p-3 dark:border-gray-800">
-          <h4 class="mb-3 text-sm font-semibold text-gray-800 dark:text-white/90">Top 错误工具</h4>
-          <div class="space-y-2">
-            <div v-for="item in healthErrorTools" :key="`${item.UpstreamID}:${item.OriginalName}`" class="flex items-start justify-between gap-3">
-              <div class="min-w-0">
-                <div class="truncate text-sm text-gray-800 dark:text-white/90">{{ healthToolLabel(item) }}</div>
-                <div class="truncate text-xs text-gray-500 dark:text-gray-400">{{ healthToolSubLabel(item) }}</div>
-              </div>
-              <span class="shrink-0 text-sm font-semibold text-error-600 dark:text-error-400">{{ formatInt(item.FailureCalls) }}</span>
+        <div class="mt-4 grid grid-cols-2 gap-3">
+          <div class="rounded-lg bg-gray-50 px-3 py-2.5 dark:bg-gray-800/60">
+            <div class="text-xs text-gray-500 dark:text-gray-400">成功率</div>
+            <div class="mt-1 text-xl font-semibold" :class="healthToneClass(health.SuccessRate)">
+              {{ formatPercent(health.SuccessRate) }}
             </div>
-            <div v-if="healthErrorTools.length === 0" class="py-4 text-center text-sm text-gray-400">暂无错误</div>
+            <div class="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
+              {{ formatInt(health.TotalCalls) }} 次调用
+            </div>
+          </div>
+          <div class="rounded-lg bg-gray-50 px-3 py-2.5 dark:bg-gray-800/60">
+            <div class="text-xs text-gray-500 dark:text-gray-400">延迟</div>
+            <div class="mt-1 text-xl font-semibold text-gray-800 dark:text-white/90">
+              {{ formatMs(health.P95LatencyMS) }}
+            </div>
+            <div class="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
+              p50 {{ formatMs(health.P50LatencyMS) }}
+            </div>
           </div>
         </div>
-        <div class="rounded-lg border border-gray-200 p-3 dark:border-gray-800">
-          <h4 class="mb-3 text-sm font-semibold text-gray-800 dark:text-white/90">Top 慢工具</h4>
-          <div class="space-y-2">
-            <div v-for="item in healthSlowTools" :key="`${item.UpstreamID}:${item.OriginalName}`" class="flex items-start justify-between gap-3">
-              <div class="min-w-0">
-                <div class="truncate text-sm text-gray-800 dark:text-white/90">{{ healthToolLabel(item) }}</div>
-                <div class="truncate text-xs text-gray-500 dark:text-gray-400">{{ healthToolSubLabel(item) }}</div>
-              </div>
-              <span class="shrink-0 text-sm font-semibold text-gray-800 dark:text-white/90">{{ formatMs(item.P95LatencyMS) }}</span>
-            </div>
-            <div v-if="healthSlowTools.length === 0" class="py-4 text-center text-sm text-gray-400">暂无调用</div>
-          </div>
-        </div>
-        <div class="rounded-lg border border-gray-200 p-3 dark:border-gray-800">
-          <h4 class="mb-3 text-sm font-semibold text-gray-800 dark:text-white/90">上游失败排行</h4>
-          <div class="space-y-2">
-            <div v-for="item in healthUpstreams" :key="item.UpstreamID || item.UpstreamName" class="flex items-start justify-between gap-3">
-              <div class="min-w-0">
-                <div class="truncate text-sm text-gray-800 dark:text-white/90">{{ healthUpstreamLabel(item) }}</div>
-                <div class="truncate text-xs text-gray-500 dark:text-gray-400">成功率 {{ formatPercent(item.SuccessRate) }}</div>
-              </div>
-              <span class="shrink-0 text-sm font-semibold text-error-600 dark:text-error-400">{{ formatInt(item.FailureCalls) }}</span>
-            </div>
-            <div v-if="healthUpstreams.length === 0" class="py-4 text-center text-sm text-gray-400">暂无失败</div>
-          </div>
-        </div>
-      </div>
-    </section>
 
-    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-      <section :class="cardClass">
-        <div class="text-sm text-gray-500 dark:text-gray-400">总调用</div>
-        <div class="mt-2 text-2xl font-semibold text-gray-800 dark:text-white/90">
-          {{ formatInt(summary.TotalCalls) }}
-        </div>
-        <div class="mt-2 text-xs text-gray-500 dark:text-gray-400">
-          近 7 日 {{ weeklyDelta >= 0 ? '+' : '' }}{{ formatPercent(weeklyDelta) }}
-        </div>
-      </section>
-      <section :class="cardClass">
-        <div class="text-sm text-gray-500 dark:text-gray-400">成功率</div>
-        <div class="mt-2 text-2xl font-semibold text-gray-800 dark:text-white/90">
-          {{ formatPercent(successRate()) }}
-        </div>
-        <div class="mt-2 text-xs text-gray-500 dark:text-gray-400">
-          失败 {{ formatInt(summary.FailureCalls) }} 次，{{ formatPercent(failureRate()) }}
-        </div>
-      </section>
-      <section :class="cardClass">
-        <div class="text-sm text-gray-500 dark:text-gray-400">响应耗时</div>
-        <div class="mt-2 text-2xl font-semibold text-gray-800 dark:text-white/90">
-          {{ formatMs(summary.P95LatencyMS) }}
-        </div>
-        <div class="mt-2 text-xs text-gray-500 dark:text-gray-400">
-          平均 {{ formatMs(summary.AvgLatencyMS) }}
-        </div>
-      </section>
-      <section :class="cardClass">
-        <div class="text-sm text-gray-500 dark:text-gray-400">活跃资源</div>
-        <div class="mt-2 text-2xl font-semibold text-gray-800 dark:text-white/90">
-          {{ formatInt(summary.UniqueTools) }} 工具
-        </div>
-        <div class="mt-2 text-xs text-gray-500 dark:text-gray-400">
-          {{ formatInt(summary.ActiveUpstreams) }} 上游 / {{ formatInt(summary.ActiveAPIKeys) }} Key
+        <div class="mt-4 space-y-3">
+          <div class="rounded-lg border border-gray-200 p-3 dark:border-gray-800">
+            <div class="mb-2 flex items-center justify-between gap-2">
+              <span class="text-xs font-medium text-gray-500 dark:text-gray-400">主要异常</span>
+              <span class="text-xs text-gray-400 dark:text-gray-500">{{ formatInt(health.FailureCalls) }} 次失败</span>
+            </div>
+            <div v-if="healthErrorTools[0]" class="min-w-0">
+              <div class="truncate text-sm font-medium text-gray-800 dark:text-white/90">
+                {{ healthToolLabel(healthErrorTools[0]) }}
+              </div>
+              <div class="mt-1 truncate text-xs text-gray-500 dark:text-gray-400">
+                {{ healthToolSubLabel(healthErrorTools[0]) }} · {{ formatInt(healthErrorTools[0].FailureCalls) }} 次失败
+              </div>
+            </div>
+            <div v-else class="py-1 text-sm text-gray-400">暂无错误</div>
+          </div>
+
+          <div class="rounded-lg border border-gray-200 p-3 dark:border-gray-800">
+            <div class="mb-2 text-xs font-medium text-gray-500 dark:text-gray-400">失败上游</div>
+            <div class="space-y-2">
+              <div
+                v-for="item in healthUpstreams.slice(0, 3)"
+                :key="item.UpstreamID || item.UpstreamName"
+                class="flex items-start justify-between gap-3"
+              >
+                <div class="min-w-0">
+                  <div class="truncate text-sm text-gray-800 dark:text-white/90">{{ healthUpstreamLabel(item) }}</div>
+                  <div class="truncate text-xs text-gray-500 dark:text-gray-400">成功率 {{ formatPercent(item.SuccessRate) }}</div>
+                </div>
+                <span class="shrink-0 text-sm font-semibold text-error-600 dark:text-error-400">{{ formatInt(item.FailureCalls) }}</span>
+              </div>
+              <div v-if="healthUpstreams.length === 0" class="py-1 text-sm text-gray-400">暂无失败</div>
+            </div>
+          </div>
         </div>
       </section>
     </div>
@@ -613,12 +593,12 @@ onMounted(async () => {
             </div>
           </div>
           <div class="rounded-lg bg-gray-50 px-4 py-3 dark:bg-gray-800/60">
-            <div class="text-xs text-gray-500 dark:text-gray-400">最高错误工具</div>
+            <div class="text-xs text-gray-500 dark:text-gray-400">近期慢工具</div>
             <div class="mt-1 truncate text-xl font-semibold text-gray-800 dark:text-white/90">
-              {{ topErrorTool ? topErrorTool.OriginalName : '-' }}
+              {{ healthSlowTools[0] ? healthToolLabel(healthSlowTools[0]) : '-' }}
             </div>
             <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-              {{ topErrorTool ? `${formatInt(topErrorTool.FailureCalls)} 次失败` : '暂无错误记录' }}
+              {{ healthSlowTools[0] ? `p95 ${formatMs(healthSlowTools[0].P95LatencyMS)}` : '暂无慢调用' }}
             </div>
           </div>
         </div>
