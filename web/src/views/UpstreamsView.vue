@@ -765,9 +765,11 @@ function goPage(p: number): void {
           刷新列表
         </button>
         <button
+          v-tooltip:bottom="'上游排序'"
           type="button"
-          class="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 px-3.5 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:opacity-60 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+          class="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-gray-300 text-gray-700 transition hover:bg-gray-50 disabled:opacity-60 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
           :disabled="upstreams.length <= 1 || loading"
+          aria-label="上游排序"
           @click="openSorting"
         >
           <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none">
@@ -778,26 +780,12 @@ function goPage(p: number): void {
               stroke-linecap="round"
             />
           </svg>
-          排序
         </button>
         <button
+          v-tooltip:bottom="'导入 JSON'"
           type="button"
-          class="border-brand-300 text-brand-600 hover:bg-brand-50 dark:border-brand-500/40 dark:text-brand-400 dark:hover:bg-brand-500/10 inline-flex items-center gap-1.5 rounded-lg border px-3.5 py-2 text-sm font-medium transition"
-          @click="marketOpen = true"
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-            <path
-              d="M3 9h18M9 21V9M4 4h16a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Z"
-              stroke="currentColor"
-              stroke-width="1.6"
-              stroke-linejoin="round"
-            />
-          </svg>
-          模板市场
-        </button>
-        <button
-          type="button"
-          class="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 px-3.5 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:opacity-60 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+          class="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-gray-300 text-gray-700 transition hover:bg-gray-50 disabled:opacity-60 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+          aria-label="导入 JSON"
           @click="openImport"
         >
           <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none">
@@ -809,12 +797,13 @@ function goPage(p: number): void {
               stroke-linejoin="round"
             />
           </svg>
-          导入 JSON
         </button>
         <button
+          v-tooltip:bottom="exportingMCPJSON ? '导出中' : '导出 JSON'"
           type="button"
-          class="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 px-3.5 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:opacity-60 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+          class="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-gray-300 text-gray-700 transition hover:bg-gray-50 disabled:opacity-60 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
           :disabled="exportingMCPJSON || upstreams.length === 0"
+          :aria-label="exportingMCPJSON ? '导出中' : '导出 JSON'"
           @click="downloadMCPJSON"
         >
           <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none">
@@ -826,7 +815,21 @@ function goPage(p: number): void {
               stroke-linejoin="round"
             />
           </svg>
-          {{ exportingMCPJSON ? '导出中...' : '导出 JSON' }}
+        </button>
+        <button
+          type="button"
+          class="border-brand-300 text-brand-600 hover:bg-brand-50 dark:border-brand-500/40 dark:text-brand-400 dark:hover:bg-brand-500/10 inline-flex items-center gap-1.5 rounded-lg border px-3.5 py-2 text-sm font-medium transition"
+          @click="marketOpen = true"
+        >
+          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none">
+            <path
+              d="M3 9h18M9 21V9M4 4h16a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Z"
+              stroke="currentColor"
+              stroke-width="1.6"
+              stroke-linejoin="round"
+            />
+          </svg>
+          模板市场
         </button>
         <button
           type="button"
