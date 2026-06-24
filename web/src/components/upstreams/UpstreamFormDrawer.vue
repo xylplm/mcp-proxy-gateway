@@ -37,7 +37,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'close'): void
-  (e: 'saved'): void
+  (e: 'saved', payload: { upstream: Upstream; mode: 'create' | 'edit' }): void
 }>()
 
 type RemoteAuthMode = 'none' | 'bearer' | 'api-key' | 'custom'
@@ -840,9 +840,10 @@ async function handleSubmit(): Promise<void> {
 
   submitting.value = true
   try {
-    if (isEdit.value && props.upstream !== null) await updateUpstream(props.upstream.id, payload)
-    else await createUpstream(payload)
-    emit('saved')
+    const saved = isEdit.value && props.upstream !== null
+      ? await updateUpstream(props.upstream.id, payload)
+      : await createUpstream(payload)
+    emit('saved', { upstream: saved, mode: isEdit.value ? 'edit' : 'create' })
   } catch (err) {
     applyServerError(err)
   } finally {

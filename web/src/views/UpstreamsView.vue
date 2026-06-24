@@ -13,6 +13,7 @@ import AdminLayout from '@/components/layout/AdminLayout.vue'
 import PageBreadcrumb from '@/components/common/PageBreadcrumb.vue'
 import ConnStateBadge from '@/components/upstreams/ConnStateBadge.vue'
 import UpstreamFormDrawer from '@/components/upstreams/UpstreamFormDrawer.vue'
+import UpstreamOnboardingPanel from '@/components/upstreams/UpstreamOnboardingPanel.vue'
 import TemplateMarketModal from '@/components/upstreams/TemplateMarketModal.vue'
 import { useBreakpoint } from '@/composables/useBreakpoint'
 import { useConfirm } from '@/composables/useConfirm'
@@ -98,6 +99,7 @@ const toolModalError = ref('')
 const toolModalSearchKeyword = ref('')
 const detailOpen = ref(false)
 const detailUpstream = ref<Upstream | null>(null)
+const onboardingUpstream = ref<Upstream | null>(null)
 
 let statusPollTimer: number | undefined
 let statusPollingUntil = 0
@@ -214,6 +216,12 @@ watch(upstreams, (next) => {
     return
   }
   detailUpstream.value = latest
+})
+
+watch(upstreams, (next) => {
+  if (onboardingUpstream.value === null) return
+  const latest = next.find((up) => up.id === onboardingUpstream.value?.id) ?? null
+  onboardingUpstream.value = latest
 })
 
 watch(importContent, () => {
@@ -381,13 +389,22 @@ function onTemplateSelected(pf: PrefillForm): void {
 }
 
 /** 抽屉保存成功：关闭并刷新列表。 */
-async function onSaved(): Promise<void> {
+async function onSaved(payload: { upstream: Upstream; mode: 'create' | 'edit' }): Promise<void> {
   drawerOpen.value = false
   prefill.value = null
   editing.value = null
-  toast.success('保存成功')
+  if (payload.mode === 'create') {
+    onboardingUpstream.value = payload.upstream
+    toast.success('上游已创建')
+  } else {
+    toast.success('保存成功')
+  }
   await loadUpstreams()
   ensureStatusPolling(60_000)
+}
+
+function dismissOnboarding(): void {
+  onboardingUpstream.value = null
 }
 
 async function previewImport(): Promise<void> {
@@ -848,6 +865,18 @@ function goPage(p: number): void {
         </button>
       </div>
     </div>
+
+    <UpstreamOnboardingPanel
+      v-if="onboardingUpstream !== null"
+      :upstream="onboardingUpstream"
+      :tool-count="toolCounts[onboardingUpstream.id]"
+      :refreshing="isBusy(onboardingUpstream.id, 'refresh')"
+      :reconnecting="isBusy(onboardingUpstream.id, 'reconnect')"
+      @refresh="refresh(onboardingUpstream)"
+      @reconnect="reconnect(onboardingUpstream)"
+      @open-tools="openToolModal(onboardingUpstream)"
+      @dismiss="dismissOnboarding"
+    />
 
     <!-- 列表：卡片网格（响应式，移动端友好，替代表格） -->
     <div>
