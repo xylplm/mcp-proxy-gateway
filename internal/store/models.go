@@ -154,9 +154,13 @@ type apiKeyACLModel struct {
 func (apiKeyACLModel) TableName() string { return "api_key_acl" }
 
 type toolCacheModel struct {
-	UpstreamID string    `gorm:"column:upstream_id;type:uuid;primaryKey"`
-	Tools      JSONB     `gorm:"column:tools;type:jsonb;not null"`
-	UpdatedAt  time.Time `gorm:"column:updated_at;type:timestamptz;not null"`
+	UpstreamID     string    `gorm:"column:upstream_id;type:uuid;primaryKey"`
+	Tools          JSONB     `gorm:"column:tools;type:jsonb;not null"`
+	UpdatedAt      time.Time `gorm:"column:updated_at;type:timestamptz;not null"`
+	AddedCount     int       `gorm:"column:added_count;type:integer;not null;default:0"`
+	RemovedCount   int       `gorm:"column:removed_count;type:integer;not null;default:0"`
+	SchemaChanged  int       `gorm:"column:schema_changed;type:integer;not null;default:0"`
+	ChangeSyncedAt time.Time `gorm:"column:change_synced_at;type:timestamptz"`
 }
 
 func (toolCacheModel) TableName() string { return "tool_cache" }

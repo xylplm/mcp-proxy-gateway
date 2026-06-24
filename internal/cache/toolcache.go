@@ -99,6 +99,19 @@ func (c *ToolCache) Get(ctx context.Context, upstreamID string) ([]domain.ToolDe
 	return tools, updatedAt, true
 }
 
+// GetChangeSummary 返回最近一次成功同步的轻量变化摘要。
+func (c *ToolCache) GetChangeSummary(ctx context.Context, upstreamID string) (domain.ToolChangeSummary, bool) {
+	if c.repo == nil {
+		return domain.ToolChangeSummary{}, false
+	}
+	summary, found, err := c.repo.GetChangeSummary(ctx, upstreamID)
+	if err != nil {
+		c.logger.Warn("读取工具变更摘要失败", "upstreamID", upstreamID, "error", err)
+		return domain.ToolChangeSummary{}, false
+	}
+	return summary, found
+}
+
 // Replace 以整列表替换语义写入某上游 MCP 的工具列表（Req 6.1）。
 //
 // PG 为持久兜底、是回源真相来源，故先写 PG；PG 写入失败直接返回错误。

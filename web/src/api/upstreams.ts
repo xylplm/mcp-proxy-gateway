@@ -135,6 +135,14 @@ export interface UpstreamToolSummary {
   id: string
   count: number
   updatedAt?: string | null
+  changeSummary?: ToolChangeSummary | null
+}
+
+export interface ToolChangeSummary {
+  added: number
+  removed: number
+  schemaChanged: number
+  syncedAt: string
 }
 
 export interface UpstreamTestResult {

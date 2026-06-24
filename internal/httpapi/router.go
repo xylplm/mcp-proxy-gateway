@@ -65,6 +65,7 @@ type ToolRefresher interface {
 // ToolCacheStore 是管理台读取已缓存工具列表的窄接口。
 type ToolCacheStore interface {
 	Get(ctx context.Context, upstreamID string) (tools []domain.ToolDef, updatedAt time.Time, found bool)
+	GetChangeSummary(ctx context.Context, upstreamID string) (domain.ToolChangeSummary, bool)
 }
 
 // ToolCacheEnsurer 是缓存缺失时按需补拉某上游工具列表的窄接口。

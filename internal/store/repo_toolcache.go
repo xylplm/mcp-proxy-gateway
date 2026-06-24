@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"time"
 
 	"gorm.io/gorm"
@@ -41,10 +42,23 @@ func (r *ToolCacheRepo) Replace(ctx context.Context, upstreamID string, tools []
 		return domain.NewError(domain.CodeValidation, "工具列表序列化失败："+err.Error())
 	}
 
-	model := toolCacheModel{UpstreamID: uid, Tools: JSONB(payload), UpdatedAt: updatedAt}
+	previous, _, found, err := r.Get(ctx, upstreamID)
+	if err != nil {
+		return err
+	}
+	summary := computeToolChangeSummary(previous, tools, found, updatedAt)
+	model := toolCacheModel{
+		UpstreamID:     uid,
+		Tools:          JSONB(payload),
+		UpdatedAt:      updatedAt,
+		AddedCount:     summary.Added,
+		RemovedCount:   summary.Removed,
+		SchemaChanged:  summary.SchemaChanged,
+		ChangeSyncedAt: summary.SyncedAt,
+	}
 	err = r.db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "upstream_id"}},
-		DoUpdates: clause.AssignmentColumns([]string{"tools", "updated_at"}),
+		DoUpdates: clause.AssignmentColumns([]string{"tools", "updated_at", "added_count", "removed_count", "schema_changed", "change_synced_at"}),
 	}).Create(&model).Error
 	if err != nil {
 		return classifyWrite(err, "工具缓存冲突", "绑定的上游 MCP 不存在")
@@ -79,6 +93,28 @@ func (r *ToolCacheRepo) Get(ctx context.Context, upstreamID string) (tools []dom
 	return out, model.UpdatedAt, true, nil
 }
 
+// GetChangeSummary 读取某上游最近一次同步相对上一次缓存的轻量变化摘要。
+func (r *ToolCacheRepo) GetChangeSummary(ctx context.Context, upstreamID string) (domain.ToolChangeSummary, bool, error) {
+	uid, perr := parseUUID(upstreamID)
+	if perr != nil {
+		return domain.ToolChangeSummary{}, false, perr
+	}
+	var model toolCacheModel
+	scanErr := r.db.WithContext(ctx).Where("upstream_id = ?", uid).First(&model).Error
+	if scanErr != nil {
+		if e := notFoundIfNoRows(scanErr, "工具缓存不存在"); e != scanErr {
+			return domain.ToolChangeSummary{}, false, nil
+		}
+		return domain.ToolChangeSummary{}, false, scanErr
+	}
+	return domain.ToolChangeSummary{
+		Added:         model.AddedCount,
+		Removed:       model.RemovedCount,
+		SchemaChanged: model.SchemaChanged,
+		SyncedAt:       model.ChangeSyncedAt,
+	}, !model.ChangeSyncedAt.IsZero(), nil
+}
+
 // Delete 删除某上游 MCP 的持久缓存（Req 6.6）。
 //
 // 删除不存在的记录不视为错误（删除语义幂等），返回是否实际删除。
@@ -92,4 +128,62 @@ func (r *ToolCacheRepo) Delete(ctx context.Context, upstreamID string) (bool, er
 		return false, res.Error
 	}
 	return res.RowsAffected > 0, nil
+}
+
+func computeToolChangeSummary(previous, current []domain.ToolDef, found bool, syncedAt time.Time) domain.ToolChangeSummary {
+	if !found {
+		return domain.ToolChangeSummary{Added: len(current), SyncedAt: syncedAt}
+	}
+	prev := toolSchemaByOriginalName(previous)
+	next := toolSchemaByOriginalName(current)
+	summary := domain.ToolChangeSummary{SyncedAt: syncedAt}
+	for name, schema := range next {
+		oldSchema, ok := prev[name]
+		if !ok {
+			summary.Added++
+			continue
+		}
+		if !jsonEqual(oldSchema, schema) {
+			summary.SchemaChanged++
+		}
+	}
+	for name := range prev {
+		if _, ok := next[name]; !ok {
+			summary.Removed++
+		}
+	}
+	return summary
+}
+
+func toolSchemaByOriginalName(tools []domain.ToolDef) map[string]json.RawMessage {
+	out := make(map[string]json.RawMessage, len(tools))
+	for _, tool := range tools {
+		name := tool.OriginalName
+		if name == "" {
+			name = tool.Name
+		}
+		if name == "" {
+			continue
+		}
+		out[name] = tool.InputSchema
+	}
+	return out
+}
+
+func jsonEqual(a, b json.RawMessage) bool {
+	var av any
+	var bv any
+	if len(a) == 0 {
+		a = []byte("null")
+	}
+	if len(b) == 0 {
+		b = []byte("null")
+	}
+	if err := json.Unmarshal(a, &av); err != nil {
+		return string(a) == string(b)
+	}
+	if err := json.Unmarshal(b, &bv); err != nil {
+		return string(a) == string(b)
+	}
+	return reflect.DeepEqual(av, bv)
 }

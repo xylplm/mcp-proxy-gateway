@@ -14,6 +14,8 @@ type fakeToolCacheStore struct {
 	tools     []domain.ToolDef
 	updatedAt time.Time
 	found     bool
+	change    domain.ToolChangeSummary
+	changeOK  bool
 	getCalls  int
 	byID      map[string]struct {
 		tools     []domain.ToolDef
@@ -32,6 +34,10 @@ func (s *fakeToolCacheStore) Get(_ context.Context, id string) ([]domain.ToolDef
 		return entry.tools, entry.updatedAt, entry.found
 	}
 	return s.tools, s.updatedAt, s.found
+}
+
+func (s *fakeToolCacheStore) GetChangeSummary(_ context.Context, _ string) (domain.ToolChangeSummary, bool) {
+	return s.change, s.changeOK
 }
 
 type fakeUpstreamService struct {
@@ -427,9 +433,10 @@ func TestListUpstreamToolSummariesDoesNotEnsure(t *testing.T) {
 
 	var got struct {
 		Summaries []struct {
-			ID        string     `json:"id"`
-			Count     int        `json:"count"`
-			UpdatedAt *time.Time `json:"updatedAt"`
+			ID            string                    `json:"id"`
+			Count         int                       `json:"count"`
+			UpdatedAt     *time.Time                `json:"updatedAt"`
+			ChangeSummary *domain.ToolChangeSummary `json:"changeSummary"`
 		} `json:"summaries"`
 	}
 	unmarshalData(t, w, &got)
@@ -442,7 +449,58 @@ func TestListUpstreamToolSummariesDoesNotEnsure(t *testing.T) {
 	if !got.Summaries[0].UpdatedAt.Equal(updatedAt) {
 		t.Fatalf("updatedAt 期望 %s，实际 %s", updatedAt, got.Summaries[0].UpdatedAt)
 	}
+	if got.Summaries[0].ChangeSummary != nil {
+		t.Fatalf("未注入变更摘要时不应返回 changeSummary：%+v", got.Summaries[0].ChangeSummary)
+	}
 	if got.Summaries[1].ID != "up-missing" || got.Summaries[1].Count != 0 || got.Summaries[1].UpdatedAt != nil {
 		t.Fatalf("缺失缓存摘要不符合预期：%+v", got.Summaries[1])
+	}
+}
+
+func TestListUpstreamToolSummariesIncludesChangeSummary(t *testing.T) {
+	updatedAt := time.Date(2026, 6, 23, 10, 0, 0, 0, time.UTC)
+	changeAt := time.Date(2026, 6, 23, 10, 1, 0, 0, time.UTC)
+	upstream := &fakeUpstreamService{
+		list: []domain.Upstream{{ID: "up-cached"}},
+	}
+	cache := &fakeToolCacheStore{
+		tools: []domain.ToolDef{{
+			Name:       "search",
+			UpstreamID: "up-cached",
+		}},
+		updatedAt: updatedAt,
+		found:     true,
+		change: domain.ToolChangeSummary{
+			Added:         2,
+			Removed:       1,
+			SchemaChanged: 3,
+			SyncedAt:       changeAt,
+		},
+		changeOK: true,
+	}
+	e := newTestEngine(Deps{Upstream: upstream, ToolCache: cache, CacheEnsurer: &fakeToolCacheEnsurer{}})
+
+	w := doJSON(e, http.MethodGet, "/api/admin/upstreams/tool-summaries", "")
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("期望 HTTP 200，实际 %d，响应体 %s", w.Code, w.Body.String())
+	}
+	var got struct {
+		Summaries []struct {
+			ID            string                    `json:"id"`
+			Count         int                       `json:"count"`
+			UpdatedAt     *time.Time                `json:"updatedAt"`
+			ChangeSummary *domain.ToolChangeSummary `json:"changeSummary"`
+		} `json:"summaries"`
+	}
+	unmarshalData(t, w, &got)
+	if len(got.Summaries) != 1 || got.Summaries[0].ChangeSummary == nil {
+		t.Fatalf("应返回变更摘要：%+v", got.Summaries)
+	}
+	if got.Summaries[0].ChangeSummary.Added != 2 || got.Summaries[0].ChangeSummary.Removed != 1 || got.Summaries[0].ChangeSummary.SchemaChanged != 3 {
+		t.Fatalf("变更摘要不符合预期：%+v", got.Summaries[0].ChangeSummary)
+	}
+	if !got.Summaries[0].ChangeSummary.SyncedAt.Equal(changeAt) {
+		t.Fatalf("syncedAt 期望 %s，实际 %s", changeAt, got.Summaries[0].ChangeSummary.SyncedAt)
 	}
 }

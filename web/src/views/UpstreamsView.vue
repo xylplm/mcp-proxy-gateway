@@ -38,7 +38,12 @@ import {
 } from '@/api/upstreams'
 import type { ToolDef } from '@/api/tools'
 import type { PrefillForm } from '@/api/templates'
-import { buildToolCountSnapshot, toolCountLabel, type ToolCountSnapshot } from '@/utils/toolCountSnapshot'
+import {
+  buildToolCountSnapshot,
+  toolChangeSummaryLabel,
+  toolCountLabel,
+  type ToolCountSnapshot,
+} from '@/utils/toolCountSnapshot'
 import { buildUpstreamDetailSummary } from '@/utils/upstreamDetailSummary'
 import {
   formatFileSize,
@@ -282,7 +287,7 @@ async function loadToolCounts(list: Upstream[]): Promise<void> {
     const visibleIDs = new Set(list.map((up) => up.id))
     for (const item of summaries) {
       if (!visibleIDs.has(item.id)) continue
-      next[item.id] = buildToolCountSnapshot(item.count, item.updatedAt)
+      next[item.id] = buildToolCountSnapshot(item.count, item.updatedAt, item.changeSummary)
     }
   } catch {
     // 工具摘要是列表辅助信息，失败时保留未知状态，不影响上游管理主流程。
@@ -972,6 +977,12 @@ function goPage(p: number): void {
             >
               {{ toolCountLabel(toolCounts[up.id]) }}
             </button>
+            <span
+              v-if="toolCounts[up.id]?.synced"
+              class="min-w-0 flex-1 truncate text-xs text-gray-400 dark:text-gray-500"
+            >
+              {{ toolChangeSummaryLabel(toolCounts[up.id]) }}
+            </span>
             <div class="flex flex-wrap items-center justify-end gap-1.5">
               <button
                 type="button"

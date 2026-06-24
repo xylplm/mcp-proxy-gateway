@@ -72,9 +72,10 @@ type reorderRequest struct {
 }
 
 type upstreamToolSummary struct {
-	ID        string     `json:"id"`
-	Count     int        `json:"count"`
-	UpdatedAt *time.Time `json:"updatedAt"`
+	ID            string                    `json:"id"`
+	Count         int                       `json:"count"`
+	UpdatedAt     *time.Time                `json:"updatedAt"`
+	ChangeSummary *domain.ToolChangeSummary `json:"changeSummary,omitempty"`
 }
 
 // registerUpstreamRoutes 在管理分组下注册上游 MCP 管理端点。
@@ -275,10 +276,16 @@ func (r *Router) listUpstreamToolSummaries(c *gin.Context) {
 		if found {
 			updatedAtPtr = &updatedAt
 		}
+		changeSummary, changeFound := r.toolCache.GetChangeSummary(c.Request.Context(), up.ID)
+		var changeSummaryPtr *domain.ToolChangeSummary
+		if changeFound {
+			changeSummaryPtr = &changeSummary
+		}
 		summaries = append(summaries, upstreamToolSummary{
-			ID:        up.ID,
-			Count:     len(tools),
-			UpdatedAt: updatedAtPtr,
+			ID:            up.ID,
+			Count:         len(tools),
+			UpdatedAt:     updatedAtPtr,
+			ChangeSummary: changeSummaryPtr,
 		})
 	}
 	respondOK(c, gin.H{"summaries": summaries})

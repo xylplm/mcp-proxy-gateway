@@ -57,6 +57,16 @@ type ToolDef struct {
 	SchemaConflict bool `json:"schemaConflict,omitempty"`
 }
 
+// ToolChangeSummary 表示某上游最近一次成功同步相对于上一次缓存的轻量变化摘要。
+//
+// 只保留最新一次，不保存历史快照；用于管理台提示同步是否带来工具增删或 schema 变化。
+type ToolChangeSummary struct {
+	Added         int       `json:"added"`
+	Removed       int       `json:"removed"`
+	SchemaChanged int       `json:"schemaChanged"`
+	SyncedAt       time.Time `json:"syncedAt"`
+}
+
 // ToolResult 表示上游 MCP 工具调用返回的结果，无论成功或上游报告的错误均原样透传。
 type ToolResult struct {
 	// IsError 表示该结果是否为上游报告的错误结果。
