@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import AdminLayout from '@/components/layout/AdminLayout.vue'
 import PageBreadcrumb from '@/components/common/PageBreadcrumb.vue'
 import ToolPlaygroundPanel from '@/components/tools/ToolPlaygroundPanel.vue'
@@ -30,10 +31,19 @@ import {
   TOOL_POLICY_RISK_TAG_PRESETS,
   type AutoRiskTagKey,
 } from '@/utils/toolPolicy'
+import {
+  buildToolCatalogQuery,
+  parseToolCatalogQuery,
+  sameToolCatalogQuery,
+  type ToolCatalogConflictFilter,
+  type ToolCatalogRiskFilter,
+} from '@/utils/toolCatalogQuery'
 
-type ConflictFilter = 'all' | 'conflict' | 'multi'
-type RiskFilter = 'all' | 'risk'
+type ConflictFilter = ToolCatalogConflictFilter
+type RiskFilter = ToolCatalogRiskFilter
 
+const route = useRoute()
+const router = useRouter()
 const loading = ref(false)
 const refreshing = ref(false)
 const loadError = ref('')
@@ -49,6 +59,9 @@ const detailOpen = ref(false)
 const riskSaving = ref(false)
 const riskError = ref('')
 const riskTagInput = ref('')
+let syncingRoute = false
+let applyingRoute = false
+let routeSyncTimer: ReturnType<typeof setTimeout> | null = null
 
 const cardClass =
   'rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03]'
@@ -141,6 +154,7 @@ async function loadTools(showLoading = true): Promise<void> {
     toolDetails.value = result.toolDetails.length > 0
       ? result.toolDetails
       : result.tools.map((tool) => ({ tool, sources: [] }))
+    openSelectedToolFromQuery()
     ensureSelectedTool()
   } catch (err) {
     loadError.value = err instanceof Error ? err.message : '加载工具目录失败'
@@ -155,6 +169,7 @@ async function loadAPIKeyOptions(): Promise<void> {
     apiKeys.value = await listAPIKeys()
     if (selectedAPIKeyID.value !== '' && !apiKeys.value.some((key) => key.id === selectedAPIKeyID.value)) {
       selectedAPIKeyID.value = ''
+      scheduleRouteSync()
     }
   } catch (err) {
     loadError.value = err instanceof Error ? err.message : '加载 API Key 失败'
@@ -166,7 +181,16 @@ function ensureSelectedTool(): void {
   if (!toolDetailsByName.value.has(selectedToolName.value)) {
     selectedToolName.value = ''
     detailOpen.value = false
+    scheduleRouteSync()
   }
+}
+
+function openSelectedToolFromQuery(): void {
+  if (selectedToolName.value === '') return
+  if (!toolDetailsByName.value.has(selectedToolName.value)) return
+  detailOpen.value = true
+  riskError.value = ''
+  riskTagInput.value = ''
 }
 
 function toolDescription(tool: ToolDef): string {
@@ -198,12 +222,15 @@ function openDetail(detail: ToolDetail): void {
   riskError.value = ''
   riskTagInput.value = ''
   detailOpen.value = true
+  scheduleRouteSync()
 }
 
 function closeDetail(): void {
   detailOpen.value = false
+  selectedToolName.value = ''
   riskError.value = ''
   riskTagInput.value = ''
+  scheduleRouteSync()
 }
 
 function resetFilters(): void {
@@ -211,13 +238,67 @@ function resetFilters(): void {
   selectedUpstream.value = ''
   conflictFilter.value = 'all'
   riskFilter.value = 'all'
+  selectedToolName.value = ''
+  detailOpen.value = false
+  scheduleRouteSync()
 }
 
 async function changePerspective(): Promise<void> {
   resetFilters()
-  selectedToolName.value = ''
-  detailOpen.value = false
   await loadTools()
+  scheduleRouteSync()
+}
+
+function applyRouteQuery(): boolean {
+  applyingRoute = true
+  const state = parseToolCatalogQuery(route.query)
+  const apiKeyChanged = selectedAPIKeyID.value !== state.apiKeyId
+  selectedAPIKeyID.value = state.apiKeyId
+  searchKeyword.value = state.search
+  selectedUpstream.value = state.upstreamId
+  conflictFilter.value = state.status
+  riskFilter.value = state.risk
+  selectedToolName.value = state.tool
+  detailOpen.value = state.tool !== ''
+  riskError.value = ''
+  riskTagInput.value = ''
+  applyingRoute = false
+  if (toolDetails.value.length > 0) {
+    openSelectedToolFromQuery()
+    ensureSelectedTool()
+  }
+  return apiKeyChanged
+}
+
+function scheduleRouteSync(): void {
+  if (applyingRoute) return
+  if (routeSyncTimer !== null) {
+    clearTimeout(routeSyncTimer)
+  }
+  routeSyncTimer = setTimeout(() => {
+    routeSyncTimer = null
+    void syncRouteQuery()
+  }, 120)
+}
+
+async function syncRouteQuery(): Promise<void> {
+  if (syncingRoute || applyingRoute) return
+  const query = buildToolCatalogQuery({
+    apiKeyId: selectedAPIKeyID.value,
+    search: searchKeyword.value,
+    upstreamId: selectedUpstream.value,
+    status: conflictFilter.value,
+    risk: riskFilter.value,
+    tool: detailOpen.value ? selectedToolName.value : '',
+  })
+  const currentQuery = buildToolCatalogQuery(parseToolCatalogQuery(route.query))
+  if (sameToolCatalogQuery(query, currentQuery)) return
+  syncingRoute = true
+  try {
+    await router.replace({ query })
+  } finally {
+    syncingRoute = false
+  }
 }
 
 function sourceCountText(detail: ToolDetail): string {
@@ -440,8 +521,35 @@ function riskNoticeClass(detail: ToolDetail): string {
   return 'border-warning-200 bg-warning-50 text-warning-700 dark:border-warning-500/30 dark:bg-warning-500/10 dark:text-warning-300'
 }
 
-onMounted(() => {
-  void Promise.all([loadAPIKeyOptions(), loadTools()])
+watch(
+  () => route.query,
+  () => {
+    if (syncingRoute) return
+    const apiKeyChanged = applyRouteQuery()
+    if (apiKeyChanged) {
+      void loadTools()
+    }
+  },
+)
+
+watch(
+  [searchKeyword, selectedUpstream, conflictFilter, riskFilter],
+  () => {
+    scheduleRouteSync()
+  },
+)
+
+onMounted(async () => {
+  applyRouteQuery()
+  await loadAPIKeyOptions()
+  await loadTools()
+})
+
+onUnmounted(() => {
+  if (routeSyncTimer !== null) {
+    clearTimeout(routeSyncTimer)
+    routeSyncTimer = null
+  }
 })
 </script>
 
