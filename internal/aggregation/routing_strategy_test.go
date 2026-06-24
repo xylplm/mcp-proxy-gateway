@@ -253,6 +253,76 @@ func TestToolPolicyCachesSuccessfulResult(t *testing.T) {
 	if got := invoker.callCount(); got != 2 {
 		t.Fatalf("不同参数不应复用缓存，got calls=%d", got)
 	}
+	stats := svc.ToolResultCacheStats()
+	if stats.Hits != 1 || stats.Misses != 2 || stats.Stores != 2 || stats.Entries != 2 {
+		t.Fatalf("缓存统计不符合预期：%+v", stats)
+	}
+}
+
+func TestToolResultCacheStatsPrunesExpiredEntries(t *testing.T) {
+	invoker := &routeRecordingInvoker{available: map[string]bool{"up-a": true}}
+	svc := routeServiceWithPolicies(
+		map[string][]domain.ToolDef{
+			"up-a": {{OriginalName: "read", Name: "read", InputSchema: []byte("{}")}},
+		},
+		[]domain.Upstream{invEnabledUpstream("up-a", 0)},
+		invoker,
+		[]domain.ToolPolicyRule{{
+			Pattern:         "read",
+			Enabled:         true,
+			CacheEnabled:    true,
+			CacheTTLSeconds: 1,
+		}},
+	)
+	now := time.Date(2026, 6, 23, 10, 30, 0, 0, time.UTC)
+	svc.now = func() time.Time { return now }
+
+	if _, err := svc.InvokeTool(context.Background(), "", "read", json.RawMessage(`{"q":1}`)); err != nil {
+		t.Fatalf("first call failed: %v", err)
+	}
+	now = now.Add(2 * time.Second)
+
+	stats := svc.ToolResultCacheStats()
+	if stats.Entries != 0 || stats.Expired != 1 {
+		t.Fatalf("expired entry should be pruned by stats read: %+v", stats)
+	}
+}
+
+func TestClearToolResultCacheByTool(t *testing.T) {
+	invoker := &routeRecordingInvoker{available: map[string]bool{"up-a": true}}
+	svc := routeServiceWithPolicies(
+		map[string][]domain.ToolDef{
+			"up-a": {
+				{OriginalName: "read", Name: "read", InputSchema: []byte("{}")},
+				{OriginalName: "write", Name: "write", InputSchema: []byte("{}")},
+			},
+		},
+		[]domain.Upstream{invEnabledUpstream("up-a", 0)},
+		invoker,
+		[]domain.ToolPolicyRule{{
+			Pattern:         ".+",
+			IsRegex:         true,
+			Enabled:         true,
+			CacheEnabled:    true,
+			CacheTTLSeconds: 60,
+		}},
+	)
+
+	if _, err := svc.InvokeTool(context.Background(), "", "read", json.RawMessage(`{"q":1}`)); err != nil {
+		t.Fatalf("read call failed: %v", err)
+	}
+	if _, err := svc.InvokeTool(context.Background(), "", "write", json.RawMessage(`{"q":1}`)); err != nil {
+		t.Fatalf("write call failed: %v", err)
+	}
+
+	result := svc.ClearToolResultCache(domain.ToolResultCacheClearFilter{ExposedName: "read"})
+	if result.Deleted != 1 || result.Remaining != 1 {
+		t.Fatalf("unexpected clear result: %+v", result)
+	}
+	stats := svc.ToolResultCacheStats()
+	if stats.Entries != 1 || stats.LastClearedAt == nil {
+		t.Fatalf("unexpected stats after clear: %+v", stats)
+	}
 }
 
 func TestToolPolicySkipsOversizedCachedResult(t *testing.T) {

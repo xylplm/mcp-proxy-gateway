@@ -27,6 +27,9 @@ const props = defineProps<{
   inputSchema?: unknown
   initialApiKeyId?: string
 }>()
+const emit = defineEmits<{
+  completed: []
+}>()
 
 const toast = useToast()
 
@@ -103,6 +106,7 @@ async function runPlayground(): Promise<void> {
       name: props.toolName,
       args: parsed.value,
     })
+    emit('completed')
   } catch (err) {
     toast.error(err instanceof Error ? err.message : '调试调用失败')
   } finally {

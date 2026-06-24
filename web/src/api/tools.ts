@@ -89,6 +89,35 @@ export interface ToolPlaygroundResponse {
   finishedAt: string
 }
 
+export interface ToolResultCacheStats {
+  entries: number
+  maxEntries: number
+  hits: number
+  misses: number
+  stores: number
+  evictions: number
+  expired: number
+  lastClearedAt?: string
+}
+
+export interface ToolResultCacheClearFilter {
+  exposedName?: string
+  apiKeyId?: string
+}
+
+export interface ToolResultCacheClearResult {
+  deleted: number
+  remaining: number
+}
+
+interface ToolResultCacheStatsResponse {
+  cache: ToolResultCacheStats
+}
+
+interface ToolResultCacheClearResponse {
+  result: ToolResultCacheClearResult
+}
+
 export async function getToolSummary(): Promise<ToolSummary> {
   const res = await request.get<ToolSummaryResponse>('/tools/summary')
   return {
@@ -115,4 +144,18 @@ export async function invokeToolPlayground(
 ): Promise<ToolPlaygroundResponse> {
   const res = await request.post<ToolPlaygroundResponse>('/tools/playground', payload)
   return res.data
+}
+
+export async function getToolResultCacheStats(): Promise<ToolResultCacheStats> {
+  const res = await request.get<ToolResultCacheStatsResponse>('/tools/cache')
+  return res.data.cache
+}
+
+export async function clearToolResultCache(
+  filter: ToolResultCacheClearFilter = {},
+): Promise<ToolResultCacheClearResult> {
+  const res = await request.delete<ToolResultCacheClearResponse>('/tools/cache', {
+    data: filter,
+  })
+  return res.data.result
 }

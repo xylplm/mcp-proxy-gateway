@@ -88,6 +88,11 @@ type AggregationToolService interface {
 	InvokeTool(ctx context.Context, apiKeyID, exposedName string, args json.RawMessage) (domain.ToolResult, error)
 }
 
+type ToolResultCacheService interface {
+	ToolResultCacheStats() domain.ToolResultCacheStats
+	ClearToolResultCache(filter domain.ToolResultCacheClearFilter) domain.ToolResultCacheClearResult
+}
+
 // RuleValidator 是保存前校验别名/屏蔽规则的窄接口（Req 8.9、9.7、9.8、13.4）。
 //
 // *domain.engine（经 domain.NewRuleEngine 构造）满足该接口。

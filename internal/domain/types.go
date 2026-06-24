@@ -64,7 +64,7 @@ type ToolChangeSummary struct {
 	Added         int       `json:"added"`
 	Removed       int       `json:"removed"`
 	SchemaChanged int       `json:"schemaChanged"`
-	SyncedAt       time.Time `json:"syncedAt"`
+	SyncedAt      time.Time `json:"syncedAt"`
 }
 
 // ToolResult 表示上游 MCP 工具调用返回的结果，无论成功或上游报告的错误均原样透传。
@@ -73,6 +73,27 @@ type ToolResult struct {
 	IsError bool `json:"isError"`
 	// Content 为工具调用结果内容（MCP content 数组的原始 JSON）。
 	Content json.RawMessage `json:"content"`
+}
+
+type ToolResultCacheStats struct {
+	Entries       int        `json:"entries"`
+	MaxEntries    int        `json:"maxEntries"`
+	Hits          uint64     `json:"hits"`
+	Misses        uint64     `json:"misses"`
+	Stores        uint64     `json:"stores"`
+	Evictions     uint64     `json:"evictions"`
+	Expired       uint64     `json:"expired"`
+	LastClearedAt *time.Time `json:"lastClearedAt,omitempty"`
+}
+
+type ToolResultCacheClearFilter struct {
+	ExposedName string `json:"exposedName,omitempty"`
+	APIKeyID    string `json:"apiKeyId,omitempty"`
+}
+
+type ToolResultCacheClearResult struct {
+	Deleted   int `json:"deleted"`
+	Remaining int `json:"remaining"`
 }
 
 // ToolSourceView 是管理台展示某个对外工具来源上游的只读视图。

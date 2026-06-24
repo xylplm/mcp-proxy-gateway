@@ -15,13 +15,18 @@ type fakeAggregationTools struct {
 	err         error
 	invoke      domain.ToolResult
 	invokeErr   error
+	cacheStats  domain.ToolResultCacheStats
+	clearResult domain.ToolResultCacheClearResult
 	setCalls    int
 	detailCalls int
 	invokeCalls int
+	statsCalls  int
+	clearCalls  int
 	invokeKey   string
 	invokeName  string
 	invokeArgs  json.RawMessage
 	detailKey   string
+	clearFilter domain.ToolResultCacheClearFilter
 }
 
 func (f *fakeAggregationTools) BuildToolSet(context.Context, string) ([]domain.ToolDef, error) {
@@ -47,6 +52,17 @@ func (f *fakeAggregationTools) InvokeTool(_ context.Context, apiKeyID, exposedNa
 	f.invokeName = exposedName
 	f.invokeArgs = append(json.RawMessage(nil), args...)
 	return f.invoke, f.invokeErr
+}
+
+func (f *fakeAggregationTools) ToolResultCacheStats() domain.ToolResultCacheStats {
+	f.statsCalls++
+	return f.cacheStats
+}
+
+func (f *fakeAggregationTools) ClearToolResultCache(filter domain.ToolResultCacheClearFilter) domain.ToolResultCacheClearResult {
+	f.clearCalls++
+	f.clearFilter = filter
+	return f.clearResult
 }
 
 func TestGetAggregatedToolSummaryUsesToolSetOnly(t *testing.T) {
@@ -119,6 +135,60 @@ func TestListAggregatedToolsUsesAPIKeyPerspective(t *testing.T) {
 	}
 	if agg.detailKey != "key-42" {
 		t.Fatalf("应按 API Key 视角构建工具详情，实际 apiKeyID=%q", agg.detailKey)
+	}
+}
+
+func TestGetToolResultCacheStats(t *testing.T) {
+	agg := &fakeAggregationTools{cacheStats: domain.ToolResultCacheStats{
+		Entries:    2,
+		MaxEntries: 512,
+		Hits:       7,
+		Misses:     3,
+		Stores:     2,
+	}}
+	e := newTestEngine(Deps{Aggregation: agg})
+
+	w := doJSON(e, http.MethodGet, "/api/admin/tools/cache", "")
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("期望 HTTP 200，实际 %d，响应体 %s", w.Code, w.Body.String())
+	}
+	if agg.statsCalls != 1 {
+		t.Fatalf("缓存统计接口应调用 ToolResultCacheStats 1 次，实际 %d", agg.statsCalls)
+	}
+	var got struct {
+		Cache domain.ToolResultCacheStats `json:"cache"`
+	}
+	unmarshalData(t, w, &got)
+	if got.Cache.Entries != 2 || got.Cache.Hits != 7 || got.Cache.Misses != 3 {
+		t.Fatalf("缓存统计响应不符合预期：%+v", got.Cache)
+	}
+}
+
+func TestClearToolResultCacheWithFilter(t *testing.T) {
+	agg := &fakeAggregationTools{clearResult: domain.ToolResultCacheClearResult{
+		Deleted:   1,
+		Remaining: 2,
+	}}
+	e := newTestEngine(Deps{Aggregation: agg})
+
+	w := doJSON(e, http.MethodDelete, "/api/admin/tools/cache", `{"exposedName":"read_file","apiKeyId":"key-1"}`)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("期望 HTTP 200，实际 %d，响应体 %s", w.Code, w.Body.String())
+	}
+	if agg.clearCalls != 1 {
+		t.Fatalf("缓存清理接口应调用 ClearToolResultCache 1 次，实际 %d", agg.clearCalls)
+	}
+	if agg.clearFilter.ExposedName != "read_file" || agg.clearFilter.APIKeyID != "key-1" {
+		t.Fatalf("缓存清理过滤条件不符合预期：%+v", agg.clearFilter)
+	}
+	var got struct {
+		Result domain.ToolResultCacheClearResult `json:"result"`
+	}
+	unmarshalData(t, w, &got)
+	if got.Result.Deleted != 1 || got.Result.Remaining != 2 {
+		t.Fatalf("缓存清理响应不符合预期：%+v", got.Result)
 	}
 }
 

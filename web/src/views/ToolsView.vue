@@ -12,9 +12,19 @@ import {
   type ToolPolicyRule,
   type ToolPolicyRuleRequest,
 } from '@/api/rules'
-import { getAggregatedTools, type ToolDef, type ToolDetail, type ToolSource } from '@/api/tools'
+import {
+  clearToolResultCache,
+  getAggregatedTools,
+  getToolResultCacheStats,
+  type ToolDef,
+  type ToolDetail,
+  type ToolResultCacheStats,
+  type ToolSource,
+} from '@/api/tools'
 import type { UpstreamRateLimits } from '@/api/rateLimits'
-import { RefreshIcon } from '@/icons'
+import { RefreshIcon, TrashIcon } from '@/icons'
+import { useConfirm } from '@/composables/useConfirm'
+import { useToast } from '@/composables/useToast'
 import { explainToolGovernance, type ToolGovernanceTone } from '@/utils/toolGovernanceExplain'
 import {
   automaticToolRiskTags,
@@ -46,12 +56,18 @@ type SmartView = ToolCatalogSmartView
 
 const route = useRoute()
 const router = useRouter()
+const { confirm } = useConfirm()
+const toast = useToast()
 const loading = ref(false)
 const refreshing = ref(false)
+const cacheLoading = ref(false)
+const cacheClearing = ref(false)
 const loadError = ref('')
+const cacheError = ref('')
 const apiKeys = ref<APIKey[]>([])
 const selectedAPIKeyID = ref('')
 const toolDetails = ref<ToolDetail[]>([])
+const resultCache = ref<ToolResultCacheStats | null>(null)
 const smartView = ref<SmartView>('all')
 const searchKeyword = ref('')
 const selectedUpstream = ref('')
@@ -161,6 +177,26 @@ const visibleCountLabel = computed(() => {
   }
   return toolDetails.value.length.toLocaleString('zh-CN')
 })
+const cacheRequestCount = computed(
+  () => (resultCache.value?.hits ?? 0) + (resultCache.value?.misses ?? 0),
+)
+const cacheHitRateLabel = computed(() => {
+  if (cacheRequestCount.value === 0) return '暂无数据'
+  const rate = ((resultCache.value?.hits ?? 0) / cacheRequestCount.value) * 100
+  return `${rate.toFixed(rate >= 10 ? 0 : 1)}%`
+})
+const cacheEntriesLabel = computed(() => {
+  const stats = resultCache.value
+  if (stats === null) return '-'
+  return `${stats.entries.toLocaleString('zh-CN')} / ${stats.maxEntries.toLocaleString('zh-CN')}`
+})
+const cacheLastClearedLabel = computed(() => {
+  const value = resultCache.value?.lastClearedAt
+  if (!value) return '尚未清理'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '尚未清理'
+  return date.toLocaleString('zh-CN', { hour12: false })
+})
 
 async function loadTools(showLoading = true): Promise<void> {
   if (showLoading) loading.value = true
@@ -178,6 +214,56 @@ async function loadTools(showLoading = true): Promise<void> {
   } finally {
     loading.value = false
     refreshing.value = false
+  }
+}
+
+async function loadResultCacheStats(): Promise<void> {
+  cacheLoading.value = true
+  cacheError.value = ''
+  try {
+    resultCache.value = await getToolResultCacheStats()
+  } catch (err) {
+    cacheError.value = err instanceof Error ? err.message : '加载结果缓存状态失败'
+  } finally {
+    cacheLoading.value = false
+  }
+}
+
+async function clearAllResultCache(): Promise<void> {
+  if (cacheClearing.value) return
+  const ok = await confirm({
+    title: '清理结果缓存',
+    message: '清理后，已缓存的工具调用结果会在下次请求时重新向上游获取。',
+    confirmText: '清理缓存',
+    tone: 'warning',
+  })
+  if (!ok) return
+  cacheClearing.value = true
+  cacheError.value = ''
+  try {
+    const result = await clearToolResultCache()
+    toast.success(`已清理 ${result.deleted.toLocaleString('zh-CN')} 条缓存`)
+    await loadResultCacheStats()
+  } catch (err) {
+    cacheError.value = err instanceof Error ? err.message : '清理结果缓存失败'
+  } finally {
+    cacheClearing.value = false
+  }
+}
+
+async function clearSelectedToolResultCache(): Promise<void> {
+  const detail = selectedToolDetail.value
+  if (detail === null || cacheClearing.value) return
+  cacheClearing.value = true
+  cacheError.value = ''
+  try {
+    const result = await clearToolResultCache({ exposedName: detail.tool.name })
+    toast.success(`已清理 ${result.deleted.toLocaleString('zh-CN')} 条缓存`)
+    await loadResultCacheStats()
+  } catch (err) {
+    cacheError.value = err instanceof Error ? err.message : '清理当前工具缓存失败'
+  } finally {
+    cacheClearing.value = false
   }
 }
 
@@ -577,6 +663,7 @@ onMounted(async () => {
   applyRouteQuery()
   await loadAPIKeyOptions()
   await loadTools()
+  await loadResultCacheStats()
 })
 
 onUnmounted(() => {
@@ -644,6 +731,44 @@ onUnmounted(() => {
         </p>
       </section>
     </div>
+
+    <section :class="[cardClass, 'mb-5']">
+      <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div>
+          <p class="text-sm text-gray-500 dark:text-gray-400">结果缓存</p>
+          <p class="mt-2 text-2xl font-semibold text-gray-800 dark:text-white/90">
+            {{ cacheEntriesLabel }} 条
+          </p>
+          <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            命中率 {{ cacheHitRateLabel }}，写入 {{ (resultCache?.stores ?? 0).toLocaleString('zh-CN') }} 次，上次清理：{{ cacheLastClearedLabel }}
+          </p>
+        </div>
+        <div class="flex flex-wrap gap-2">
+          <button
+            v-tooltip:bottom-end="'刷新缓存状态'"
+            type="button"
+            class="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-gray-200 text-gray-600 transition hover:border-brand-300 hover:bg-brand-50 hover:text-brand-600 disabled:opacity-60 dark:border-gray-800 dark:text-gray-400 dark:hover:border-brand-500/40 dark:hover:bg-brand-500/[0.08] dark:hover:text-brand-400"
+            :disabled="cacheLoading || cacheClearing"
+            aria-label="刷新缓存状态"
+            @click="loadResultCacheStats"
+          >
+            <RefreshIcon class="h-5 w-5" :class="cacheLoading ? 'animate-spin' : ''" />
+          </button>
+          <button
+            type="button"
+            class="inline-flex h-10 items-center gap-2 rounded-lg border border-gray-200 px-3 text-sm font-medium text-gray-700 transition hover:border-error-300 hover:bg-error-50 hover:text-error-600 disabled:opacity-60 dark:border-gray-800 dark:text-gray-300 dark:hover:border-error-500/40 dark:hover:bg-error-500/[0.08] dark:hover:text-error-400"
+            :disabled="cacheClearing || (resultCache?.entries ?? 0) === 0"
+            @click="clearAllResultCache"
+          >
+            <TrashIcon class="h-4 w-4" />
+            <span>{{ cacheClearing ? '清理中' : '清理缓存' }}</span>
+          </button>
+        </div>
+      </div>
+      <p v-if="cacheError !== ''" class="mt-3 rounded-lg bg-error-50 px-3 py-2 text-xs text-error-600 dark:bg-error-500/10 dark:text-error-400">
+        {{ cacheError }}
+      </p>
+    </section>
 
     <section :class="[cardClass, 'mb-5']">
       <div class="mb-4">
@@ -865,6 +990,18 @@ onUnmounted(() => {
                 {{ tag.label }}
               </span>
             </div>
+            <div class="mt-3 flex flex-wrap justify-end gap-2">
+              <button
+                v-tooltip:bottom-end="'只清理当前工具的结果缓存'"
+                type="button"
+                class="inline-flex h-9 items-center gap-2 rounded-lg border border-gray-200 px-3 text-xs font-medium text-gray-700 transition hover:border-error-300 hover:bg-error-50 hover:text-error-600 disabled:opacity-60 dark:border-gray-800 dark:text-gray-300 dark:hover:border-error-500/40 dark:hover:bg-error-500/[0.08] dark:hover:text-error-400"
+                :disabled="cacheClearing || (resultCache?.entries ?? 0) === 0"
+                @click="clearSelectedToolResultCache"
+              >
+                <TrashIcon class="h-4 w-4" />
+                <span>清理当前工具缓存</span>
+              </button>
+            </div>
 
             <div
               v-if="riskTags(selectedToolDetail).length > 0"
@@ -1053,6 +1190,7 @@ onUnmounted(() => {
               :tool-name="selectedToolDetail.tool.name"
               :input-schema="selectedToolDetail.tool.inputSchema"
               :initial-api-key-id="selectedAPIKeyID"
+              @completed="loadResultCacheStats"
             />
 
             <details class="mt-4 rounded-lg bg-gray-50 p-3 dark:bg-white/[0.03]">

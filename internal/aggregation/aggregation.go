@@ -120,15 +120,21 @@ type Service struct {
 	upstreamConfigs   map[string]domain.UpstreamConfig
 	upstreamConfigsMu sync.RWMutex
 	// routingStrategy 为同名工具多来源时的调用选择策略。
-	routingStrategy domain.ToolRoutingStrategy
-	routingMu       sync.RWMutex
-	roundRobin      map[string]uint64
-	roundRobinMu    sync.Mutex
-	resultCache     map[string]cachedToolResult
-	resultCacheMu   sync.Mutex
-	quota           *QuotaManager
-	sourceFailures  map[string]sourceFailureState
-	sourceFailureMu sync.Mutex
+	routingStrategy        domain.ToolRoutingStrategy
+	routingMu              sync.RWMutex
+	roundRobin             map[string]uint64
+	roundRobinMu           sync.Mutex
+	resultCache            map[string]cachedToolResult
+	resultCacheMu          sync.Mutex
+	resultCacheHits        uint64
+	resultCacheMisses      uint64
+	resultCacheStores      uint64
+	resultCacheEvictions   uint64
+	resultCacheExpired     uint64
+	resultCacheLastCleared time.Time
+	quota                  *QuotaManager
+	sourceFailures         map[string]sourceFailureState
+	sourceFailureMu        sync.Mutex
 	// sourceFailureThreshold/sourceFailureCooldown 是轻量故障降级的固定默认值。
 	// 不暴露管理配置，避免为了小概率调参增加用户理解成本。
 	sourceFailureThreshold int
@@ -160,8 +166,10 @@ type sourceFailureState struct {
 }
 
 type cachedToolResult struct {
-	result    domain.ToolResult
-	expiresAt time.Time
+	result      domain.ToolResult
+	expiresAt   time.Time
+	apiKeyID    string
+	exposedName string
 }
 
 // 编译期断言：Service 必须满足 domain.Aggregation_Service 接口契约。
@@ -249,6 +257,61 @@ func (s *Service) SetRoutingStrategy(strategy domain.ToolRoutingStrategy) *Servi
 func (s *Service) SetQuotaManager(q *QuotaManager) *Service {
 	s.quota = q
 	return s
+}
+
+func (s *Service) ToolResultCacheStats() domain.ToolResultCacheStats {
+	if s == nil {
+		return domain.ToolResultCacheStats{MaxEntries: maxResultCacheEntries}
+	}
+	s.resultCacheMu.Lock()
+	defer s.resultCacheMu.Unlock()
+	s.pruneExpiredCachedResultsLocked()
+	stats := domain.ToolResultCacheStats{
+		Entries:    len(s.resultCache),
+		MaxEntries: maxResultCacheEntries,
+		Hits:       s.resultCacheHits,
+		Misses:     s.resultCacheMisses,
+		Stores:     s.resultCacheStores,
+		Evictions:  s.resultCacheEvictions,
+		Expired:    s.resultCacheExpired,
+	}
+	if !s.resultCacheLastCleared.IsZero() {
+		t := s.resultCacheLastCleared
+		stats.LastClearedAt = &t
+	}
+	return stats
+}
+
+func (s *Service) ClearToolResultCache(filter domain.ToolResultCacheClearFilter) domain.ToolResultCacheClearResult {
+	if s == nil {
+		return domain.ToolResultCacheClearResult{}
+	}
+	s.resultCacheMu.Lock()
+	defer s.resultCacheMu.Unlock()
+
+	deleted := 0
+	if filter.ExposedName == "" && filter.APIKeyID == "" {
+		deleted = len(s.resultCache)
+		clear(s.resultCache)
+	} else {
+		for key, entry := range s.resultCache {
+			if filter.ExposedName != "" && entry.exposedName != filter.ExposedName {
+				continue
+			}
+			if filter.APIKeyID != "" && entry.apiKeyID != filter.APIKeyID {
+				continue
+			}
+			delete(s.resultCache, key)
+			deleted++
+		}
+	}
+	if deleted > 0 {
+		s.resultCacheLastCleared = s.currentTime()
+	}
+	return domain.ToolResultCacheClearResult{
+		Deleted:   deleted,
+		Remaining: len(s.resultCache),
+	}
 }
 
 func (s *Service) currentRoutingStrategy() domain.ToolRoutingStrategy {
@@ -560,12 +623,16 @@ func (s *Service) getCachedToolResult(apiKeyID, exposedName string, args json.Ra
 	defer s.resultCacheMu.Unlock()
 	entry, ok := s.resultCache[key]
 	if !ok {
+		s.resultCacheMisses++
 		return domain.ToolResult{}, false
 	}
 	if !entry.expiresAt.After(now) {
 		delete(s.resultCache, key)
+		s.resultCacheMisses++
+		s.resultCacheExpired++
 		return domain.ToolResult{}, false
 	}
+	s.resultCacheHits++
 	return cloneToolResult(entry.result), true
 }
 
@@ -583,9 +650,12 @@ func (s *Service) setCachedToolResult(apiKeyID, exposedName string, args json.Ra
 		s.evictExpiredOrOldestCachedResult()
 	}
 	s.resultCache[key] = cachedToolResult{
-		result:    cloneToolResult(result),
-		expiresAt: s.currentTime().Add(ttl),
+		result:      cloneToolResult(result),
+		expiresAt:   s.currentTime().Add(ttl),
+		apiKeyID:    apiKeyID,
+		exposedName: exposedName,
 	}
+	s.resultCacheStores++
 }
 
 func (s *Service) evictExpiredOrOldestCachedResult() {
@@ -595,6 +665,7 @@ func (s *Service) evictExpiredOrOldestCachedResult() {
 	for key, entry := range s.resultCache {
 		if !entry.expiresAt.After(now) {
 			delete(s.resultCache, key)
+			s.resultCacheExpired++
 			return
 		}
 		if oldestKey == "" || entry.expiresAt.Before(oldest) {
@@ -604,6 +675,17 @@ func (s *Service) evictExpiredOrOldestCachedResult() {
 	}
 	if oldestKey != "" {
 		delete(s.resultCache, oldestKey)
+		s.resultCacheEvictions++
+	}
+}
+
+func (s *Service) pruneExpiredCachedResultsLocked() {
+	now := s.currentTime()
+	for key, entry := range s.resultCache {
+		if !entry.expiresAt.After(now) {
+			delete(s.resultCache, key)
+			s.resultCacheExpired++
+		}
 	}
 }
 

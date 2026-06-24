@@ -8,6 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/aggregation"
+	"github.com/myGithub/mcp-proxy-gateway/internal/audit"
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
 	"github.com/myGithub/mcp-proxy-gateway/internal/mcpapi"
 )
@@ -21,6 +22,11 @@ type toolPlaygroundRequest struct {
 	APIKeyID string          `json:"apiKeyId"`
 	Name     string          `json:"name"`
 	Args     json.RawMessage `json:"args"`
+}
+
+type toolCacheClearRequest struct {
+	ExposedName string `json:"exposedName"`
+	APIKeyID    string `json:"apiKeyId"`
 }
 
 type toolPlaygroundResponse struct {
@@ -42,6 +48,8 @@ func (r *Router) registerToolRoutes(g *gin.RouterGroup) {
 	t.GET("/summary", r.getAggregatedToolSummary)
 	t.GET("/aggregated", r.listAggregatedTools)
 	t.POST("/playground", r.invokeToolPlayground)
+	t.GET("/cache", r.getToolResultCacheStats)
+	t.DELETE("/cache", r.clearToolResultCache)
 }
 
 // getAggregatedToolSummary 返回当前全局视角下的聚合工具摘要，避免概览页拉取完整详情。
@@ -80,6 +88,48 @@ func (r *Router) listAggregatedTools(c *gin.Context) {
 		"count":        len(tools),
 		"gatewayTools": gatewayTools(),
 	})
+}
+
+func (r *Router) toolResultCacheService(c *gin.Context) (ToolResultCacheService, bool) {
+	if r.aggregation == nil {
+		respondServiceUnavailable(c, "聚合工具服务未就绪")
+		return nil, false
+	}
+	cache, ok := r.aggregation.(ToolResultCacheService)
+	if !ok {
+		respondServiceUnavailable(c, "工具结果缓存服务未就绪")
+		return nil, false
+	}
+	return cache, true
+}
+
+func (r *Router) getToolResultCacheStats(c *gin.Context) {
+	cache, ok := r.toolResultCacheService(c)
+	if !ok {
+		return
+	}
+	respondOK(c, gin.H{"cache": cache.ToolResultCacheStats()})
+}
+
+func (r *Router) clearToolResultCache(c *gin.Context) {
+	cache, ok := r.toolResultCacheService(c)
+	if !ok {
+		return
+	}
+
+	var req toolCacheClearRequest
+	if c.Request.Body != nil && c.Request.ContentLength != 0 {
+		if !bindJSON(c, &req) {
+			return
+		}
+	}
+	filter := domain.ToolResultCacheClearFilter{
+		ExposedName: req.ExposedName,
+		APIKeyID:    req.APIKeyID,
+	}
+	result := cache.ClearToolResultCache(filter)
+	r.recordUpdate(c, audit.ResourceSetting, "tools:cache:clear")
+	respondOK(c, gin.H{"result": result})
 }
 
 // invokeToolPlayground 按管理台选择的视角发起一次真实工具调用，用于排障与参数验证。
