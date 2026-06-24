@@ -30,6 +30,17 @@ import {
   normalizeMCPServerName,
   type MCPClientConfigKind,
 } from '@/utils/mcpClientConfig'
+import {
+  DEFAULT_MCP_HTTP_ORIGIN,
+  DEFAULT_MCP_WS_ORIGIN,
+  loadMCPAccessHistory,
+  markMCPOriginRecentlyUsed,
+  mcpHTTPOrigin,
+  mcpWSOrigin,
+  normalizeMCPOrigin,
+  saveMCPAccessHistory,
+  type MCPAccessHistory,
+} from '@/utils/mcpAccessHistory'
 
 type EndpointKey = 'sse' | 'http' | 'ws'
 type AuthKey = 'header' | 'bearer' | 'query'
@@ -70,6 +81,8 @@ const selectedGuideEndpoint = ref<EndpointKey>('http')
 const selectedGuideAuth = ref<AuthKey>('bearer')
 const guideConfigKind = ref<MCPClientConfigKind>('mcp-json')
 const guideServerName = ref('mcp-proxy-gateway')
+const guideOrigin = ref('')
+const guideOriginHistory = ref<MCPAccessHistory>({ origins: [] })
 const guideCopiedKey = ref('')
 const guideCopyError = ref('')
 const { copy } = useClipboard()
@@ -103,8 +116,8 @@ const listenerPendingRestart = computed(
 // 对外地址采用占位符：网关部署在容器内，无法预知用户真实的对外域名、IP 与端口。
 // http(s) / ws(s) 表示协议二选一（按是否启用 TLS 填写），<your-host> 与 <port> 为占位符，
 // 由用户根据实际对外可达地址替换。
-const HTTP_ORIGIN = 'http(s)://<your-host>:<port>'
-const WS_ORIGIN = 'ws(s)://<your-host>:<port>'
+const HTTP_ORIGIN = DEFAULT_MCP_HTTP_ORIGIN
+const WS_ORIGIN = DEFAULT_MCP_WS_ORIGIN
 
 const mcpPortModeLabel = computed(() => {
   if (targetServer.value === null) return '加载中'
@@ -262,7 +275,73 @@ const selectedToolDetail = computed<ToolDetail | null>(() => {
   return null
 })
 const activeEndpoints = computed(() => endpointTab.value === 'smart' ? smartEndpoints.value : endpoints.value)
-const guideEndpoints = computed(() => guideMode.value === 'smart' ? smartEndpoints.value : endpoints.value)
+const guideHTTPOrigin = computed(() => mcpHTTPOrigin(guideOrigin.value))
+const guideWSOrigin = computed(() => mcpWSOrigin(guideOrigin.value))
+const guideOriginDisplay = computed(() => normalizeMCPOrigin(guideOrigin.value) || HTTP_ORIGIN)
+const guideEndpoints = computed<EndpointItem[]>(() => {
+  const httpOrigin = guideHTTPOrigin.value
+  const wsOrigin = guideWSOrigin.value
+  if (guideMode.value === 'smart') {
+    return [
+      {
+        key: 'sse',
+        name: 'SSE',
+        badge: '事件流',
+        address: `${httpOrigin}/mcp/smart/sse`,
+        desc: '智能模式 SSE 端点。',
+        clientType: 'sse',
+        guideDesc: '智能模式 SSE 传输端点。',
+      },
+      {
+        key: 'http',
+        name: 'Streamable HTTP',
+        badge: '推荐',
+        address: `${httpOrigin}/mcp/smart/http`,
+        desc: '智能模式 HTTP 端点。',
+        clientType: 'streamable-http',
+        guideDesc: '智能模式 Streamable HTTP 端点，适合大多数客户端。',
+      },
+      {
+        key: 'ws',
+        name: 'WebSocket',
+        badge: '长连接',
+        address: `${wsOrigin}/mcp/smart/ws`,
+        desc: '智能模式 WebSocket 端点。',
+        clientType: 'websocket',
+        guideDesc: '智能模式 WebSocket 端点。',
+      },
+    ]
+  }
+  return [
+    {
+      key: 'sse',
+      name: 'SSE',
+      badge: '事件流',
+      address: `${httpOrigin}/mcp/sse`,
+      desc: '适合仍使用 SSE 传输的 MCP 客户端。',
+      clientType: 'sse',
+      guideDesc: '兼容旧版或仍以事件流建立会话的客户端，适合需要保持服务端推送通道的场景。',
+    },
+    {
+      key: 'http',
+      name: 'Streamable HTTP',
+      badge: '推荐',
+      address: `${httpOrigin}/mcp/http`,
+      desc: '适合支持新版 HTTP 传输的客户端。',
+      clientType: 'streamable-http',
+      guideDesc: '当前最推荐的远程 MCP 接入方式，配置简单，适合绝大多数支持新版 MCP 传输的客户端。',
+    },
+    {
+      key: 'ws',
+      name: 'WebSocket',
+      badge: '长连接',
+      address: `${wsOrigin}/mcp/ws`,
+      desc: '适合需要稳定双向通道的客户端。',
+      clientType: 'websocket',
+      guideDesc: '适合需要长连接和双向通信的客户端，浏览器直连时建议使用查询参数认证。',
+    },
+  ]
+})
 const selectedEndpoint = computed<EndpointItem>(
   () => guideEndpoints.value.find((item) => item.key === selectedGuideEndpoint.value) ?? guideEndpoints.value[0]!,
 )
@@ -287,6 +366,12 @@ const guideAuthText = computed(() => {
   const entries = Object.entries(guideAuthHeaders.value)
   if (entries.length === 0) return '已通过 URL 查询参数传递 API Key'
   return entries.map(([key, value]) => `${key}: ${value}`).join('\n')
+})
+const guideAddressHint = computed(() => {
+  if (normalizeMCPOrigin(guideOrigin.value) === '') {
+    return '当前使用占位符；可填入真实域名、IP 和端口，复制示例时会自动记住。'
+  }
+  return '已使用自定义访问地址生成下方示例，复制后会记住该地址。'
 })
 const guideSnippets = computed<GuideSnippet[]>(() => [
   {
@@ -355,6 +440,10 @@ function openGuide(): void {
   guideCopyError.value = ''
   guideCopiedKey.value = ''
   guideMode.value = endpointTab.value
+  guideOriginHistory.value = loadMCPAccessHistory()
+  if (guideOrigin.value.trim() === '') {
+    guideOrigin.value = guideOriginHistory.value.origins[0] ?? inferCurrentOrigin()
+  }
   guideOpen.value = true
 }
 
@@ -380,6 +469,26 @@ function headerLines(): string[] {
 function shellLines(command: string, args: string[]): string {
   if (args.length === 0) return command
   return [command, ...args].join(' \\' + '\n  ')
+}
+
+function inferCurrentOrigin(): string {
+  if (typeof window === 'undefined') return ''
+  return window.location.origin
+}
+
+function rememberGuideOrigin(): void {
+  const normalized = normalizeMCPOrigin(guideOrigin.value)
+  if (normalized === '') return
+  guideOriginHistory.value = markMCPOriginRecentlyUsed(guideOriginHistory.value, normalized)
+  saveMCPAccessHistory(guideOriginHistory.value)
+}
+
+function useGuideOrigin(origin: string): void {
+  guideOrigin.value = origin
+}
+
+function resetGuideOrigin(): void {
+  guideOrigin.value = ''
 }
 
 function clientConfigSnippet(): string {
@@ -491,6 +600,7 @@ console.log(await response.json())`
 
 async function copyGuideText(key: string, value: string): Promise<void> {
   guideCopyError.value = ''
+  rememberGuideOrigin()
   const ok = await copy(value)
   if (!ok) {
     guideCopyError.value = '复制失败，请手动选择内容'
@@ -1247,6 +1357,50 @@ const errClass = 'mt-1 text-xs text-error-500'
                 <div>
                   <div class="mb-3 flex items-center gap-2">
                     <span class="flex h-6 w-6 items-center justify-center rounded-full bg-brand-50 text-xs font-semibold text-brand-600 dark:bg-brand-500/10 dark:text-brand-400">1</span>
+                    <h4 class="text-sm font-semibold text-gray-800 dark:text-white/90">访问地址</h4>
+                  </div>
+                  <div class="rounded-xl border border-gray-200 p-4 dark:border-gray-800">
+                    <label class="block">
+                      <span class="mb-1.5 block text-xs font-medium text-gray-500 dark:text-gray-400">公网或局域网 Base URL</span>
+                      <input
+                        v-model="guideOrigin"
+                        type="text"
+                        class="h-10 w-full rounded-lg border border-gray-300 bg-white px-3 font-mono text-sm text-gray-800 shadow-sm transition placeholder:text-gray-400 focus:border-brand-300 focus:ring-3 focus:ring-brand-500/10 focus:outline-none dark:border-gray-700 dark:bg-gray-900 dark:text-white/90"
+                        placeholder="https://mcp.example.com 或 http://127.0.0.1:8080"
+                      />
+                    </label>
+                    <p class="mt-2 text-[11px] leading-5 text-gray-400 dark:text-gray-500">
+                      {{ guideAddressHint }}
+                    </p>
+                    <div v-if="guideOriginHistory.origins.length > 0" class="mt-3 flex flex-wrap gap-2">
+                      <button
+                        v-for="origin in guideOriginHistory.origins"
+                        :key="origin"
+                        type="button"
+                        class="max-w-full truncate rounded-full border border-gray-200 px-2.5 py-1 font-mono text-[11px] text-gray-600 transition hover:border-brand-300 hover:bg-brand-50 hover:text-brand-600 dark:border-gray-800 dark:text-gray-300 dark:hover:border-brand-500/40 dark:hover:bg-brand-500/[0.08] dark:hover:text-brand-400"
+                        @click="useGuideOrigin(origin)"
+                      >
+                        {{ origin }}
+                      </button>
+                    </div>
+                    <div class="mt-3 flex flex-wrap items-center justify-between gap-2">
+                      <p class="min-w-0 break-all font-mono text-[11px] text-gray-500 dark:text-gray-400">
+                        当前：{{ guideOriginDisplay }}
+                      </p>
+                      <button
+                        type="button"
+                        class="text-xs font-medium text-brand-600 hover:text-brand-700 dark:text-brand-400"
+                        @click="resetGuideOrigin"
+                      >
+                        使用占位符
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <div class="mb-3 flex items-center gap-2">
+                    <span class="flex h-6 w-6 items-center justify-center rounded-full bg-brand-50 text-xs font-semibold text-brand-600 dark:bg-brand-500/10 dark:text-brand-400">2</span>
                     <h4 class="text-sm font-semibold text-gray-800 dark:text-white/90">服务模式</h4>
                   </div>
                   <div class="grid grid-cols-1 gap-3">
@@ -1279,7 +1433,7 @@ const errClass = 'mt-1 text-xs text-error-500'
 
                 <div>
                   <div class="mb-3 flex items-center gap-2">
-                    <span class="flex h-6 w-6 items-center justify-center rounded-full bg-brand-50 text-xs font-semibold text-brand-600 dark:bg-brand-500/10 dark:text-brand-400">2</span>
+                    <span class="flex h-6 w-6 items-center justify-center rounded-full bg-brand-50 text-xs font-semibold text-brand-600 dark:bg-brand-500/10 dark:text-brand-400">3</span>
                     <h4 class="text-sm font-semibold text-gray-800 dark:text-white/90">接口方式</h4>
                   </div>
                   <div class="grid grid-cols-1 gap-3">
@@ -1306,7 +1460,7 @@ const errClass = 'mt-1 text-xs text-error-500'
 
                 <div>
                   <div class="mb-3 flex items-center gap-2">
-                    <span class="flex h-6 w-6 items-center justify-center rounded-full bg-brand-50 text-xs font-semibold text-brand-600 dark:bg-brand-500/10 dark:text-brand-400">3</span>
+                    <span class="flex h-6 w-6 items-center justify-center rounded-full bg-brand-50 text-xs font-semibold text-brand-600 dark:bg-brand-500/10 dark:text-brand-400">4</span>
                     <h4 class="text-sm font-semibold text-gray-800 dark:text-white/90">认证方式</h4>
                   </div>
                   <div class="grid grid-cols-1 gap-3">
@@ -1333,7 +1487,7 @@ const errClass = 'mt-1 text-xs text-error-500'
 
                 <div>
                   <div class="mb-3 flex items-center gap-2">
-                    <span class="flex h-6 w-6 items-center justify-center rounded-full bg-brand-50 text-xs font-semibold text-brand-600 dark:bg-brand-500/10 dark:text-brand-400">4</span>
+                    <span class="flex h-6 w-6 items-center justify-center rounded-full bg-brand-50 text-xs font-semibold text-brand-600 dark:bg-brand-500/10 dark:text-brand-400">5</span>
                     <h4 class="text-sm font-semibold text-gray-800 dark:text-white/90">配置生成</h4>
                   </div>
                   <div class="rounded-xl border border-gray-200 p-4 dark:border-gray-800">
@@ -1400,7 +1554,7 @@ const errClass = 'mt-1 text-xs text-error-500'
                   <div class="mt-4 rounded-lg bg-gray-50 p-3 dark:bg-gray-900/60">
                     <p class="break-all font-mono text-xs leading-5 text-gray-700 dark:text-gray-200">{{ guideAddress }}</p>
                     <p class="mt-2 text-[11px] leading-5 text-gray-400 dark:text-gray-500">
-                      地址为占位符，请按实际对外可达地址替换：http(s) 选 http 或 https，&lt;your-host&gt; 填域名或 IP，&lt;port&gt; 填对外端口。
+                      {{ guideAddressHint }}
                     </p>
                   </div>
                   <div class="mt-3 rounded-lg bg-gray-50 p-3 dark:bg-gray-900/60">
