@@ -13,6 +13,7 @@ import AdminLayout from '@/components/layout/AdminLayout.vue'
 import PageBreadcrumb from '@/components/common/PageBreadcrumb.vue'
 import AliasRuleSection from '@/components/rules/AliasRuleSection.vue'
 import FilterRuleSection from '@/components/rules/FilterRuleSection.vue'
+import RuleMatchPreview from '@/components/rules/RuleMatchPreview.vue'
 import ToolPolicySection from '@/components/rules/ToolPolicySection.vue'
 import { useBreakpoint } from '@/composables/useBreakpoint'
 import { useToast } from '@/composables/useToast'
@@ -107,7 +108,9 @@ onMounted(loadUpstreams)
       </p>
     </div>
 
-    <!-- 规则看板：两个规则区块按可用空间自动排列，内部卡片继续自适应。 -->
+    <RuleMatchPreview class="mb-5" :upstreams="upstreams" />
+
+    <!-- 规则看板：规则区块按可用空间自动排列，内部卡片继续自适应。 -->
     <div class="grid grid-cols-1 gap-5 xl:grid-cols-3" :data-large-screen="isLargeScreen">
       <AliasRuleSection ref="aliasSection" :upstreams="upstreams" @toast="showToast" />
       <FilterRuleSection ref="filterSection" :upstreams="upstreams" @toast="showToast" />
