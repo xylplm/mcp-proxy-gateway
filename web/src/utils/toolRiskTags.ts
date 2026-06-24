@@ -19,8 +19,8 @@ const riskRules: Array<{
     label: '支付',
     level: 'high',
     patterns: [
-      /\b(pay|payment|charge|refund|invoice|checkout|billing|purchase|subscribe)\b/i,
-      /支付|付款|扣款|退款|账单|发票|购买|订阅/,
+      /\b(pay|payment|charge|refund|invoice|checkout|billing|purchase|paid)\b/i,
+      /支付|付款|扣款|退款|账单|发票|购买|付费/,
     ],
   },
   {
@@ -72,7 +72,6 @@ function searchableText(detail: ToolDetail): string {
     ...(detail.sources ?? []).flatMap((source) => [
       source.originalName,
       source.description,
-      source.upstreamName,
     ]),
   ]
     .filter(Boolean)

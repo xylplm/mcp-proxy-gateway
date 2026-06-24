@@ -55,3 +55,11 @@ test('keeps read-only tools untagged', () => {
   assert.equal(tags.length, 0)
   assert.equal(highestRiskLevel(tags), null)
 })
+
+test('does not mark media subscription tools as payment risk', () => {
+  const subscribeTags = toolRiskTags(detail({ name: 'subscribe_movie', description: '订阅电影，成功后自动搜索下载' }))
+  const refreshTags = toolRiskTags(detail({ name: 'refresh_subscribe', description: '刷新订阅列表' }))
+
+  assert.equal(subscribeTags.some((tag) => tag.key === 'payment'), false)
+  assert.equal(refreshTags.some((tag) => tag.key === 'payment'), false)
+})
