@@ -179,20 +179,47 @@ type UpstreamRateLimits struct {
 type ToolRoutingStrategy string
 
 const (
+	// ToolRoutingSmartBalance 自动在健康、未超额的同名来源间均衡分配，是推荐默认策略。
+	ToolRoutingSmartBalance ToolRoutingStrategy = "smart_balance"
 	// ToolRoutingPriorityFill 按上游排序优先选择第一个健康且未超额的来源。
 	ToolRoutingPriorityFill ToolRoutingStrategy = "priority_fill"
-	// ToolRoutingRoundRobin 在同名来源之间轮询分配调用。
+	// ToolRoutingRoundRobin 是旧版轮询取值，保留兼容；新配置会归一化为 smart_balance。
 	ToolRoutingRoundRobin ToolRoutingStrategy = "round_robin"
 )
 
 // ValidToolRoutingStrategy 判断工具调用策略是否为受支持取值。
 func ValidToolRoutingStrategy(s ToolRoutingStrategy) bool {
 	switch s {
-	case ToolRoutingPriorityFill, ToolRoutingRoundRobin:
+	case ToolRoutingSmartBalance, ToolRoutingPriorityFill, ToolRoutingRoundRobin:
 		return true
 	default:
 		return false
 	}
+}
+
+// NormalizeToolRoutingStrategy 将空值或旧版轮询取值归一化为推荐的智能均衡策略。
+func NormalizeToolRoutingStrategy(s ToolRoutingStrategy) ToolRoutingStrategy {
+	switch s {
+	case ToolRoutingPriorityFill:
+		return ToolRoutingPriorityFill
+	case ToolRoutingSmartBalance, ToolRoutingRoundRobin, "":
+		return ToolRoutingSmartBalance
+	default:
+		return ToolRoutingSmartBalance
+	}
+}
+
+// NormalizeOptionalToolRoutingStrategy 归一化可选工具策略字段；空值表示不覆盖全局策略。
+func NormalizeOptionalToolRoutingStrategy(s ToolRoutingStrategy) ToolRoutingStrategy {
+	if s == "" {
+		return ""
+	}
+	return NormalizeToolRoutingStrategy(s)
+}
+
+// ToolRoutingBalancesAcrossSources 表示该策略是否应在多个健康来源间均衡分配。
+func ToolRoutingBalancesAcrossSources(s ToolRoutingStrategy) bool {
+	return NormalizeToolRoutingStrategy(s) == ToolRoutingSmartBalance
 }
 
 // ToolPolicyRule 表示按对外工具名动态匹配的工具治理策略。

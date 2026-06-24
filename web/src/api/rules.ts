@@ -4,7 +4,7 @@
 import request from '@/api/request'
 
 export type RuleScopeType = 'all' | 'upstreams'
-export type ToolRoutingStrategy = '' | 'priority_fill' | 'round_robin'
+export type ToolRoutingStrategy = '' | 'smart_balance' | 'priority_fill' | 'round_robin'
 
 /**
  * 别名/描述重写规则，与后端 domain.AliasRule 对齐。

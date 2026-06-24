@@ -56,13 +56,15 @@ export function toolPolicyToRequest(rule: ToolPolicyRule | ToolPolicyRuleRequest
 }
 
 export function normalizeRoutingStrategy(strategy?: ToolRoutingStrategy): ToolRoutingStrategy {
-  if (strategy === 'priority_fill' || strategy === 'round_robin') return strategy
+  if (strategy === 'smart_balance' || strategy === 'priority_fill' || strategy === 'round_robin') {
+    return strategy === 'round_robin' ? 'smart_balance' : strategy
+  }
   return ''
 }
 
 export function routingStrategyLabel(strategy?: ToolRoutingStrategy): string {
-  if (strategy === 'priority_fill') return '优先顺序'
-  if (strategy === 'round_robin') return '轮询'
+  if (strategy === 'smart_balance' || strategy === 'round_robin') return '智能均衡'
+  if (strategy === 'priority_fill') return '稳定优先'
   return '不覆盖'
 }
 

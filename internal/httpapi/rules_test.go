@@ -76,7 +76,7 @@ func TestToolPolicyCRUDRoutes(t *testing.T) {
 		ID:              "policy-1",
 		Pattern:         "search",
 		Enabled:         true,
-		RoutingStrategy: domain.ToolRoutingRoundRobin,
+		RoutingStrategy: domain.ToolRoutingSmartBalance,
 		CacheEnabled:    true,
 		CacheTTLSeconds: 30,
 		RiskTags:        []string{"外发"},
@@ -96,11 +96,11 @@ func TestToolPolicyCRUDRoutes(t *testing.T) {
 		t.Fatalf("工具策略列表不符合预期：%+v", list)
 	}
 
-	w = doJSON(e, http.MethodPost, "/api/admin/tool-policies", `{"pattern":"read_.+","isRegex":true,"enabled":true,"routingStrategy":"priority_fill","cacheEnabled":true,"cacheTtlSeconds":15,"riskTags":["只读缓存"],"ignoredRiskTags":["write"]}`)
+	w = doJSON(e, http.MethodPost, "/api/admin/tool-policies", `{"pattern":"read_.+","isRegex":true,"enabled":true,"routingStrategy":"smart_balance","cacheEnabled":true,"cacheTtlSeconds":15,"riskTags":["只读缓存"],"ignoredRiskTags":["write"]}`)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("创建期望 HTTP 201，实际 %d，响应体 %s", w.Code, w.Body.String())
 	}
-	if store.created.Pattern != "read_.+" || store.created.RoutingStrategy != domain.ToolRoutingPriorityFill || store.created.CacheTTLSeconds != 15 || store.created.IgnoredRiskTags[0] != "write" {
+	if store.created.Pattern != "read_.+" || store.created.RoutingStrategy != domain.ToolRoutingSmartBalance || store.created.CacheTTLSeconds != 15 || store.created.IgnoredRiskTags[0] != "write" {
 		t.Fatalf("创建参数未正确传递：%+v", store.created)
 	}
 

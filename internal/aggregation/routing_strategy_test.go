@@ -194,6 +194,30 @@ func TestDefaultRoutingStrategyIsRoundRobin(t *testing.T) {
 	}
 }
 
+func TestSmartBalanceAlternatesCompatibleSources(t *testing.T) {
+	invoker := &routeRecordingInvoker{available: map[string]bool{"up-a": true, "up-b": true}}
+	svc := routeService(
+		map[string][]domain.ToolDef{
+			"up-a": {{OriginalName: "read", Name: "read", InputSchema: []byte("{}")}},
+			"up-b": {{OriginalName: "read", Name: "read", InputSchema: []byte("{}")}},
+		},
+		[]domain.Upstream{invEnabledUpstream("up-a", 0), invEnabledUpstream("up-b", 1)},
+		invoker,
+	).SetRoutingStrategy(domain.ToolRoutingSmartBalance)
+
+	for i := 0; i < 4; i++ {
+		if _, err := svc.InvokeTool(context.Background(), "", "read", json.RawMessage(`{}`)); err != nil {
+			t.Fatalf("第 %d 次智能均衡调用失败：%v", i+1, err)
+		}
+	}
+	want := []string{"up-a:read", "up-b:read", "up-a:read", "up-b:read"}
+	for i, expected := range want {
+		if got := invoker.callAt(i); got != expected {
+			t.Fatalf("第 %d 次调用路由错误：got=%q want=%q", i+1, got, expected)
+		}
+	}
+}
+
 func TestToolPolicyOverridesRoutingStrategy(t *testing.T) {
 	invoker := &routeRecordingInvoker{available: map[string]bool{"up-a": true, "up-b": true}}
 	svc := routeServiceWithPolicies(

@@ -117,7 +117,7 @@ func (e *engine) ValidateToolPolicy(r ToolPolicyRule) error {
 	e.validatePattern(r.Pattern, r.IsRegex, fields)
 
 	if r.RoutingStrategy != "" && !ValidToolRoutingStrategy(r.RoutingStrategy) {
-		fields["routingStrategy"] = "路由策略只能是 priority_fill 或 round_robin"
+		fields["routingStrategy"] = "路由策略只能是 smart_balance、priority_fill 或 round_robin"
 	}
 
 	if r.CacheEnabled {

@@ -88,8 +88,8 @@ func TestLoadReadsExistingConfigAndAppliesDefaults(t *testing.T) {
 	if got.Connection.FailureThreshold != 10 {
 		t.Errorf("connection.failure_threshold 期望默认值 10，实际 %d", got.Connection.FailureThreshold)
 	}
-	if got.Aggregation.ToolRoutingStrategy != domain.ToolRoutingRoundRobin {
-		t.Errorf("aggregation.tool_routing_strategy 期望默认值 %q，实际 %q", domain.ToolRoutingRoundRobin, got.Aggregation.ToolRoutingStrategy)
+	if got.Aggregation.ToolRoutingStrategy != domain.ToolRoutingSmartBalance {
+		t.Errorf("aggregation.tool_routing_strategy 期望默认值 %q，实际 %q", domain.ToolRoutingSmartBalance, got.Aggregation.ToolRoutingStrategy)
 	}
 }
 
@@ -225,8 +225,8 @@ func TestSaveNormalizesDefaultableFields(t *testing.T) {
 	}
 
 	got := mgr.Config()
-	if got.Aggregation.ToolRoutingStrategy != domain.ToolRoutingRoundRobin {
-		t.Fatalf("保存后工具调用策略未归一化：got=%q want=%q", got.Aggregation.ToolRoutingStrategy, domain.ToolRoutingRoundRobin)
+	if got.Aggregation.ToolRoutingStrategy != domain.ToolRoutingSmartBalance {
+		t.Fatalf("保存后工具调用策略未归一化：got=%q want=%q", got.Aggregation.ToolRoutingStrategy, domain.ToolRoutingSmartBalance)
 	}
 	if !reflect.DeepEqual(got.Security, DefaultYAMLConfig().Security) {
 		t.Fatalf("保存后安全配置未补齐默认值：got=%+v want=%+v", got.Security, DefaultYAMLConfig().Security)
@@ -239,7 +239,7 @@ func TestSaveNormalizesDefaultableFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("重新加载失败：%v", err)
 	}
-	if reloaded.Config().Aggregation.ToolRoutingStrategy != domain.ToolRoutingRoundRobin {
+	if reloaded.Config().Aggregation.ToolRoutingStrategy != domain.ToolRoutingSmartBalance {
 		t.Fatalf("落盘后的工具调用策略未归一化：got=%q", reloaded.Config().Aggregation.ToolRoutingStrategy)
 	}
 	if !reflect.DeepEqual(reloaded.Config().Security, DefaultYAMLConfig().Security) {
@@ -247,6 +247,25 @@ func TestSaveNormalizesDefaultableFields(t *testing.T) {
 	}
 	if reloaded.Config().MCPAPI.RequestBodyLimitMiB != DefaultMCPRequestBodyLimitMiB {
 		t.Fatalf("落盘后的 MCP 请求体上限未补齐默认值：got=%d", reloaded.Config().MCPAPI.RequestBodyLimitMiB)
+	}
+}
+
+func TestSaveNormalizesLegacyRoundRobinRoutingStrategy(t *testing.T) {
+	setRequiredEnv(t)
+	dataDir := t.TempDir()
+
+	mgr, err := Load(nil, dataDir)
+	if err != nil {
+		t.Fatalf("Load 失败：%v", err)
+	}
+
+	cfg := mgr.Config()
+	cfg.Aggregation.ToolRoutingStrategy = domain.ToolRoutingRoundRobin
+	if err := mgr.Save(cfg); err != nil {
+		t.Fatalf("Save 不应返回错误：%v", err)
+	}
+	if got := mgr.Config().Aggregation.ToolRoutingStrategy; got != domain.ToolRoutingSmartBalance {
+		t.Fatalf("旧版 round_robin 应归一化为 smart_balance：got=%q", got)
 	}
 }
 

@@ -92,14 +92,14 @@ const fieldErrors = reactive<Record<string, string>>({})
 
 const routingStrategies: ReadonlyArray<{ value: ToolRoutingStrategy; label: string; desc: string }> = [
   {
-    value: 'round_robin',
-    label: '均衡分配',
-    desc: '在同名工具的多个来源之间轮询调用，适合多个账号或渠道共同分摊额度。',
+    value: 'smart_balance',
+    label: '智能均衡',
+    desc: '推荐默认：在健康且未超额的来源间自动分配，遇到失败会短暂绕开问题来源。',
   },
   {
     value: 'priority_fill',
-    label: '优先可用上游',
-    desc: '按上游排序优先调用第一个可用且未超额的来源，适合主备或优先级明确的场景。',
+    label: '稳定优先',
+    desc: '始终优先使用排序靠前的来源，仅在不可用、超额或短暂降级时切到后续来源。',
   },
 ]
 

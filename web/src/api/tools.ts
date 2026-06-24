@@ -30,7 +30,7 @@ export interface ToolSource {
 export interface ToolPolicyView {
   ruleId: string
   pattern: string
-  routingStrategy?: 'priority_fill' | 'round_robin'
+  routingStrategy?: 'smart_balance' | 'priority_fill' | 'round_robin'
   cacheEnabled: boolean
   cacheTtlSeconds?: number
   riskTags?: string[]

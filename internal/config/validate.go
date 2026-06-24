@@ -72,11 +72,8 @@ func ValidateYAMLConfig(cfg YAMLConfig) error {
 
 	// aggregation.upstream_call_timeout_s 范围 1-600（Req 10.8）。
 	rangeCheck(fields, "aggregation.upstream_call_timeout_s", cfg.Aggregation.UpstreamCallTimeoutS, 1, 600)
-	if cfg.Aggregation.ToolRoutingStrategy == "" {
-		cfg.Aggregation.ToolRoutingStrategy = domain.ToolRoutingRoundRobin
-	}
 	if !domain.ValidToolRoutingStrategy(cfg.Aggregation.ToolRoutingStrategy) {
-		fields["aggregation.tool_routing_strategy"] = "工具调用策略取值非法（应为 priority_fill 或 round_robin）"
+		fields["aggregation.tool_routing_strategy"] = "工具调用策略取值非法（应为 smart_balance、priority_fill 或 round_robin）"
 	}
 
 	// xiaozhi.mode 取值 smart 或 full，默认 full。

@@ -302,16 +302,16 @@ function onTagInputKeydown(event: KeyboardEvent): void {
 
 function routingClass(strategy?: ToolRoutingStrategy): string {
   if (strategy === 'priority_fill') return 'bg-success-50 text-success-700 dark:bg-success-500/10 dark:text-success-300'
-  if (strategy === 'round_robin') return 'bg-brand-50 text-brand-700 dark:bg-brand-500/10 dark:text-brand-300'
+  if (strategy === 'smart_balance' || strategy === 'round_robin') return 'bg-brand-50 text-brand-700 dark:bg-brand-500/10 dark:text-brand-300'
   return 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300'
 }
 
 function routingStrategyDescription(strategy?: ToolRoutingStrategy): string {
-  if (strategy === 'priority_fill') {
-    return '优先调用排序靠前的健康来源；失败或不可用时自动尝试后续来源。'
+  if (strategy === 'smart_balance' || strategy === 'round_robin') {
+    return '在健康且未超额的来源间自动分配，失败后短暂绕开问题来源。'
   }
-  if (strategy === 'round_robin') {
-    return '在多个健康来源间轮流分配调用，适合同名工具能力一致的场景。'
+  if (strategy === 'priority_fill') {
+    return '优先使用排序靠前的健康来源；不可用、超额或短暂降级时切到后续来源。'
   }
   return '跟随系统设置里的全局路由策略，通常保持默认即可。'
 }
@@ -518,7 +518,7 @@ defineExpose({ reload })
               <div>
                 <h4 class="text-sm font-medium text-gray-700 dark:text-gray-300">调用策略</h4>
                 <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
-                  命中该工具策略后，可单独覆盖路由方式，并按需缓存稳定查询结果。
+                  命中该工具策略后，可按工具覆盖调用意图，并按需缓存稳定查询结果。
                 </p>
               </div>
 
@@ -534,9 +534,9 @@ defineExpose({ reload })
                     v-model="form.routingStrategy"
                     class="w-full rounded-lg border border-gray-300 bg-white px-3.5 py-2.5 text-sm text-gray-800 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white/90"
                   >
-                    <option value="">不覆盖全局策略</option>
-                    <option value="priority_fill">优先顺序</option>
-                    <option value="round_robin">轮询</option>
+                    <option value="">跟随全局策略</option>
+                    <option value="smart_balance">智能均衡</option>
+                    <option value="priority_fill">稳定优先</option>
                   </select>
                 </label>
 

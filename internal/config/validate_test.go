@@ -96,6 +96,36 @@ func TestValidateYAMLConfigBoundaryValues(t *testing.T) {
 	}
 }
 
+func TestValidateYAMLConfigRoutingStrategies(t *testing.T) {
+	for _, strategy := range []domain.ToolRoutingStrategy{
+		domain.ToolRoutingSmartBalance,
+		domain.ToolRoutingPriorityFill,
+		domain.ToolRoutingRoundRobin,
+	} {
+		t.Run(string(strategy), func(t *testing.T) {
+			cfg := DefaultYAMLConfig()
+			cfg.Aggregation.ToolRoutingStrategy = strategy
+			if err := ValidateYAMLConfig(cfg); err != nil {
+				t.Fatalf("路由策略 %q 应通过校验：%v", strategy, err)
+			}
+		})
+	}
+
+	cfg := DefaultYAMLConfig()
+	cfg.Aggregation.ToolRoutingStrategy = "weighted"
+	err := ValidateYAMLConfig(cfg)
+	if err == nil {
+		t.Fatal("非法路由策略应返回校验错误")
+	}
+	var apiErr *domain.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("期望错误类型为 *domain.APIError，实际为 %T", err)
+	}
+	if _, ok := apiErr.Fields["aggregation.tool_routing_strategy"]; !ok {
+		t.Fatalf("期望字段级错误包含 aggregation.tool_routing_strategy，实际 Fields=%v", apiErr.Fields)
+	}
+}
+
 // TestValidateServerListenConfig 验证管理端口与独立 MCP 端口监听配置校验。
 func TestValidateServerListenConfig(t *testing.T) {
 	cases := []struct {

@@ -18,8 +18,9 @@ export interface SettingsDraftInput {
 type ValueFormatter = (value: unknown) => string
 
 const routingStrategyLabels: Record<string, string> = {
-  round_robin: '均衡分配',
-  priority_fill: '优先可用上游',
+  smart_balance: '智能均衡',
+  round_robin: '智能均衡',
+  priority_fill: '稳定优先',
 }
 
 const securityModeLabels: Record<string, string> = {

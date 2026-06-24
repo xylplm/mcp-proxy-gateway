@@ -255,7 +255,7 @@ func DefaultYAMLConfig() YAMLConfig {
 		},
 		Aggregation: AggregationConfig{
 			UpstreamCallTimeoutS: 30,
-			ToolRoutingStrategy:  domain.ToolRoutingRoundRobin,
+			ToolRoutingStrategy:  domain.ToolRoutingSmartBalance,
 		},
 		MCPAPI: MCPAPIConfig{
 			SmartDiscoveryLimit: 50,
@@ -280,9 +280,7 @@ func DefaultYAMLConfig() YAMLConfig {
 
 // NormalizeYAMLConfig 补齐旧配置文件中可能缺省的枚举类字段，同时保留显式合法取值。
 func NormalizeYAMLConfig(cfg YAMLConfig) YAMLConfig {
-	if cfg.Aggregation.ToolRoutingStrategy == "" {
-		cfg.Aggregation.ToolRoutingStrategy = domain.ToolRoutingRoundRobin
-	}
+	cfg.Aggregation.ToolRoutingStrategy = domain.NormalizeToolRoutingStrategy(cfg.Aggregation.ToolRoutingStrategy)
 	if cfg.MCPAPI.RequestBodyLimitMiB == 0 {
 		cfg.MCPAPI.RequestBodyLimitMiB = DefaultMCPRequestBodyLimitMiB
 	}

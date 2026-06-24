@@ -22,7 +22,7 @@ import request, { ApiError } from '@/api/request'
 /** 对外服务模式取值，与后端 config.ModeSmart / ModeFull 对齐。 */
 export type MCPMode = 'smart' | 'full'
 
-export type ToolRoutingStrategy = 'priority_fill' | 'round_robin'
+export type ToolRoutingStrategy = 'smart_balance' | 'priority_fill' | 'round_robin'
 
 /** 日志级别取值，与后端 config.LogLevel* 对齐。 */
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error'

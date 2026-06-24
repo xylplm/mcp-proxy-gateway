@@ -197,7 +197,7 @@ func NewService(
 		apiKeyFilters:          apiKeyFilters,
 		toolPolicies:           toolPolicies,
 		upstreamConfigs:        make(map[string]domain.UpstreamConfig),
-		routingStrategy:        domain.ToolRoutingRoundRobin,
+		routingStrategy:        domain.ToolRoutingSmartBalance,
 		roundRobin:             make(map[string]uint64),
 		resultCache:            make(map[string]cachedToolResult),
 		sourceFailures:         make(map[string]sourceFailureState),
@@ -244,11 +244,8 @@ func (s *Service) SetLogger(l *slog.Logger) *Service {
 
 // SetRoutingStrategy 更新同名工具多来源时的内部调用选择策略。
 func (s *Service) SetRoutingStrategy(strategy domain.ToolRoutingStrategy) *Service {
-	if !domain.ValidToolRoutingStrategy(strategy) {
-		strategy = domain.ToolRoutingRoundRobin
-	}
 	s.routingMu.Lock()
-	s.routingStrategy = strategy
+	s.routingStrategy = domain.NormalizeToolRoutingStrategy(strategy)
 	s.routingMu.Unlock()
 	return s
 }
@@ -318,9 +315,9 @@ func (s *Service) currentRoutingStrategy() domain.ToolRoutingStrategy {
 	s.routingMu.RLock()
 	defer s.routingMu.RUnlock()
 	if domain.ValidToolRoutingStrategy(s.routingStrategy) {
-		return s.routingStrategy
+		return domain.NormalizeToolRoutingStrategy(s.routingStrategy)
 	}
-	return domain.ToolRoutingRoundRobin
+	return domain.ToolRoutingSmartBalance
 }
 
 // logger 返回已注入的日志器（保证非 nil）。
@@ -499,10 +496,10 @@ func (s *Service) selectCandidate(ctx context.Context, entry ReverseEntry, polic
 	}
 	strategy := s.currentRoutingStrategy()
 	if domain.ValidToolRoutingStrategy(policy.RoutingStrategy) {
-		strategy = policy.RoutingStrategy
+		strategy = domain.NormalizeOptionalToolRoutingStrategy(policy.RoutingStrategy)
 	}
 	start := 0
-	if strategy == domain.ToolRoutingRoundRobin && len(candidates) > 1 {
+	if domain.ToolRoutingBalancesAcrossSources(strategy) && len(candidates) > 1 {
 		s.roundRobinMu.Lock()
 		n := s.roundRobin[entry.Name]
 		s.roundRobin[entry.Name] = n + 1
@@ -516,7 +513,7 @@ func (s *Service) selectCandidate(ctx context.Context, entry ReverseEntry, polic
 	sawFailureDegraded := false
 	for i := 0; i < len(candidates); i++ {
 		idx := i
-		if strategy == domain.ToolRoutingRoundRobin {
+		if domain.ToolRoutingBalancesAcrossSources(strategy) {
 			idx = (start + i) % len(candidates)
 		}
 		c := candidates[idx]
