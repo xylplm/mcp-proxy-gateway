@@ -33,6 +33,25 @@ func TestDiagnosticsExportRedactsSecretsAndKeepsUsefulSummary(t *testing.T) {
 		State:     domain.ConnAvailable,
 		CreatedAt: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
 		UpdatedAt: time.Date(2026, 6, 1, 1, 0, 0, 0, time.UTC),
+	}, {
+		ID: "up-2",
+		Config: domain.UpstreamConfig{
+			Name:      "rest",
+			Transport: domain.TransportOpenAPI,
+			ConnParams: map[string]any{
+				"baseUrl":    "https://api.example.com/v1",
+				"docContent": "openapi: 3.0.3\ninfo:\n  title: private-spec\npaths: {}",
+				"authType":   "api-key-header",
+				"authName":   "X-Private-Key",
+				"authValue":  "openapi-secret",
+			},
+			Credential: "openapi-credential",
+			Enabled:    true,
+			AutoSync:   true,
+		},
+		State:     domain.ConnAvailable,
+		CreatedAt: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+		UpdatedAt: time.Date(2026, 6, 1, 1, 0, 0, 0, time.UTC),
 	}}}
 	logs := syslog.NewStore(10)
 	logs.Add("warn", "upstream failed", time.Date(2026, 6, 1, 2, 0, 0, 0, time.UTC), "manager.go:1", map[string]any{
@@ -81,19 +100,22 @@ func TestDiagnosticsExportRedactsSecretsAndKeepsUsefulSummary(t *testing.T) {
 	if got.Settings.JWTSecret != redactedValue {
 		t.Fatalf("JWT secret 应脱敏，实际 %q", got.Settings.JWTSecret)
 	}
-	if len(got.Upstreams) != 1 || got.Upstreams[0].Config.Credential != redactedValue {
+	if len(got.Upstreams) != 2 || got.Upstreams[0].Config.Credential != redactedValue || got.Upstreams[1].Config.Credential != redactedValue {
 		t.Fatalf("上游凭证应脱敏：%+v", got.Upstreams)
 	}
 	headers := got.Upstreams[0].Config.ConnParams["headers"].(map[string]any)
 	if headers["Authorization"] != redactedValue {
 		t.Fatalf("上游 header 应脱敏：%+v", headers)
 	}
+	if got.Upstreams[1].Config.ConnParams["docContent"] != redactedValue || got.Upstreams[1].Config.ConnParams["authValue"] != redactedValue {
+		t.Fatalf("OpenAPI 文档正文与鉴权值应脱敏：%+v", got.Upstreams[1].Config.ConnParams)
+	}
 	if len(got.RecentCallRecords) != 1 || got.RecentCallRecords[0].ErrorMessage != "timeout" {
 		t.Fatalf("调用摘要不符合预期：%+v", got.RecentCallRecords)
 	}
 
 	body := w.Body.String()
-	for _, secret := range []string{"jwt-secret", "bcrypt-secret", "plain-credential", "secret-token", "log-secret", `"RequestArgs"`, `"ResponseResult"`} {
+	for _, secret := range []string{"jwt-secret", "bcrypt-secret", "plain-credential", "secret-token", "log-secret", "openapi-credential", "openapi-secret", "private-spec", `"RequestArgs"`, `"ResponseResult"`} {
 		if strings.Contains(body, secret) {
 			t.Fatalf("诊断包不应包含敏感或明细内容 %q：%s", secret, body)
 		}

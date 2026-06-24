@@ -300,6 +300,108 @@ paths:
 	}
 }
 
+func TestOpenAPIDocumentRejectsOversizedRemoteDocument(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(strings.Repeat("x", openAPIMaxDocumentBytes+1)))
+	}))
+	defer server.Close()
+
+	_, err := loadOpenAPIDocument(context.Background(), server.Client(), openAPIParams{docURL: server.URL})
+	if err == nil || !strings.Contains(err.Error(), "4MB") {
+		t.Fatalf("oversized OpenAPI document should be rejected clearly, got %v", err)
+	}
+}
+
+func TestOpenAPISessionHandlesRecursiveSchemaRef(t *testing.T) {
+	doc := `
+openapi: 3.0.3
+info:
+  title: Recursive API
+  version: 1.0.0
+components:
+  schemas:
+    Loop:
+      $ref: '#/components/schemas/Loop'
+paths:
+  /loops:
+    post:
+      operationId: createLoop
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Loop'
+`
+	sess := mustOpenAPISession(t, "https://api.example.test", doc)
+	if err := sess.Connect(context.Background()); err != nil {
+		t.Fatalf("Connect should not fail or recurse forever on recursive refs: %v", err)
+	}
+	defer sess.Close()
+
+	tools, err := sess.ListTools(context.Background())
+	if err != nil {
+		t.Fatalf("ListTools failed: %v", err)
+	}
+	if len(tools) != 1 || !json.Valid(tools[0].InputSchema) {
+		t.Fatalf("recursive ref should still produce one valid tool schema: %+v", tools)
+	}
+}
+
+func TestOpenAPISessionResolvesNestedSchemaRefs(t *testing.T) {
+	doc := `
+openapi: 3.0.3
+info:
+  title: Nested Ref API
+  version: 1.0.0
+components:
+  schemas:
+    Todo:
+      type: object
+      properties:
+        owner:
+          $ref: '#/components/schemas/User'
+        tags:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tag'
+    User:
+      type: object
+      properties:
+        email:
+          type: string
+    Tag:
+      type: object
+      properties:
+        name:
+          type: string
+paths:
+  /todos:
+    post:
+      operationId: createNestedTodo
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Todo'
+`
+	sess := mustOpenAPISession(t, "https://api.example.test", doc)
+	if err := sess.Connect(context.Background()); err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	defer sess.Close()
+
+	tools, err := sess.ListTools(context.Background())
+	if err != nil {
+		t.Fatalf("ListTools failed: %v", err)
+	}
+	schema := string(tools[0].InputSchema)
+	if strings.Contains(schema, `"$ref"`) || !strings.Contains(schema, `"email"`) || !strings.Contains(schema, `"name"`) {
+		t.Fatalf("nested schema refs should be resolved for tool preview: %s", schema)
+	}
+}
+
 func TestOpenAPISessionSkipsUnsupportedParameterLocations(t *testing.T) {
 	doc := `
 openapi: 3.0.3

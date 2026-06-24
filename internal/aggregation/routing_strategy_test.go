@@ -170,7 +170,7 @@ func TestRoundRobinAlternatesCompatibleSources(t *testing.T) {
 	}
 }
 
-func TestDefaultRoutingStrategyIsRoundRobin(t *testing.T) {
+func TestDefaultRoutingStrategyUsesSmartBalance(t *testing.T) {
 	invoker := &routeRecordingInvoker{available: map[string]bool{"up-a": true, "up-b": true}}
 	svc := routeService(
 		map[string][]domain.ToolDef{

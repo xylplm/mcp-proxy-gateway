@@ -251,7 +251,9 @@ func isSensitiveKey(key string) bool {
 		strings.Contains(normalized, "api-key") ||
 		strings.Contains(normalized, "api_key") ||
 		strings.Contains(normalized, "apikey") ||
-		strings.Contains(normalized, "credential")
+		strings.Contains(normalized, "credential") ||
+		normalized == "authvalue" ||
+		normalized == "doccontent"
 }
 
 func redactNonEmpty(value string) string {

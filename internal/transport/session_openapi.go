@@ -20,7 +20,9 @@ import (
 
 const (
 	openAPIDefaultContentType = "application/json"
+	openAPIMaxDocumentBytes   = 4 << 20
 	openAPIMaxResponseBytes   = 1 << 20
+	openAPIMaxRefDepth        = 32
 )
 
 var openAPITemplateParamPattern = regexp.MustCompile(`\{([^{}]+)\}`)
@@ -296,11 +298,14 @@ func loadOpenAPIDocument(ctx context.Context, client *http.Client, params openAP
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			return openAPIDocument{}, domain.NewError(domain.CodeUpstreamUnavailable, fmt.Sprintf("拉取 OpenAPI 文档失败：HTTP %d", resp.StatusCode))
 		}
-		b, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+		b, err := readLimitedOpenAPIDocument(resp.Body)
 		if err != nil {
-			return openAPIDocument{}, domain.NewError(domain.CodeUpstreamUnavailable, "读取 OpenAPI 文档失败："+err.Error())
+			return openAPIDocument{}, err
 		}
 		raw = string(b)
+	}
+	if len([]byte(raw)) > openAPIMaxDocumentBytes {
+		return openAPIDocument{}, domain.NewError(domain.CodeValidation, "OpenAPI 文档不能超过 4MB")
 	}
 	var doc openAPIDocument
 	if err := yaml.Unmarshal([]byte(raw), &doc); err != nil {
@@ -314,6 +319,17 @@ func loadOpenAPIDocument(ctx context.Context, client *http.Client, params openAP
 		return openAPIDocument{}, domain.NewError(domain.CodeValidation, "仅支持 OpenAPI 3.x 文档")
 	}
 	return doc, nil
+}
+
+func readLimitedOpenAPIDocument(r io.Reader) ([]byte, error) {
+	b, err := io.ReadAll(io.LimitReader(r, openAPIMaxDocumentBytes+1))
+	if err != nil {
+		return nil, domain.NewError(domain.CodeUpstreamUnavailable, "读取 OpenAPI 文档失败："+err.Error())
+	}
+	if len(b) > openAPIMaxDocumentBytes {
+		return nil, domain.NewError(domain.CodeValidation, "OpenAPI 文档不能超过 4MB")
+	}
+	return b, nil
 }
 
 func compileOpenAPIOperations(doc openAPIDocument) ([]domain.ToolDef, map[string]openAPIOperation, error) {
@@ -485,8 +501,10 @@ func resolveOpenAPIParameters(params []openAPIParameter, doc openAPIDocument) []
 	out := make([]openAPIParameter, 0, len(params))
 	for _, param := range params {
 		if param.Ref != "" {
-			if resolved, ok := doc.Components.Parameters[openAPIRefName(param.Ref)]; ok {
-				param = resolved
+			if name, ok := openAPILocalComponentRefName(param.Ref, "parameters"); ok {
+				if resolved, ok := doc.Components.Parameters[name]; ok {
+					param = resolved
+				}
 			}
 		}
 		param.In = strings.ToLower(strings.TrimSpace(param.In))
@@ -498,8 +516,10 @@ func resolveOpenAPIParameters(params []openAPIParameter, doc openAPIDocument) []
 
 func resolveOpenAPIRequestBody(body openAPIRequestBody, doc openAPIDocument) openAPIRequestBody {
 	if body.Ref != "" {
-		if resolved, ok := doc.Components.RequestBodies[openAPIRefName(body.Ref)]; ok {
-			body = resolved
+		if name, ok := openAPILocalComponentRefName(body.Ref, "requestBodies"); ok {
+			if resolved, ok := doc.Components.RequestBodies[name]; ok {
+				body = resolved
+			}
 		}
 	}
 	for contentType, media := range body.Content {
@@ -510,25 +530,72 @@ func resolveOpenAPIRequestBody(body openAPIRequestBody, doc openAPIDocument) ope
 }
 
 func resolveOpenAPISchema(schema any, doc openAPIDocument) any {
+	return resolveOpenAPISchemaWithState(schema, doc, map[string]bool{}, 0)
+}
+
+func resolveOpenAPISchemaWithState(schema any, doc openAPIDocument, seen map[string]bool, depth int) any {
 	m, ok := openAPISchemaMap(schema)
 	if !ok {
 		return schema
 	}
 	if ref, _ := m["$ref"].(string); ref != "" {
-		if resolved, ok := doc.Components.Schemas[openAPIRefName(ref)]; ok {
-			return resolveOpenAPISchema(resolved, doc)
+		name, ok := openAPILocalComponentRefName(ref, "schemas")
+		if !ok {
+			return m
+		}
+		if seen[name] || depth >= openAPIMaxRefDepth {
+			return map[string]any{"type": "object"}
+		}
+		if resolved, ok := doc.Components.Schemas[name]; ok {
+			nextSeen := make(map[string]bool, len(seen)+1)
+			for key, value := range seen {
+				nextSeen[key] = value
+			}
+			nextSeen[name] = true
+			return resolveOpenAPISchemaWithState(resolved, doc, nextSeen, depth+1)
 		}
 	}
-	return m
+	out := make(map[string]any, len(m))
+	for key, value := range m {
+		out[key] = resolveOpenAPISchemaValue(value, doc, seen, depth)
+	}
+	return out
 }
 
-func openAPIRefName(ref string) string {
-	ref = strings.TrimSpace(ref)
-	if ref == "" {
-		return ""
+func resolveOpenAPISchemaValue(value any, doc openAPIDocument, seen map[string]bool, depth int) any {
+	if depth >= openAPIMaxRefDepth {
+		return value
 	}
-	parts := strings.Split(ref, "/")
-	return parts[len(parts)-1]
+	switch v := value.(type) {
+	case map[string]any, map[any]any, json.RawMessage:
+		return resolveOpenAPISchemaWithState(v, doc, seen, depth+1)
+	case []any:
+		out := make([]any, len(v))
+		for i, item := range v {
+			out[i] = resolveOpenAPISchemaValue(item, doc, seen, depth+1)
+		}
+		return out
+	default:
+		return value
+	}
+}
+
+func openAPILocalComponentRefName(ref string, section string) (string, bool) {
+	ref = strings.TrimSpace(ref)
+	prefix := "#/components/" + section + "/"
+	if ref == "" || !strings.HasPrefix(ref, prefix) {
+		return "", false
+	}
+	name := strings.TrimPrefix(ref, prefix)
+	if name == "" {
+		return "", false
+	}
+	name = strings.ReplaceAll(name, "~1", "/")
+	name = strings.ReplaceAll(name, "~0", "~")
+	if decoded, err := url.PathUnescape(name); err == nil {
+		name = decoded
+	}
+	return name, true
 }
 
 func mergeOpenAPIParameters(pathParams []openAPIParameter, opParams []openAPIParameter) []openAPIParameter {
