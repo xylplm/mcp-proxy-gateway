@@ -327,7 +327,7 @@ func TestUpdateRateLimitMergesConfig(t *testing.T) {
 	rl := &fakeRateLimitStore{key: store.APIKey{Name: "preserve", KeyPrefix: "mpg_abc"}}
 	e := newTestEngine(Deps{RateLimitStore: rl})
 
-	w := doJSON(e, http.MethodPut, "/api/admin/apikeys/key-5/ratelimit", `{"rateLimit":100,"rateWindowS":60}`)
+	w := doJSON(e, http.MethodPut, "/api/admin/apikeys/key-5/ratelimit", `{"rateLimit":100,"rateWindowS":60,"quotaPerDay":1000,"quotaPerMonth":30000}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("期望 HTTP 200，实际 %d，响应体 %s", w.Code, w.Body.String())
 	}
@@ -337,6 +337,12 @@ func TestUpdateRateLimitMergesConfig(t *testing.T) {
 	if rl.saved.RateWindowS == nil || *rl.saved.RateWindowS != 60 {
 		t.Errorf("期望写入 rateWindowS=60，实际 %v", rl.saved.RateWindowS)
 	}
+	if rl.saved.QuotaPerDay == nil || *rl.saved.QuotaPerDay != 1000 {
+		t.Errorf("期望写入 quotaPerDay=1000，实际 %v", rl.saved.QuotaPerDay)
+	}
+	if rl.saved.QuotaPerMonth == nil || *rl.saved.QuotaPerMonth != 30000 {
+		t.Errorf("期望写入 quotaPerMonth=30000，实际 %v", rl.saved.QuotaPerMonth)
+	}
 	// 不可变字段须被保留。
 	if rl.saved.Name != "preserve" || rl.saved.KeyPrefix != "mpg_abc" {
 		t.Errorf("更新限流时不应改动其它字段：%+v", rl.saved)
@@ -345,7 +351,7 @@ func TestUpdateRateLimitMergesConfig(t *testing.T) {
 
 // TestGetRateLimit 验证读取限流配置仅返回限流字段。
 func TestGetRateLimit(t *testing.T) {
-	rl := &fakeRateLimitStore{key: store.APIKey{RateLimit: intPtr(50), RateWindowS: intPtr(30)}}
+	rl := &fakeRateLimitStore{key: store.APIKey{RateLimit: intPtr(50), RateWindowS: intPtr(30), QuotaPerDay: intPtr(1000), QuotaPerMonth: intPtr(30000)}}
 	e := newTestEngine(Deps{RateLimitStore: rl})
 
 	w := doJSON(e, http.MethodGet, "/api/admin/apikeys/key-8/ratelimit", "")
@@ -356,5 +362,8 @@ func TestGetRateLimit(t *testing.T) {
 	unmarshalData(t, w, &got)
 	if got.ID != "key-8" || got.RateLimit == nil || *got.RateLimit != 50 {
 		t.Errorf("限流配置读取不符：%+v", got)
+	}
+	if got.QuotaPerDay == nil || *got.QuotaPerDay != 1000 || got.QuotaPerMonth == nil || *got.QuotaPerMonth != 30000 {
+		t.Errorf("额度配置读取不符：%+v", got)
 	}
 }

@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -63,8 +62,9 @@ func (stubACLLister) ListByAPIKey(context.Context, string) ([]store.ACLEntry, er
 // stubRateCounter 实现 apikey.RateCounter：内存无操作计数。
 type stubRateCounter struct{}
 
-func (stubRateCounter) Incr(context.Context, string) (int64, error)         { return 1, nil }
-func (stubRateCounter) Expire(context.Context, string, time.Duration) error { return nil }
+func (stubRateCounter) Reserve(context.Context, []apikey.RateReservation) (bool, int, error) {
+	return true, 0, nil
+}
 
 // stubAggregation 实现 domain.Aggregation_Service：返回空集合，仅用于构建 MCP 端点。
 type stubAggregation struct{}

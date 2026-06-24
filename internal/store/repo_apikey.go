@@ -13,7 +13,8 @@ import (
 //
 // 鉴权仅使用密钥哈希（KeyHash）等值比对；KeyPlain 为明文密钥，仅用于管理台二次查看/复制
 // （自部署场景，Req 12 扩展），不参与鉴权。KeyPrefix 为展示用前缀。
-// RateLimit 与 RateWindowS 为可选速率上限配置（Req 21）；ExpiresAt 为可选有效期（Req 12.6）。
+// RateLimit 与 RateWindowS 为可选速率上限配置（Req 21）；QuotaPerDay 与 QuotaPerMonth 为可选周期额度。
+// ExpiresAt 为可选有效期（Req 12.6）。
 type APIKey struct {
 	// ID 为 API Key 唯一标识。
 	ID string
@@ -33,6 +34,10 @@ type APIKey struct {
 	RateLimit *int
 	// RateWindowS 为限流计数窗口秒数；nil 表示未配置。
 	RateWindowS *int
+	// QuotaPerDay 为每日调用上限；nil 表示不限额。
+	QuotaPerDay *int
+	// QuotaPerMonth 为每月调用上限；nil 表示不限额。
+	QuotaPerMonth *int
 	// CreatedAt 为创建时间。
 	CreatedAt time.Time
 }
@@ -51,15 +56,17 @@ func NewAPIKeyRepo(db *gorm.DB) *APIKeyRepo {
 func (r *APIKeyRepo) Create(ctx context.Context, key APIKey) (APIKey, error) {
 	id := newUUID()
 	err := r.db.WithContext(ctx).Model(&apiKeyModel{}).Create(map[string]any{
-		"id":            id,
-		"name":          key.Name,
-		"key_hash":      key.KeyHash,
-		"key_plain":     key.KeyPlain,
-		"key_prefix":    key.KeyPrefix,
-		"enabled":       key.Enabled,
-		"expires_at":    key.ExpiresAt,
-		"rate_limit":    key.RateLimit,
-		"rate_window_s": key.RateWindowS,
+		"id":              id,
+		"name":            key.Name,
+		"key_hash":        key.KeyHash,
+		"key_plain":       key.KeyPlain,
+		"key_prefix":      key.KeyPrefix,
+		"enabled":         key.Enabled,
+		"expires_at":      key.ExpiresAt,
+		"rate_limit":      key.RateLimit,
+		"rate_window_s":   key.RateWindowS,
+		"quota_per_day":   key.QuotaPerDay,
+		"quota_per_month": key.QuotaPerMonth,
 	}).Error
 	if err != nil {
 		return APIKey{}, classifyWrite(err, "API Key 名称已存在："+key.Name, "API Key 不存在")
@@ -113,11 +120,13 @@ func (r *APIKeyRepo) Update(ctx context.Context, key APIKey) (APIKey, error) {
 		return APIKey{}, err
 	}
 	res := r.db.WithContext(ctx).Model(&apiKeyModel{}).Where("id = ?", uid).Updates(map[string]any{
-		"name":          key.Name,
-		"enabled":       key.Enabled,
-		"expires_at":    key.ExpiresAt,
-		"rate_limit":    key.RateLimit,
-		"rate_window_s": key.RateWindowS,
+		"name":            key.Name,
+		"enabled":         key.Enabled,
+		"expires_at":      key.ExpiresAt,
+		"rate_limit":      key.RateLimit,
+		"rate_window_s":   key.RateWindowS,
+		"quota_per_day":   key.QuotaPerDay,
+		"quota_per_month": key.QuotaPerMonth,
 	})
 	if res.Error != nil {
 		return APIKey{}, classifyWrite(res.Error, "API Key 名称已存在："+key.Name, "API Key 不存在")
@@ -163,15 +172,17 @@ func (r *APIKeyRepo) Delete(ctx context.Context, id string) error {
 
 func modelToAPIKey(model apiKeyModel) APIKey {
 	return APIKey{
-		ID:          model.ID,
-		Name:        model.Name,
-		KeyHash:     model.KeyHash,
-		KeyPlain:    model.KeyPlain,
-		KeyPrefix:   model.KeyPrefix,
-		Enabled:     model.Enabled,
-		ExpiresAt:   model.ExpiresAt,
-		RateLimit:   model.RateLimit,
-		RateWindowS: model.RateWindowS,
-		CreatedAt:   model.CreatedAt,
+		ID:            model.ID,
+		Name:          model.Name,
+		KeyHash:       model.KeyHash,
+		KeyPlain:      model.KeyPlain,
+		KeyPrefix:     model.KeyPrefix,
+		Enabled:       model.Enabled,
+		ExpiresAt:     model.ExpiresAt,
+		RateLimit:     model.RateLimit,
+		RateWindowS:   model.RateWindowS,
+		QuotaPerDay:   model.QuotaPerDay,
+		QuotaPerMonth: model.QuotaPerMonth,
+		CreatedAt:     model.CreatedAt,
 	}
 }

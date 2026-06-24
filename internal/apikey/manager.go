@@ -71,6 +71,10 @@ type Metadata struct {
 	RateLimit *int `json:"rateLimit,omitempty"`
 	// RateWindowS 为限流计数窗口秒数；nil 表示未配置。
 	RateWindowS *int `json:"rateWindowS,omitempty"`
+	// QuotaPerDay 为每日调用上限；nil 表示不限额。
+	QuotaPerDay *int `json:"quotaPerDay,omitempty"`
+	// QuotaPerMonth 为每月调用上限；nil 表示不限额。
+	QuotaPerMonth *int `json:"quotaPerMonth,omitempty"`
 	// CreatedAt 为创建时间。
 	CreatedAt time.Time `json:"createdAt"`
 }
@@ -241,14 +245,16 @@ func generateKey() (plaintext string, hash []byte, prefix string, err error) {
 // 避免哈希外泄。
 func toMetadata(row store.APIKey) Metadata {
 	return Metadata{
-		ID:           row.ID,
-		Name:         row.Name,
-		PlaintextKey: row.KeyPlain,
-		KeyPrefix:    row.KeyPrefix,
-		Enabled:      row.Enabled,
-		ExpiresAt:    row.ExpiresAt,
-		RateLimit:    row.RateLimit,
-		RateWindowS:  row.RateWindowS,
-		CreatedAt:    row.CreatedAt,
+		ID:            row.ID,
+		Name:          row.Name,
+		PlaintextKey:  row.KeyPlain,
+		KeyPrefix:     row.KeyPrefix,
+		Enabled:       row.Enabled,
+		ExpiresAt:     row.ExpiresAt,
+		RateLimit:     row.RateLimit,
+		RateWindowS:   row.RateWindowS,
+		QuotaPerDay:   row.QuotaPerDay,
+		QuotaPerMonth: row.QuotaPerMonth,
+		CreatedAt:     row.CreatedAt,
 	}
 }

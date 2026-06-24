@@ -28,6 +28,7 @@ import {
   type APIKey,
   type CreatedAPIKey,
 } from '@/api/apikeys'
+import { apiKeyLimitSummary } from '@/utils/apiKeyLimitSummary'
 
 const { pageSize } = useBreakpoint()
 const { copy } = useClipboard()
@@ -100,7 +101,6 @@ function formatTime(value?: string): string {
 }
 
 function apiKeySearchText(key: APIKey): string {
-  const rateLimit = key.rateLimit && key.rateWindowS ? `限流 ${key.rateLimit}/${key.rateWindowS}s` : '不限流'
   const expires = key.expiresAt === undefined ? '永不过期' : `${formatTime(key.expiresAt)} ${isExpired(key) ? '已过期' : '有效'}`
   return [
     key.name,
@@ -108,7 +108,7 @@ function apiKeySearchText(key: APIKey): string {
     key.keyPrefix,
     key.plaintextKey,
     key.enabled ? '已启用 enabled' : '已停用 disabled',
-    rateLimit,
+    apiKeyLimitSummary(key),
     expires,
   ]
     .join(' ')
@@ -329,10 +329,10 @@ async function copyKey(key: APIKey): Promise<void> {
                   {{ key.enabled ? '已启用' : '已停用' }}
                 </span>
                 <span
-                  v-if="key.rateLimit && key.rateWindowS"
+                  v-if="apiKeyLimitSummary(key) !== '无限制'"
                   class="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-500 dark:bg-gray-800 dark:text-gray-400"
                 >
-                  限流 {{ key.rateLimit }}/{{ key.rateWindowS }}s
+                  {{ apiKeyLimitSummary(key) }}
                 </span>
               </div>
             </div>

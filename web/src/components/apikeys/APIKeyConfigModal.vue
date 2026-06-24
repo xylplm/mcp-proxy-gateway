@@ -27,6 +27,7 @@ import {
 import { getAggregatedTools, type ToolDetail } from '@/api/tools'
 import { useConfirm } from '@/composables/useConfirm'
 import { useToast } from '@/composables/useToast'
+import { apiKeyLimitSummary } from '@/utils/apiKeyLimitSummary'
 import { createOriginalNameMatcher } from '@/utils/rulePreview'
 
 const props = defineProps<{
@@ -219,6 +220,8 @@ async function removeACL(entry: ACLEntry): Promise<void> {
 // ── 限流配置 ──────────────────────────────────────────────────────────────
 const rateLimit = ref<number | null>(null)
 const rateWindowS = ref<number | null>(null)
+const quotaPerDay = ref<number | null>(null)
+const quotaPerMonth = ref<number | null>(null)
 const rateLoading = ref(false)
 const rateSaving = ref(false)
 
@@ -228,6 +231,8 @@ async function loadRateLimit(id: string): Promise<void> {
     const cfg = await getRateLimit(id)
     rateLimit.value = cfg.rateLimit ?? null
     rateWindowS.value = cfg.rateWindowS ?? null
+    quotaPerDay.value = cfg.quotaPerDay ?? null
+    quotaPerMonth.value = cfg.quotaPerMonth ?? null
   } catch (err) {
     showError(err, '加载限流配置失败')
   } finally {
@@ -241,15 +246,21 @@ async function saveRateLimit(): Promise<void> {
   const limit = rateLimit.value
   const windowS = rateWindowS.value
   const bothSet = limit !== null && limit > 0 && windowS !== null && windowS > 0
+  const dayLimit = positiveNumberOrNull(quotaPerDay.value)
+  const monthLimit = positiveNumberOrNull(quotaPerMonth.value)
   rateSaving.value = true
   try {
     const cfg = await updateRateLimit(props.apiKey.id, {
       rateLimit: bothSet ? limit : null,
       rateWindowS: bothSet ? windowS : null,
+      quotaPerDay: dayLimit,
+      quotaPerMonth: monthLimit,
     })
     rateLimit.value = cfg.rateLimit ?? null
     rateWindowS.value = cfg.rateWindowS ?? null
-    showToast(bothSet ? '已保存限流配置' : '已禁用限流')
+    quotaPerDay.value = cfg.quotaPerDay ?? null
+    quotaPerMonth.value = cfg.quotaPerMonth ?? null
+    showToast(apiKeyLimitSummary(cfg) === '无限制' ? '已清空调用限制' : '已保存调用限制')
   } catch (err) {
     showError(err, '保存限流配置失败')
   } finally {
@@ -261,6 +272,12 @@ async function saveRateLimit(): Promise<void> {
 function clearRateLimit(): void {
   rateLimit.value = null
   rateWindowS.value = null
+  quotaPerDay.value = null
+  quotaPerMonth.value = null
+}
+
+function positiveNumberOrNull(value: number | null): number | null {
+  return value !== null && value > 0 ? value : null
 }
 
 // ── 打开时加载全部从属配置 ────────────────────────────────────────────────
@@ -563,8 +580,9 @@ function buildFilterPreviewSummary(rule: APIKeyFilter): APIKeyFilterPreviewSumma
             <div v-if="rateLoading" class="px-1 py-8 text-center text-sm text-gray-400">
               加载中…
             </div>
-            <div v-else class="max-w-md">
-              <div class="mb-4">
+            <div v-else class="max-w-2xl">
+              <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div>
                 <label class="mb-1.5 block text-sm font-medium text-gray-700 dark:text-gray-300">
                   请求上限（次）
                 </label>
@@ -576,7 +594,7 @@ function buildFilterPreviewSummary(rule: APIKeyFilter): APIKeyFilterPreviewSumma
                   class="w-full rounded-lg border border-gray-300 px-3.5 py-2.5 text-sm text-gray-800 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white/90"
                 />
               </div>
-              <div class="mb-3">
+                <div>
                 <label class="mb-1.5 block text-sm font-medium text-gray-700 dark:text-gray-300">
                   计数窗口（秒）
                 </label>
@@ -588,8 +606,33 @@ function buildFilterPreviewSummary(rule: APIKeyFilter): APIKeyFilterPreviewSumma
                   class="w-full rounded-lg border border-gray-300 px-3.5 py-2.5 text-sm text-gray-800 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white/90"
                 />
               </div>
-              <p class="mb-5 text-xs text-gray-400">
-                请求上限与计数窗口须同时为正整数才生效；清空任一字段并保存即禁用限流。
+                <div>
+                  <label class="mb-1.5 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                    每日调用上限
+                  </label>
+                  <input
+                    v-model.number="quotaPerDay"
+                    type="number"
+                    min="0"
+                    placeholder="留空表示不限额"
+                    class="w-full rounded-lg border border-gray-300 px-3.5 py-2.5 text-sm text-gray-800 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white/90"
+                  />
+                </div>
+                <div>
+                  <label class="mb-1.5 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                    每月调用上限
+                  </label>
+                  <input
+                    v-model.number="quotaPerMonth"
+                    type="number"
+                    min="0"
+                    placeholder="留空表示不限额"
+                    class="w-full rounded-lg border border-gray-300 px-3.5 py-2.5 text-sm text-gray-800 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white/90"
+                  />
+                </div>
+              </div>
+              <p class="my-5 text-xs text-gray-400">
+                请求上限与计数窗口须同时为正整数才生效；每日和每月上限独立生效。
               </p>
               <div class="flex items-center gap-3">
                 <button
@@ -605,7 +648,7 @@ function buildFilterPreviewSummary(rule: APIKeyFilter): APIKeyFilterPreviewSumma
                   class="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
                   @click="clearRateLimit"
                 >
-                  清空（禁用限流）
+                  清空全部限制
                 </button>
               </div>
             </div>

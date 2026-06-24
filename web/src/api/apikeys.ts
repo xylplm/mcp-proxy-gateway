@@ -55,6 +55,10 @@ export interface APIKey {
   rateLimit?: number
   /** 限流计数窗口秒数；缺省表示未配置。 */
   rateWindowS?: number
+  /** 每日调用上限；缺省表示不限额。 */
+  quotaPerDay?: number
+  /** 每月调用上限；缺省表示不限额。 */
+  quotaPerMonth?: number
   /** 创建时间（RFC3339）。 */
   createdAt: string
 }
@@ -131,6 +135,10 @@ export interface RateLimitConfig {
   rateLimit?: number
   /** 限流计数窗口秒数；缺省表示未配置。 */
   rateWindowS?: number
+  /** 每日调用上限；缺省表示不限额。 */
+  quotaPerDay?: number
+  /** 每月调用上限；缺省表示不限额。 */
+  quotaPerMonth?: number
 }
 
 /**
@@ -142,6 +150,10 @@ export interface UpdateRateLimitRequest {
   rateLimit: number | null
   /** 限流计数窗口秒数；null 表示未配置。 */
   rateWindowS: number | null
+  /** 每日调用上限；null 表示不限额。 */
+  quotaPerDay: number | null
+  /** 每月调用上限；null 表示不限额。 */
+  quotaPerMonth: number | null
 }
 
 /** 列表响应体：{ apiKeys: [...] }；后端可能返回 null，归一化为空数组。 */

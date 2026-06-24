@@ -19,15 +19,19 @@ const rateLimitKeyPrefix = "mpg:rl:"
 
 // RateCounter 是限流逻辑依赖的计数能力窄接口（Req 21）。
 //
-// 仅声明固定窗口计数实际需要的两个原子操作：Incr 自增计数并返回自增后的值、
-// Expire 为键设置存活时间。以接口而非具体 Redis 客户端依赖，便于在单元测试中以
-// 内存 fake 替换，使核心限流判定可脱离真实 Redis 验证。*redis.Client 经
-// NewRedisRateCounter 适配后满足该接口。
+// 仅声明原子检查并占用多个窗口的能力，使「速率窗口 + 日/月额度」在高并发下不会出现
+// 前一窗口已扣减、后一窗口才发现超额的半成功状态。以接口而非具体 Redis 客户端依赖，
+// 便于在单元测试中以内存 fake 替换，使核心限流判定可脱离真实 Redis 验证。
 type RateCounter interface {
-	// Incr 对 key 计数加一并返回自增后的当前值；键不存在时从 0 起算（首次返回 1）。
-	Incr(ctx context.Context, key string) (int64, error)
-	// Expire 为 key 设置存活时间 ttl，到期后由存储自动清除。
-	Expire(ctx context.Context, key string, ttl time.Duration) error
+	// Reserve 原子检查并占用所有窗口；rejectedIndex 为 1-based 窗口序号。
+	Reserve(ctx context.Context, items []RateReservation) (bool, int, error)
+}
+
+// RateReservation 表示一次请求需要占用的一个计数窗口。
+type RateReservation struct {
+	Key   string
+	Limit int
+	TTL   time.Duration
 }
 
 // redisRateCounter 以 go-redis 客户端实现 RateCounter，是限流计数的生产实现。
@@ -40,14 +44,50 @@ func NewRedisRateCounter(rdb *redis.Client) RateCounter {
 	return redisRateCounter{rdb: rdb}
 }
 
-// Incr 调用 Redis INCR 原子自增并返回自增后的值。
-func (c redisRateCounter) Incr(ctx context.Context, key string) (int64, error) {
-	return c.rdb.Incr(ctx, key).Result()
-}
+var rateReserveScript = redis.NewScript(`
+if #KEYS == 0 then
+	return {1, 0}
+end
+for i = 1, #KEYS do
+	local limit = tonumber(ARGV[(i - 1) * 2 + 1])
+	local raw = redis.call("GET", KEYS[i])
+	local current = 0
+	if raw then
+		current = tonumber(raw)
+		if current == nil then
+			return redis.error_reply("rate counter is not an integer")
+		end
+	end
+	if current >= limit then
+		return {0, i}
+	end
+end
+for i = 1, #KEYS do
+	local ttl = tonumber(ARGV[(i - 1) * 2 + 2])
+	local count = redis.call("INCR", KEYS[i])
+	if count == 1 and ttl > 0 then
+		redis.call("PEXPIRE", KEYS[i], ttl)
+	end
+end
+return {1, 0}
+`)
 
-// Expire 调用 Redis EXPIRE 为键设置存活时间。
-func (c redisRateCounter) Expire(ctx context.Context, key string, ttl time.Duration) error {
-	return c.rdb.Expire(ctx, key, ttl).Err()
+// Reserve 调用 Redis Lua 脚本原子检查并占用所有计数窗口。
+func (c redisRateCounter) Reserve(ctx context.Context, items []RateReservation) (bool, int, error) {
+	keys := make([]string, 0, len(items))
+	args := make([]any, 0, len(items)*2)
+	for _, item := range items {
+		keys = append(keys, item.Key)
+		args = append(args, item.Limit, item.TTL.Milliseconds())
+	}
+	result, err := rateReserveScript.Run(ctx, c.rdb, keys, args...).Int64Slice()
+	if err != nil {
+		return false, 0, err
+	}
+	if len(result) < 2 {
+		return false, 0, fmt.Errorf("API Key 限流计数脚本返回值非法")
+	}
+	return result[0] == 1, int(result[1]), nil
 }
 
 // RateLimiter 实现按 API Key 的固定窗口限流（Req 21）。
@@ -85,6 +125,10 @@ func rateLimitKey(apiKeyID string, windowStart int64) string {
 	return fmt.Sprintf("%s%s:%d", rateLimitKeyPrefix, apiKeyID, windowStart)
 }
 
+func rateQuotaKey(apiKeyID, windowName string, windowStart int64) string {
+	return fmt.Sprintf("%s%s:%s:%d", rateLimitKeyPrefix, apiKeyID, windowName, windowStart)
+}
+
 // Allow 判定携带某 API Key 的请求在给定时刻 now 是否应被受理（Req 21）。
 //
 // 决策顺序：
@@ -96,32 +140,88 @@ func rateLimitKey(apiKeyID string, windowStart int64) string {
 // 降级考量（与工具缓存的 Redis 降级策略一致），计数后端异常时记录告警并放行（fail-open），
 // 避免因 Redis 抖动而拒绝合法流量。
 func (l *RateLimiter) Allow(ctx context.Context, key Metadata, now time.Time) (bool, error) {
-	limit, windowS, active := rateLimitConfig(key)
-	if !active {
-		// 未配置上限或配置非法：不施加限流（Req 21.4）。
-		return true, nil
+	allowed, _, err := l.AllowWithReason(ctx, key, now)
+	return allowed, err
+}
+
+// AllowWithReason 判定请求是否应被受理，并在拒绝时返回面向用户的原因。
+func (l *RateLimiter) AllowWithReason(ctx context.Context, key Metadata, now time.Time) (bool, string, error) {
+	windows := rateWindows(key, now)
+	if len(windows) == 0 {
+		return true, "", nil
+	}
+	reservations := make([]RateReservation, 0, len(windows))
+	for _, w := range windows {
+		reservations = append(reservations, RateReservation{
+			Key:   w.key,
+			Limit: w.limit,
+			TTL:   w.ttl,
+		})
 	}
 
-	start := windowStartUnix(now, windowS)
-	redisKey := rateLimitKey(key.ID, start)
-
-	n, err := l.counter.Incr(ctx, redisKey)
+	allowed, rejectedIndex, err := l.counter.Reserve(ctx, reservations)
 	if err != nil {
-		// 计数后端异常：降级放行，避免基础设施抖动阻断合法请求。
-		l.logger.Warn("限流计数自增失败，降级放行", "apiKeyID", key.ID, "error", err)
-		return true, nil
+		l.logger.Warn("限流计数失败，降级放行", "apiKeyID", key.ID, "error", err)
+		return true, "", nil
 	}
-
-	if n == 1 {
-		// 仅在窗口内首次计数时设置 TTL，使窗口随时间自然滚动（Req 21.3）。
-		if eerr := l.counter.Expire(ctx, redisKey, time.Duration(windowS)*time.Second); eerr != nil {
-			// 设置 TTL 失败不影响本次判定；键最坏情况下不过期，但窗口起点变化后即弃用。
-			l.logger.Warn("限流计数键设置存活时间失败", "apiKeyID", key.ID, "error", eerr)
-		}
+	if allowed {
+		return true, "", nil
 	}
+	if rejectedIndex < 1 || rejectedIndex > len(windows) {
+		rejectedIndex = 1
+	}
+	w := windows[rejectedIndex-1]
+	return false, fmt.Sprintf("%s已用尽，预计 %s 重置", w.label, w.reset.Format(time.RFC3339)), nil
+}
 
-	// 自增后的计数超过上限即为超额（Req 21.2）。
-	return n <= int64(limit), nil
+func rateWindows(key Metadata, now time.Time) []rateWindow {
+	windows := make([]rateWindow, 0, 3)
+	limit, windowS, active := rateLimitConfig(key)
+	if active {
+		startUnix := windowStartUnix(now, windowS)
+		start := time.Unix(startUnix, 0)
+		reset := start.Add(time.Duration(windowS) * time.Second)
+		windows = append(windows, rateWindow{
+			key:   rateLimitKey(key.ID, startUnix),
+			label: "请求频率",
+			limit: limit,
+			reset: reset,
+			ttl:   time.Duration(windowS) * time.Second,
+		})
+	}
+	local := now.UTC()
+	// API Key 周期额度统一按 UTC 自然日/月重置，避免给单个 Key 再引入时区配置负担。
+	if key.QuotaPerDay != nil && *key.QuotaPerDay > 0 {
+		start := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, time.UTC)
+		reset := start.AddDate(0, 0, 1)
+		windows = append(windows, rateWindow{
+			key:   rateQuotaKey(key.ID, "day", start.Unix()),
+			label: "每日调用额度",
+			limit: *key.QuotaPerDay,
+			reset: reset,
+			ttl:   reset.Sub(local).Round(time.Second) + time.Second,
+		})
+	}
+	if key.QuotaPerMonth != nil && *key.QuotaPerMonth > 0 {
+		start := time.Date(local.Year(), local.Month(), 1, 0, 0, 0, 0, time.UTC)
+		reset := start.AddDate(0, 1, 0)
+		windows = append(windows, rateWindow{
+			key:   rateQuotaKey(key.ID, "month", start.Unix()),
+			label: "每月调用额度",
+			limit: *key.QuotaPerMonth,
+			reset: reset,
+			ttl:   reset.Sub(local).Round(time.Second) + time.Second,
+		})
+	}
+	return windows
+}
+
+type rateWindow struct {
+	key   string
+	label string
+	limit int
+	reset time.Time
+	ttl   time.Duration
 }
 
 // rateLimitConfig 解析 API Key 的限流配置，返回上限、窗口秒数与限流是否生效。
@@ -169,7 +269,7 @@ func (l *RateLimiter) Middleware(resolve RateLimitKeyResolver) gin.HandlerFunc {
 			return
 		}
 
-		allowed, err := l.Allow(c.Request.Context(), key, time.Now())
+		allowed, reason, err := l.AllowWithReason(c.Request.Context(), key, time.Now())
 		if err != nil {
 			// Allow 当前不返回错误（计数异常已内部降级放行），此分支为防御性处理。
 			l.logger.Warn("限流判定异常，降级放行", "apiKeyID", key.ID, "error", err)
@@ -178,8 +278,11 @@ func (l *RateLimiter) Middleware(resolve RateLimitKeyResolver) gin.HandlerFunc {
 		}
 
 		if !allowed {
+			if reason == "" {
+				reason = "请求超过该 API Key 的限流或额度上限"
+			}
 			c.AbortWithStatusJSON(http.StatusTooManyRequests,
-				domain.NewError(domain.CodeRateLimited, "请求频率超过该 API Key 的速率上限"))
+				domain.NewError(domain.CodeRateLimited, reason))
 			return
 		}
 

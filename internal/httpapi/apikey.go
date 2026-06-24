@@ -75,6 +75,10 @@ type rateLimitConfigRequest struct {
 	RateLimit *int `json:"rateLimit"`
 	// RateWindowS 为限流计数窗口秒数；nil 表示未配置。
 	RateWindowS *int `json:"rateWindowS"`
+	// QuotaPerDay 为每日调用上限；nil 表示不限额。
+	QuotaPerDay *int `json:"quotaPerDay"`
+	// QuotaPerMonth 为每月调用上限；nil 表示不限额。
+	QuotaPerMonth *int `json:"quotaPerMonth"`
 }
 
 // rateLimitConfigResponse 为限流配置的对外视图，仅暴露限流相关字段，绝不回显密钥哈希。
@@ -85,6 +89,10 @@ type rateLimitConfigResponse struct {
 	RateLimit *int `json:"rateLimit,omitempty"`
 	// RateWindowS 为限流计数窗口秒数；nil 表示未配置。
 	RateWindowS *int `json:"rateWindowS,omitempty"`
+	// QuotaPerDay 为每日调用上限；nil 表示不限额。
+	QuotaPerDay *int `json:"quotaPerDay,omitempty"`
+	// QuotaPerMonth 为每月调用上限；nil 表示不限额。
+	QuotaPerMonth *int `json:"quotaPerMonth,omitempty"`
 }
 
 // registerAPIKeyRoutes 在管理分组下注册 API Key 生命周期、屏蔽规则、ACL 与限流配置端点。
@@ -352,9 +360,11 @@ func (r *Router) getRateLimit(c *gin.Context) {
 		return
 	}
 	respondOK(c, rateLimitConfigResponse{
-		ID:          key.ID,
-		RateLimit:   key.RateLimit,
-		RateWindowS: key.RateWindowS,
+		ID:            key.ID,
+		RateLimit:     key.RateLimit,
+		RateWindowS:   key.RateWindowS,
+		QuotaPerDay:   key.QuotaPerDay,
+		QuotaPerMonth: key.QuotaPerMonth,
 	})
 }
 
@@ -378,6 +388,8 @@ func (r *Router) updateRateLimit(c *gin.Context) {
 	}
 	existing.RateLimit = req.RateLimit
 	existing.RateWindowS = req.RateWindowS
+	existing.QuotaPerDay = req.QuotaPerDay
+	existing.QuotaPerMonth = req.QuotaPerMonth
 	updated, err := r.rateLimitStore.Update(c.Request.Context(), existing)
 	if err != nil {
 		respondError(c, err)
@@ -385,8 +397,10 @@ func (r *Router) updateRateLimit(c *gin.Context) {
 	}
 	r.recordUpdate(c, audit.ResourceAPIKey, c.Param("id"))
 	respondOK(c, rateLimitConfigResponse{
-		ID:          updated.ID,
-		RateLimit:   updated.RateLimit,
-		RateWindowS: updated.RateWindowS,
+		ID:            updated.ID,
+		RateLimit:     updated.RateLimit,
+		RateWindowS:   updated.RateWindowS,
+		QuotaPerDay:   updated.QuotaPerDay,
+		QuotaPerMonth: updated.QuotaPerMonth,
 	})
 }

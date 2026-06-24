@@ -3,18 +3,18 @@ package apikey
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
 
 // fakeCounter 是 RateCounter 的内存实现，用于在不依赖真实 Redis 的情况下测试限流逻辑。
 //
-// 它以 map 模拟 Redis 的 INCR 语义（键不存在时从 0 起算），并记录 Expire 调用次数，
-// 便于断言「仅窗口内首次计数才设置 TTL」。incrErr 可注入以模拟计数后端异常。
+// 它以 map 模拟原子 Reserve 语义，并记录首次计数时设置 TTL 的次数。
 type fakeCounter struct {
 	counts      map[string]int64
 	expireCalls map[string]int
-	incrErr     error
+	reserveErr  error
 }
 
 func newFakeCounter() *fakeCounter {
@@ -24,17 +24,22 @@ func newFakeCounter() *fakeCounter {
 	}
 }
 
-func (f *fakeCounter) Incr(_ context.Context, key string) (int64, error) {
-	if f.incrErr != nil {
-		return 0, f.incrErr
+func (f *fakeCounter) Reserve(_ context.Context, items []RateReservation) (bool, int, error) {
+	if f.reserveErr != nil {
+		return false, 0, f.reserveErr
 	}
-	f.counts[key]++
-	return f.counts[key], nil
-}
-
-func (f *fakeCounter) Expire(_ context.Context, key string, _ time.Duration) error {
-	f.expireCalls[key]++
-	return nil
+	for i, item := range items {
+		if f.counts[item.Key] >= int64(item.Limit) {
+			return false, i + 1, nil
+		}
+	}
+	for _, item := range items {
+		f.counts[item.Key]++
+		if f.counts[item.Key] == 1 && item.TTL > 0 {
+			f.expireCalls[item.Key]++
+		}
+	}
+	return true, 0, nil
 }
 
 // ptrInt 返回指向所给整数的指针，便于构造可选的限流配置字段。
@@ -180,7 +185,7 @@ func TestAllow_NextWindowRecovers(t *testing.T) {
 // TestAllow_CounterErrorFailOpen 验证计数后端异常时降级放行（可用性优先）。
 func TestAllow_CounterErrorFailOpen(t *testing.T) {
 	counter := newFakeCounter()
-	counter.incrErr = errors.New("redis 不可用")
+	counter.reserveErr = errors.New("redis 不可用")
 	limiter := NewRateLimiter(counter, nil)
 	now := time.Unix(1000, 0)
 	key := metaWithLimit("k1", 1, 60)
@@ -192,6 +197,81 @@ func TestAllow_CounterErrorFailOpen(t *testing.T) {
 	if !allowed {
 		t.Fatal("计数后端异常时应降级放行（fail-open），却被拒绝")
 	}
+}
+
+func TestAllow_DailyAndMonthlyQuota(t *testing.T) {
+	counter := newFakeCounter()
+	limiter := NewRateLimiter(counter, nil)
+	now := time.Date(2026, 6, 23, 10, 30, 0, 0, time.UTC)
+	key := Metadata{ID: "k1", QuotaPerDay: ptrInt(2), QuotaPerMonth: ptrInt(3)}
+
+	for i := 0; i < 2; i++ {
+		allowed, reason, err := limiter.AllowWithReason(context.Background(), key, now)
+		if err != nil {
+			t.Fatalf("第 %d 次调用返回错误：%v", i+1, err)
+		}
+		if !allowed {
+			t.Fatalf("每日额度内第 %d 次应放行，reason=%q", i+1, reason)
+		}
+	}
+
+	allowed, reason, err := limiter.AllowWithReason(context.Background(), key, now)
+	if err != nil {
+		t.Fatalf("第三次调用返回错误：%v", err)
+	}
+	if allowed {
+		t.Fatal("每日额度用尽后应拒绝")
+	}
+	if reason == "" || !strings.Contains(reason, "每日调用额度") {
+		t.Fatalf("拒绝原因应说明每日额度，got=%q", reason)
+	}
+}
+
+func TestAllow_MonthlyQuotaDoesNotConsumeEarlierWindows(t *testing.T) {
+	counter := newFakeCounter()
+	limiter := NewRateLimiter(counter, nil)
+	now := time.Date(2026, 6, 23, 10, 30, 0, 0, time.UTC)
+	key := Metadata{
+		ID:            "k1",
+		RateLimit:     ptrInt(10),
+		RateWindowS:   ptrInt(60),
+		QuotaPerDay:   ptrInt(10),
+		QuotaPerMonth: ptrInt(1),
+	}
+
+	if allowed, reason, err := limiter.AllowWithReason(context.Background(), key, now); err != nil || !allowed {
+		t.Fatalf("第一次调用应放行，allowed=%v reason=%q err=%v", allowed, reason, err)
+	}
+	allowed, reason, err := limiter.AllowWithReason(context.Background(), key, now)
+	if err != nil {
+		t.Fatalf("第二次调用返回错误：%v", err)
+	}
+	if allowed {
+		t.Fatal("月度额度用尽后应拒绝")
+	}
+	if !strings.Contains(reason, "每月调用额度") {
+		t.Fatalf("拒绝原因应说明月度额度，got=%q", reason)
+	}
+
+	if got := countWindow(counter, ":day:"); got != 1 {
+		t.Fatalf("月额度拒绝不应继续消耗日额度，got=%d want=1", got)
+	}
+	if got := countWindow(counter, ":month:"); got != 1 {
+		t.Fatalf("月额度拒绝不应继续增加月额度，got=%d want=1", got)
+	}
+	if got := counter.counts[rateLimitKey("k1", windowStartUnix(now, 60))]; got != 1 {
+		t.Fatalf("月额度拒绝不应继续消耗速率窗口，got=%d want=1", got)
+	}
+}
+
+func countWindow(counter *fakeCounter, marker string) int64 {
+	var total int64
+	for key, count := range counter.counts {
+		if strings.Contains(key, marker) {
+			total += count
+		}
+	}
+	return total
 }
 
 // TestWindowStartUnix 验证窗口起点按 floor 对齐到窗口边界。

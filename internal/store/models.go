@@ -102,16 +102,18 @@ type filterRuleMCPUpstreamModel struct {
 func (filterRuleMCPUpstreamModel) TableName() string { return "filter_rule_mcp_upstream" }
 
 type apiKeyModel struct {
-	ID          string     `gorm:"column:id;type:uuid;primaryKey"`
-	Name        string     `gorm:"column:name;type:varchar(100);not null"`
-	KeyHash     []byte     `gorm:"column:key_hash;type:bytea;not null"`
-	KeyPlain    string     `gorm:"column:key_plain;type:text;not null;default:''"`
-	KeyPrefix   string     `gorm:"column:key_prefix;type:varchar(12);not null"`
-	Enabled     bool       `gorm:"column:enabled;type:boolean;not null;default:true"`
-	ExpiresAt   *time.Time `gorm:"column:expires_at;type:timestamptz"`
-	RateLimit   *int       `gorm:"column:rate_limit;type:integer"`
-	RateWindowS *int       `gorm:"column:rate_window_s;type:integer"`
-	CreatedAt   time.Time  `gorm:"column:created_at;type:timestamptz;not null;default:now()"`
+	ID            string     `gorm:"column:id;type:uuid;primaryKey"`
+	Name          string     `gorm:"column:name;type:varchar(100);not null"`
+	KeyHash       []byte     `gorm:"column:key_hash;type:bytea;not null"`
+	KeyPlain      string     `gorm:"column:key_plain;type:text;not null;default:''"`
+	KeyPrefix     string     `gorm:"column:key_prefix;type:varchar(12);not null"`
+	Enabled       bool       `gorm:"column:enabled;type:boolean;not null;default:true"`
+	ExpiresAt     *time.Time `gorm:"column:expires_at;type:timestamptz"`
+	RateLimit     *int       `gorm:"column:rate_limit;type:integer"`
+	RateWindowS   *int       `gorm:"column:rate_window_s;type:integer"`
+	QuotaPerDay   *int       `gorm:"column:quota_per_day;type:integer"`
+	QuotaPerMonth *int       `gorm:"column:quota_per_month;type:integer"`
+	CreatedAt     time.Time  `gorm:"column:created_at;type:timestamptz;not null;default:now()"`
 }
 
 func (apiKeyModel) TableName() string { return "api_key" }
