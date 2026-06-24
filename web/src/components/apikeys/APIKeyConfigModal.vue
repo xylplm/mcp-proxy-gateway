@@ -27,8 +27,11 @@ import {
 import { getAggregatedTools, type ToolDetail } from '@/api/tools'
 import { useConfirm } from '@/composables/useConfirm'
 import { useToast } from '@/composables/useToast'
+import {
+  buildAPIKeyFilterPreview,
+  type APIKeyFilterPreviewSummary,
+} from '@/utils/apiKeyFilterPreview'
 import { apiKeyLimitSummary } from '@/utils/apiKeyLimitSummary'
-import { createOriginalNameMatcher } from '@/utils/rulePreview'
 
 const props = defineProps<{
   /** 目标 API Key；为 null 时不渲染。 */
@@ -66,19 +69,6 @@ const filterBusy = ref(false)
 const toolDetails = ref<ToolDetail[]>([])
 const toolDetailsReady = ref(false)
 
-interface APIKeyFilterPreviewItem {
-  key: string
-  upstreamName: string
-  originalName: string
-  exposedName: string
-}
-
-interface APIKeyFilterPreviewSummary {
-  label: string
-  items: APIKeyFilterPreviewItem[]
-  hiddenCount: number
-}
-
 const filterPreviewSummaries = computed<Record<string, APIKeyFilterPreviewSummary>>(() => {
   const summaries: Record<string, APIKeyFilterPreviewSummary> = {}
   for (const rule of filters.value) {
@@ -86,6 +76,23 @@ const filterPreviewSummaries = computed<Record<string, APIKeyFilterPreviewSummar
   }
   return summaries
 })
+
+const draftFilterPreviewSummary = computed<APIKeyFilterPreviewSummary>(() =>
+  buildAPIKeyFilterPreview(
+    {
+      pattern: newFilterPattern.value,
+      isRegex: newFilterIsRegex.value,
+      enabled: true,
+    },
+    toolDetails.value,
+    toolDetailsReady.value,
+    {
+      emptyLabel: '填写匹配模式后显示预计屏蔽影响',
+      invalidPatternLabel: '正则暂不可用',
+      hitLabel: (count) => `预计屏蔽 ${count} 个来源`,
+    },
+  ),
+)
 
 async function loadFilters(id: string): Promise<void> {
   filtersLoading.value = true
@@ -303,33 +310,7 @@ function filterPreviewSummary(rule: APIKeyFilter): APIKeyFilterPreviewSummary {
 }
 
 function buildFilterPreviewSummary(rule: APIKeyFilter): APIKeyFilterPreviewSummary {
-  if (!rule.enabled) return { label: '规则未启用', items: [], hiddenCount: 0 }
-  if (!toolDetailsReady.value) {
-    return { label: '当前聚合来源暂不可用', items: [], hiddenCount: 0 }
-  }
-
-  const matcher = createOriginalNameMatcher(rule.pattern, rule.isRegex)
-  if (matcher === null) return { label: '当前聚合来源未命中', items: [], hiddenCount: 0 }
-
-  const hits: APIKeyFilterPreviewItem[] = []
-  for (const detail of toolDetails.value) {
-    const sources = detail.sources ?? []
-    for (const source of sources) {
-      if (!matcher(source.originalName)) continue
-      hits.push({
-        key: `${source.upstreamId}:${source.originalName}:${hits.length}`,
-        upstreamName: source.upstreamName,
-        originalName: source.originalName,
-        exposedName: detail.tool.name,
-      })
-    }
-  }
-
-  return {
-    label: hits.length > 0 ? `当前聚合来源命中 ${hits.length} 个` : '当前聚合来源未命中',
-    items: hits.slice(0, 3),
-    hiddenCount: Math.max(0, hits.length - 3),
-  }
+  return buildAPIKeyFilterPreview(rule, toolDetails.value, toolDetailsReady.value)
 }
 </script>
 
@@ -442,6 +423,34 @@ function buildFilterPreviewSummary(rule: APIKeyFilter): APIKeyFilterPreviewSumma
               >
                 添加
               </button>
+            </div>
+            <div
+              v-if="newFilterPattern.trim() !== ''"
+              class="mb-4 rounded-lg border border-warning-200 bg-warning-50 px-2.5 py-2 text-xs text-warning-700 dark:border-warning-500/20 dark:bg-warning-500/10 dark:text-warning-300"
+            >
+              <div class="flex items-center justify-between gap-2">
+                <span>{{ draftFilterPreviewSummary.label }}</span>
+                <span
+                  v-if="draftFilterPreviewSummary.hiddenCount > 0"
+                  class="shrink-0 text-warning-600 dark:text-warning-300"
+                >
+                  +{{ draftFilterPreviewSummary.hiddenCount }}
+                </span>
+              </div>
+              <div v-if="draftFilterPreviewSummary.items.length > 0" class="mt-2 flex flex-wrap gap-1.5">
+                <AppTooltip
+                  v-for="item in draftFilterPreviewSummary.items"
+                  :key="item.key"
+                  :content="`${item.upstreamName} / ${item.originalName}`"
+                  placement="bottom"
+                >
+                  <span
+                    class="inline-flex max-w-full items-center rounded-md bg-white px-1.5 py-0.5 text-[11px] text-warning-700 ring-1 ring-warning-200 dark:bg-white/5 dark:text-warning-200 dark:ring-warning-500/20"
+                  >
+                    <span class="truncate">{{ item.exposedName }} / {{ item.originalName }}</span>
+                  </span>
+                </AppTooltip>
+              </div>
             </div>
 
             <div v-if="filtersLoading" class="rounded-xl border border-gray-200 px-4 py-8 text-center text-sm text-gray-400 dark:border-gray-800">
