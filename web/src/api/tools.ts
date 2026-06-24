@@ -55,6 +55,25 @@ export interface ToolSummary {
   count: number
 }
 
+export interface ToolPlaygroundRequest {
+  apiKeyId?: string
+  name: string
+  args: unknown
+}
+
+export interface ToolPlaygroundResponse {
+  toolName: string
+  apiKeyId?: string
+  latencyMs: number
+  success: boolean
+  isError: boolean
+  content?: unknown
+  errorCode?: string
+  error?: string
+  calledAt: string
+  finishedAt: string
+}
+
 export async function getToolSummary(): Promise<ToolSummary> {
   const res = await request.get<ToolSummaryResponse>('/tools/summary')
   return {
@@ -70,4 +89,11 @@ export async function getAggregatedTools(): Promise<AggregatedToolsResult> {
     count: res.data?.count ?? 0,
     gatewayTools: res.data?.gatewayTools ?? [],
   }
+}
+
+export async function invokeToolPlayground(
+  payload: ToolPlaygroundRequest,
+): Promise<ToolPlaygroundResponse> {
+  const res = await request.post<ToolPlaygroundResponse>('/tools/playground', payload)
+  return res.data
 }

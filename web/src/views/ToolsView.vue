@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import AdminLayout from '@/components/layout/AdminLayout.vue'
 import PageBreadcrumb from '@/components/common/PageBreadcrumb.vue'
+import ToolPlaygroundPanel from '@/components/tools/ToolPlaygroundPanel.vue'
 import { getAggregatedTools, type ToolDef, type ToolDetail, type ToolSource } from '@/api/tools'
 import type { UpstreamRateLimits } from '@/api/rateLimits'
 import { RefreshIcon } from '@/icons'
@@ -532,6 +533,8 @@ onMounted(() => {
                 </p>
               </div>
             </div>
+
+            <ToolPlaygroundPanel :tool-name="selectedToolDetail.tool.name" />
 
             <details class="mt-4 rounded-lg bg-gray-50 p-3 dark:bg-white/[0.03]">
               <summary class="cursor-pointer text-xs font-medium text-gray-700 dark:text-gray-300">

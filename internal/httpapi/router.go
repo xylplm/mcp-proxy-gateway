@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -83,6 +84,7 @@ type UpstreamTester interface {
 type AggregationToolService interface {
 	BuildToolSet(ctx context.Context, apiKeyID string) ([]domain.ToolDef, error)
 	BuildToolDetails(ctx context.Context, apiKeyID string) ([]domain.ToolDetail, error)
+	InvokeTool(ctx context.Context, apiKeyID, exposedName string, args json.RawMessage) (domain.ToolResult, error)
 }
 
 // RuleValidator 是保存前校验别名/屏蔽规则的窄接口（Req 8.9、9.7、9.8、13.4）。
