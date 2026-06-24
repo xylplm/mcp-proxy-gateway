@@ -95,6 +95,8 @@ type RuleValidator interface {
 	ValidateAlias(r domain.AliasRule) error
 	// ValidateFilter 校验屏蔽规则（正则合法性、模式长度 1-200）。
 	ValidateFilter(r domain.FilterRule) error
+	// ValidateToolPolicy 校验工具策略规则。
+	ValidateToolPolicy(r domain.ToolPolicyRule) error
 }
 
 // AliasStore 是别名规则管理依赖的仓储窄接口（Req 8.1）。
@@ -119,6 +121,17 @@ type FilterMCPStore interface {
 	ListByUpstream(ctx context.Context, upstreamID string) ([]store.FilterMCPRow, error)
 	Count(ctx context.Context) (int, error)
 	Update(ctx context.Context, row store.FilterMCPRow) (store.FilterMCPRow, error)
+	SetEnabled(ctx context.Context, id string, enabled bool) error
+	Delete(ctx context.Context, id string) error
+}
+
+// ToolPolicyStore 是工具策略规则管理依赖的仓储窄接口。
+type ToolPolicyStore interface {
+	Create(ctx context.Context, rule domain.ToolPolicyRule) (domain.ToolPolicyRule, error)
+	Get(ctx context.Context, id string) (domain.ToolPolicyRule, error)
+	List(ctx context.Context) ([]domain.ToolPolicyRule, error)
+	Count(ctx context.Context) (int, error)
+	Update(ctx context.Context, rule domain.ToolPolicyRule) (domain.ToolPolicyRule, error)
 	SetEnabled(ctx context.Context, id string, enabled bool) error
 	Delete(ctx context.Context, id string) error
 }
@@ -322,6 +335,8 @@ type Router struct {
 	aliasStore AliasStore
 	// filterMCPStore 为 MCP 级屏蔽规则仓储。
 	filterMCPStore FilterMCPStore
+	// toolPolicyStore 为工具策略规则仓储。
+	toolPolicyStore ToolPolicyStore
 	// apiKeys 为 API Key 生命周期管理应用服务。
 	apiKeys APIKeyService
 	// apiKeyFilters 为 API Key 级屏蔽规则管理应用服务。
@@ -365,6 +380,7 @@ type Deps struct {
 	RuleValidator   RuleValidator
 	AliasStore      AliasStore
 	FilterMCPStore  FilterMCPStore
+	ToolPolicyStore ToolPolicyStore
 	APIKeys         APIKeyService
 	APIKeyFilters   APIKeyFilterService
 	ACLStore        ACLStore
@@ -394,6 +410,7 @@ func NewRouter(d Deps) *Router {
 		ruleValidator:   d.RuleValidator,
 		aliasStore:      d.AliasStore,
 		filterMCPStore:  d.FilterMCPStore,
+		toolPolicyStore: d.ToolPolicyStore,
 		apiKeys:         d.APIKeys,
 		apiKeyFilters:   d.APIKeyFilters,
 		aclStore:        d.ACLStore,

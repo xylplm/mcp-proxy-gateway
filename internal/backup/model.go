@@ -33,6 +33,8 @@ type BusinessConfig struct {
 	AliasRules []domain.AliasRule `json:"aliasRules,omitempty"`
 	// MCPFilterRules 为独立管理的全部 MCP 级屏蔽规则，规则自身携带作用范围。
 	MCPFilterRules []domain.FilterRule `json:"mcpFilterRules,omitempty"`
+	// ToolPolicyRules 为独立管理的全部工具策略规则。
+	ToolPolicyRules []domain.ToolPolicyRule `json:"toolPolicyRules,omitempty"`
 	// APIKeys 为全部 API Key 元数据及其从属的屏蔽规则与来源白名单。
 	APIKeys []APIKeyEntry `json:"apiKeys"`
 }

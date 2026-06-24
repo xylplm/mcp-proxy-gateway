@@ -138,7 +138,7 @@ export function toolRiskTags(detail: ToolDetail): ToolRiskTag[] {
   if (nameActions.delete || descriptionActions.delete) tags.push(riskMeta.delete)
   if (nameActions.write || descriptionActions.write) tags.push(riskMeta.write)
   if (nameActions.send || descriptionActions.send) tags.push(riskMeta.send)
-  return tags
+  return mergeCustomRiskTags(tags, detail.policy?.riskTags ?? [])
 }
 
 export function highestRiskLevel(tags: ToolRiskTag[]): ToolRiskLevel | null {
@@ -208,6 +208,20 @@ function hasDescriptionAction(descriptions: string[], patterns: RegExp[]): boole
 
 function hasDescriptionObject(descriptions: string[], patterns: RegExp[]): boolean {
   return descriptions.some((description) => patterns.some((pattern) => pattern.test(description)))
+}
+
+function mergeCustomRiskTags(tags: ToolRiskTag[], customTags: string[]): ToolRiskTag[] {
+  const out = [...tags]
+  const seen = new Set(out.map((tag) => tag.key))
+  for (const raw of customTags) {
+    const label = raw.trim()
+    if (label === '') continue
+    const key = `custom:${label}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push({ key, label, level: 'low' })
+  }
+  return out
 }
 
 function zhActionPattern(words: string): RegExp {

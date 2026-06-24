@@ -85,6 +85,15 @@ func (a apiKeyFilterListerAdapter) ListAPIKeyFiltersByAPIKey(ctx context.Context
 	return rules, nil
 }
 
+// toolPolicyListerAdapter 把 *store.ToolPolicyRepo 适配为 aggregation.ToolPolicyLister。
+type toolPolicyListerAdapter struct {
+	repo *store.ToolPolicyRepo
+}
+
+func (a toolPolicyListerAdapter) ListToolPolicies(ctx context.Context) ([]domain.ToolPolicyRule, error) {
+	return a.repo.List(ctx)
+}
+
 // --- 连通性探测适配器（GORM/redis → health.Pinger）---
 
 // pinger 把 GORM PG 连接与 Redis 客户端适配为 health.Pinger，供启动连通性探测与详细健康端点复用。

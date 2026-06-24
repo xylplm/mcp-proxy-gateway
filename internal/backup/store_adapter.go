@@ -54,6 +54,12 @@ func (a *StoreAdapter) ExportBusiness(ctx context.Context) (BusinessConfig, erro
 		bc.MCPFilterRules = append(bc.MCPFilterRules, fr.FilterRule)
 	}
 
+	toolPolicies, err := a.repos.ToolPolicy.List(ctx)
+	if err != nil {
+		return BusinessConfig{}, err
+	}
+	bc.ToolPolicyRules = toolPolicies
+
 	keys, err := a.repos.APIKey.List(ctx)
 	if err != nil {
 		return BusinessConfig{}, err
@@ -112,6 +118,15 @@ func (a *StoreAdapter) importBusiness(ctx context.Context, bc BusinessConfig) er
 			return err
 		}
 	}
+	existingPolicies, err := a.repos.ToolPolicy.List(ctx)
+	if err != nil {
+		return err
+	}
+	for _, policy := range existingPolicies {
+		if err := a.repos.ToolPolicy.Delete(ctx, policy.ID); err != nil {
+			return err
+		}
+	}
 	existingUpstreams, err := a.repos.Upstream.List(ctx)
 	if err != nil {
 		return err
@@ -153,6 +168,12 @@ func (a *StoreAdapter) importBusiness(ctx context.Context, bc BusinessConfig) er
 		fr.ID = ""
 		fr.UpstreamIDs = remapIDs(fr.UpstreamIDs, upstreamIDMap)
 		if _, err := a.repos.FilterMCP.Create(ctx, store.FilterMCPRow{FilterRule: fr}); err != nil {
+			return err
+		}
+	}
+	for _, policy := range bc.ToolPolicyRules {
+		policy.ID = ""
+		if _, err := a.repos.ToolPolicy.Create(ctx, policy); err != nil {
 			return err
 		}
 	}

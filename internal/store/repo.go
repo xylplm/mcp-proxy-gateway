@@ -32,6 +32,8 @@ type Repositories struct {
 	Alias *AliasRepo
 	// FilterMCP 为 MCP 级屏蔽规则仓储。
 	FilterMCP *FilterMCPRepo
+	// ToolPolicy 为工具策略规则仓储。
+	ToolPolicy *ToolPolicyRepo
 	// FilterAPIKey 为 API Key 级屏蔽规则仓储。
 	FilterAPIKey *FilterAPIKeyRepo
 	// APIKey 为 API Key 元数据仓储。
@@ -55,6 +57,7 @@ func NewRepositories(db *gorm.DB) *Repositories {
 		Upstream:     NewUpstreamRepo(db),
 		Alias:        NewAliasRepo(db),
 		FilterMCP:    NewFilterMCPRepo(db),
+		ToolPolicy:   NewToolPolicyRepo(db),
 		FilterAPIKey: NewFilterAPIKeyRepo(db),
 		APIKey:       NewAPIKeyRepo(db),
 		ACL:          NewACLRepo(db),

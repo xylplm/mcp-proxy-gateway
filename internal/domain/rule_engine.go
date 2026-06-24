@@ -15,4 +15,6 @@ type Rule_Engine interface {
 	ValidateAlias(r AliasRule) error
 	// ValidateFilter 在保存前校验屏蔽规则。
 	ValidateFilter(r FilterRule) error
+	// ValidateToolPolicy 在保存前校验工具策略规则。
+	ValidateToolPolicy(r ToolPolicyRule) error
 }

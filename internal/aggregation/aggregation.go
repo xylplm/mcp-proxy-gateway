@@ -2,10 +2,13 @@ package aggregation
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
+	"sort"
 	"sync"
 	"time"
 
@@ -90,6 +93,11 @@ type APIKeyFilterLister interface {
 	ListAPIKeyFiltersByAPIKey(ctx context.Context, apiKeyID string) ([]domain.FilterRule, error)
 }
 
+// ToolPolicyLister 读取按对外工具名匹配的工具策略规则。
+type ToolPolicyLister interface {
+	ListToolPolicies(ctx context.Context) ([]domain.ToolPolicyRule, error)
+}
+
 // Service 是 domain.Aggregation_Service 的实现，编排聚合管线并（后续任务）负责调用路由。
 //
 // 依赖通过构造函数注入，全部为窄接口与领域接口，不直接耦合具体存储类型：
@@ -107,6 +115,7 @@ type Service struct {
 	aliases       AliasLister
 	mcpFilters    MCPFilterLister
 	apiKeyFilters APIKeyFilterLister
+	toolPolicies  ToolPolicyLister
 	// upstreamConfigs 保存最近一次构建管线读取到的上游配置，供路由选择读取限流配置。
 	upstreamConfigs   map[string]domain.UpstreamConfig
 	upstreamConfigsMu sync.RWMutex
@@ -115,6 +124,8 @@ type Service struct {
 	routingMu       sync.RWMutex
 	roundRobin      map[string]uint64
 	roundRobinMu    sync.Mutex
+	resultCache     map[string]cachedToolResult
+	resultCacheMu   sync.Mutex
 	quota           *QuotaManager
 	sourceFailures  map[string]sourceFailureState
 	sourceFailureMu sync.Mutex
@@ -139,11 +150,17 @@ type Service struct {
 const (
 	defaultSourceFailureThreshold = 3
 	defaultSourceFailureCooldown  = 30 * time.Second
+	maxResultCacheEntries         = 512
 )
 
 type sourceFailureState struct {
 	Consecutive    int
 	SuspendedUntil time.Time
+}
+
+type cachedToolResult struct {
+	result    domain.ToolResult
+	expiresAt time.Time
 }
 
 // 编译期断言：Service 必须满足 domain.Aggregation_Service 接口契约。
@@ -157,7 +174,11 @@ func NewService(
 	aliases AliasLister,
 	mcpFilters MCPFilterLister,
 	apiKeyFilters APIKeyFilterLister,
+	toolPolicies ToolPolicyLister,
 ) *Service {
+	if engine == nil {
+		engine = domain.NewRuleEngine()
+	}
 	return &Service{
 		cache:                  cache,
 		engine:                 engine,
@@ -165,9 +186,11 @@ func NewService(
 		aliases:                aliases,
 		mcpFilters:             mcpFilters,
 		apiKeyFilters:          apiKeyFilters,
+		toolPolicies:           toolPolicies,
 		upstreamConfigs:        make(map[string]domain.UpstreamConfig),
 		routingStrategy:        domain.ToolRoutingRoundRobin,
 		roundRobin:             make(map[string]uint64),
+		resultCache:            make(map[string]cachedToolResult),
 		sourceFailures:         make(map[string]sourceFailureState),
 		sourceFailureThreshold: defaultSourceFailureThreshold,
 		sourceFailureCooldown:  defaultSourceFailureCooldown,
@@ -261,6 +284,10 @@ func (s *Service) BuildToolDetails(ctx context.Context, apiKeyID string) ([]doma
 	if err != nil {
 		return nil, err
 	}
+	policies, err := s.listToolPolicies(ctx)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]domain.ToolDetail, 0, len(tools))
 	for _, tool := range tools {
 		entry := reverse[tool.Name]
@@ -303,7 +330,11 @@ func (s *Service) BuildToolDetails(ctx context.Context, apiKeyID string) ([]doma
 				RateLimits:          cfg.RateLimits,
 			})
 		}
-		out = append(out, domain.ToolDetail{Tool: tool, Sources: sources})
+		var policyView *domain.ToolPolicyView
+		if policy, ok := s.matchToolPolicy(policies, tool.Name); ok {
+			policyView = toolPolicyView(policy)
+		}
+		out = append(out, domain.ToolDetail{Tool: tool, Sources: sources, Policy: policyView})
 	}
 	return out, nil
 }
@@ -345,6 +376,18 @@ func (s *Service) InvokeTool(ctx context.Context, apiKeyID, exposedName string, 
 		return domain.ToolResult{}, domain.NewError(domain.CodeToolNotFound, "工具不存在于当前可见聚合工具集合中")
 	}
 
+	policy, hasPolicy, err := s.resolveToolPolicy(ctx, exposedName)
+	if err != nil {
+		log.Warn("读取工具策略失败，调用未转发", "exposedName", exposedName, "apiKeyID", apiKeyID, "error", err)
+		return domain.ToolResult{}, err
+	}
+	if hasPolicy && policy.CacheEnabled && policy.CacheTTLSeconds > 0 {
+		if cached, ok := s.getCachedToolResult(apiKeyID, exposedName, args); ok {
+			log.Debug("工具调用命中策略缓存", "exposedName", exposedName, "apiKeyID", apiKeyID)
+			return cached, nil
+		}
+	}
+
 	// 步骤 3-4：命中——反向映射已还原 (UpstreamID, OriginalName)，经窄接口透传转发。
 	// invoker 未注入时（仅未接线装配或单元测试）返回防御性占位错误；可见性校验在此之前已完整执行。
 	if s.invoker == nil {
@@ -352,7 +395,7 @@ func (s *Service) InvokeTool(ctx context.Context, apiKeyID, exposedName string, 
 		return domain.ToolResult{}, domain.ErrNotImplemented
 	}
 
-	candidate, err := s.selectCandidate(ctx, entry)
+	candidate, err := s.selectCandidate(ctx, entry, policy)
 	if err != nil {
 		log.Warn("工具来源选择失败，调用未转发", "exposedName", exposedName, "apiKeyID", apiKeyID, "error", err)
 		return domain.ToolResult{}, err
@@ -372,12 +415,15 @@ func (s *Service) InvokeTool(ctx context.Context, apiKeyID, exposedName string, 
 		log.Warn("工具调用上游失败", "exposedName", exposedName, "upstreamID", candidate.UpstreamID, "latencyMS", int(time.Since(startedAt).Milliseconds()), "error", callErr)
 	} else {
 		log.Debug("工具调用完成", "exposedName", exposedName, "upstreamID", candidate.UpstreamID, "latencyMS", int(time.Since(startedAt).Milliseconds()), "isError", result.IsError, "mode", mode)
+		if hasPolicy && policy.CacheEnabled && policy.CacheTTLSeconds > 0 && !result.IsError {
+			s.setCachedToolResult(apiKeyID, exposedName, args, result, time.Duration(policy.CacheTTLSeconds)*time.Second)
+		}
 	}
 
 	return result, callErr
 }
 
-func (s *Service) selectCandidate(ctx context.Context, entry ReverseEntry) (ToolCandidate, error) {
+func (s *Service) selectCandidate(ctx context.Context, entry ReverseEntry, policy domain.ToolPolicyRule) (ToolCandidate, error) {
 	candidates := make([]ToolCandidate, 0, len(entry.Candidates))
 	for _, c := range entry.Candidates {
 		if c.Compatible {
@@ -388,6 +434,9 @@ func (s *Service) selectCandidate(ctx context.Context, entry ReverseEntry) (Tool
 		return ToolCandidate{}, domain.NewError(domain.CodeToolNotFound, "工具没有可兼容调用的上游来源")
 	}
 	strategy := s.currentRoutingStrategy()
+	if domain.ValidToolRoutingStrategy(policy.RoutingStrategy) {
+		strategy = policy.RoutingStrategy
+	}
 	start := 0
 	if strategy == domain.ToolRoutingRoundRobin && len(candidates) > 1 {
 		s.roundRobinMu.Lock()
@@ -446,6 +495,124 @@ func (s *Service) selectCandidate(ctx context.Context, entry ReverseEntry) (Tool
 		return ToolCandidate{}, domain.NewError(domain.CodeRateLimited, lastReason)
 	}
 	return ToolCandidate{}, domain.NewError(domain.CodeRateLimited, lastReason)
+}
+
+func (s *Service) resolveToolPolicy(ctx context.Context, exposedName string) (domain.ToolPolicyRule, bool, error) {
+	policies, err := s.listToolPolicies(ctx)
+	if err != nil {
+		return domain.ToolPolicyRule{}, false, err
+	}
+	policy, ok := s.matchToolPolicy(policies, exposedName)
+	return policy, ok, nil
+}
+
+func (s *Service) listToolPolicies(ctx context.Context) ([]domain.ToolPolicyRule, error) {
+	if s.toolPolicies == nil {
+		return nil, nil
+	}
+	policies, err := s.toolPolicies.ListToolPolicies(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]domain.ToolPolicyRule, 0, len(policies))
+	for _, policy := range policies {
+		if !policy.Enabled {
+			continue
+		}
+		out = append(out, policy)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return out[i].SortOrder < out[j].SortOrder
+	})
+	return out, nil
+}
+
+func (s *Service) matchToolPolicy(policies []domain.ToolPolicyRule, exposedName string) (domain.ToolPolicyRule, bool) {
+	for _, policy := range policies {
+		matched, err := s.engine.Match(policy.Pattern, policy.IsRegex, exposedName)
+		if err != nil {
+			continue
+		}
+		if matched {
+			return policy, true
+		}
+	}
+	return domain.ToolPolicyRule{}, false
+}
+
+func toolPolicyView(policy domain.ToolPolicyRule) *domain.ToolPolicyView {
+	return &domain.ToolPolicyView{
+		RuleID:          policy.ID,
+		Pattern:         policy.Pattern,
+		RoutingStrategy: policy.RoutingStrategy,
+		CacheEnabled:    policy.CacheEnabled,
+		CacheTTLSeconds: policy.CacheTTLSeconds,
+		RiskTags:        append([]string(nil), policy.RiskTags...),
+	}
+}
+
+func (s *Service) getCachedToolResult(apiKeyID, exposedName string, args json.RawMessage) (domain.ToolResult, bool) {
+	key := toolResultCacheKey(apiKeyID, exposedName, args)
+	now := s.currentTime()
+	s.resultCacheMu.Lock()
+	defer s.resultCacheMu.Unlock()
+	entry, ok := s.resultCache[key]
+	if !ok {
+		return domain.ToolResult{}, false
+	}
+	if !entry.expiresAt.After(now) {
+		delete(s.resultCache, key)
+		return domain.ToolResult{}, false
+	}
+	return cloneToolResult(entry.result), true
+}
+
+func (s *Service) setCachedToolResult(apiKeyID, exposedName string, args json.RawMessage, result domain.ToolResult, ttl time.Duration) {
+	if ttl <= 0 {
+		return
+	}
+	key := toolResultCacheKey(apiKeyID, exposedName, args)
+	s.resultCacheMu.Lock()
+	defer s.resultCacheMu.Unlock()
+	if len(s.resultCache) >= maxResultCacheEntries {
+		s.evictExpiredOrOldestCachedResult()
+	}
+	s.resultCache[key] = cachedToolResult{
+		result:    cloneToolResult(result),
+		expiresAt: s.currentTime().Add(ttl),
+	}
+}
+
+func (s *Service) evictExpiredOrOldestCachedResult() {
+	now := s.currentTime()
+	var oldestKey string
+	var oldest time.Time
+	for key, entry := range s.resultCache {
+		if !entry.expiresAt.After(now) {
+			delete(s.resultCache, key)
+			return
+		}
+		if oldestKey == "" || entry.expiresAt.Before(oldest) {
+			oldestKey = key
+			oldest = entry.expiresAt
+		}
+	}
+	if oldestKey != "" {
+		delete(s.resultCache, oldestKey)
+	}
+}
+
+func toolResultCacheKey(apiKeyID, exposedName string, args json.RawMessage) string {
+	sum := sha256.Sum256(args)
+	return apiKeyID + "|" + exposedName + "|" + hex.EncodeToString(sum[:])
+}
+
+func cloneToolResult(result domain.ToolResult) domain.ToolResult {
+	out := result
+	if result.Content != nil {
+		out.Content = append(json.RawMessage(nil), result.Content...)
+	}
+	return out
 }
 
 func (s *Service) sourceTemporarilyDegraded(c ToolCandidate) (bool, string) {

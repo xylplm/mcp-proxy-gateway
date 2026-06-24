@@ -57,6 +57,18 @@ type filterRuleRequest struct {
 	SortOrder int `json:"sortOrder"`
 }
 
+// toolPolicyRuleRequest 为创建/更新工具策略规则的请求体。
+type toolPolicyRuleRequest struct {
+	Pattern         string   `json:"pattern"`
+	IsRegex         bool     `json:"isRegex"`
+	Enabled         bool     `json:"enabled"`
+	SortOrder       int      `json:"sortOrder"`
+	RoutingStrategy string   `json:"routingStrategy"`
+	CacheEnabled    bool     `json:"cacheEnabled"`
+	CacheTTLSeconds int      `json:"cacheTtlSeconds"`
+	RiskTags        []string `json:"riskTags"`
+}
+
 // registerRuleRoutes 在管理分组下注册别名与 MCP 级屏蔽规则管理端点。
 func (r *Router) registerRuleRoutes(g *gin.RouterGroup) {
 	// 别名规则：规则独立管理，作用范围支持全部上游或指定多个上游。
@@ -72,6 +84,14 @@ func (r *Router) registerRuleRoutes(g *gin.RouterGroup) {
 	g.POST("/filters/:ruleId/enable", r.enableMCPFilter)
 	g.POST("/filters/:ruleId/disable", r.disableMCPFilter)
 	g.DELETE("/filters/:ruleId", r.deleteMCPFilter)
+
+	// 工具策略规则：按对外工具名动态匹配，覆盖路由/缓存/提示标签。
+	g.GET("/tool-policies", r.listToolPolicies)
+	g.POST("/tool-policies", r.createToolPolicy)
+	g.PUT("/tool-policies/:ruleId", r.updateToolPolicy)
+	g.POST("/tool-policies/:ruleId/enable", r.enableToolPolicy)
+	g.POST("/tool-policies/:ruleId/disable", r.disableToolPolicy)
+	g.DELETE("/tool-policies/:ruleId", r.deleteToolPolicy)
 }
 
 // listAliases 返回全部别名规则（Req 8.1）。
@@ -334,4 +354,122 @@ func (r *Router) deleteMCPFilter(c *gin.Context) {
 	}
 	r.recordDelete(c, audit.ResourceRule, c.Param("ruleId"))
 	respondNoContent(c)
+}
+
+func (r *Router) listToolPolicies(c *gin.Context) {
+	if r.toolPolicyStore == nil {
+		respondServiceUnavailable(c, "工具策略服务未就绪")
+		return
+	}
+	rules, err := r.toolPolicyStore.List(c.Request.Context())
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	respondOK(c, gin.H{"toolPolicies": rules})
+}
+
+func (r *Router) createToolPolicy(c *gin.Context) {
+	if r.toolPolicyStore == nil || r.ruleValidator == nil {
+		respondServiceUnavailable(c, "工具策略服务未就绪")
+		return
+	}
+	var req toolPolicyRuleRequest
+	if !bindJSON(c, &req) {
+		return
+	}
+	rule := toolPolicyFromRequest(req)
+	if err := r.ruleValidator.ValidateToolPolicy(rule); err != nil {
+		respondError(c, err)
+		return
+	}
+	current, err := r.toolPolicyStore.Count(c.Request.Context())
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	if current >= domain.MaxToolPolicyRules {
+		respondError(c, domain.NewValidationError("工具策略规则数量已达上限", map[string]string{
+			"count": "工具策略规则最多维护 100 条",
+		}))
+		return
+	}
+	created, err := r.toolPolicyStore.Create(c.Request.Context(), rule)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	r.recordCreate(c, audit.ResourceRule, req.Pattern)
+	respondCreated(c, created)
+}
+
+func (r *Router) updateToolPolicy(c *gin.Context) {
+	if r.toolPolicyStore == nil || r.ruleValidator == nil {
+		respondServiceUnavailable(c, "工具策略服务未就绪")
+		return
+	}
+	var req toolPolicyRuleRequest
+	if !bindJSON(c, &req) {
+		return
+	}
+	rule := toolPolicyFromRequest(req)
+	rule.ID = c.Param("ruleId")
+	if err := r.ruleValidator.ValidateToolPolicy(rule); err != nil {
+		respondError(c, err)
+		return
+	}
+	updated, err := r.toolPolicyStore.Update(c.Request.Context(), rule)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	r.recordUpdate(c, audit.ResourceRule, c.Param("ruleId"))
+	respondOK(c, updated)
+}
+
+func (r *Router) enableToolPolicy(c *gin.Context) {
+	r.setToolPolicyEnabled(c, true)
+}
+
+func (r *Router) disableToolPolicy(c *gin.Context) {
+	r.setToolPolicyEnabled(c, false)
+}
+
+func (r *Router) setToolPolicyEnabled(c *gin.Context, enabled bool) {
+	if r.toolPolicyStore == nil {
+		respondServiceUnavailable(c, "工具策略服务未就绪")
+		return
+	}
+	if err := r.toolPolicyStore.SetEnabled(c.Request.Context(), c.Param("ruleId"), enabled); err != nil {
+		respondError(c, err)
+		return
+	}
+	r.recordUpdate(c, audit.ResourceRule, c.Param("ruleId"))
+	respondOK(c, gin.H{"id": c.Param("ruleId"), "enabled": enabled})
+}
+
+func (r *Router) deleteToolPolicy(c *gin.Context) {
+	if r.toolPolicyStore == nil {
+		respondServiceUnavailable(c, "工具策略服务未就绪")
+		return
+	}
+	if err := r.toolPolicyStore.Delete(c.Request.Context(), c.Param("ruleId")); err != nil {
+		respondError(c, err)
+		return
+	}
+	r.recordDelete(c, audit.ResourceRule, c.Param("ruleId"))
+	respondNoContent(c)
+}
+
+func toolPolicyFromRequest(req toolPolicyRuleRequest) domain.ToolPolicyRule {
+	return domain.ToolPolicyRule{
+		Pattern:         req.Pattern,
+		IsRegex:         req.IsRegex,
+		Enabled:         req.Enabled,
+		SortOrder:       req.SortOrder,
+		RoutingStrategy: domain.ToolRoutingStrategy(req.RoutingStrategy),
+		CacheEnabled:    req.CacheEnabled,
+		CacheTTLSeconds: req.CacheTTLSeconds,
+		RiskTags:        req.RiskTags,
+	}
 }

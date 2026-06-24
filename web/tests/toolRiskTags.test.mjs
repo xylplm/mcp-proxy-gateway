@@ -157,3 +157,20 @@ test('does not let a read-only alias hide a mutating original name', () => {
     ['delete'],
   )
 })
+
+test('merges custom policy risk tags without raising severity', () => {
+  const item = detail({ name: 'read_file', description: '读取文件内容' })
+  item.policy = {
+    ruleId: 'policy-1',
+    pattern: 'read_file',
+    cacheEnabled: false,
+    riskTags: ['内部数据', '内部数据'],
+  }
+
+  const tags = toolRiskTags(item)
+  assert.deepEqual(
+    tags.map((tag) => tag.key),
+    ['custom:内部数据'],
+  )
+  assert.equal(highestRiskLevel(tags), 'low')
+})

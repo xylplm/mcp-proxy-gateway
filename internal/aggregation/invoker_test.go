@@ -70,6 +70,14 @@ func (f *invFakeAPIKeyFilters) ListAPIKeyFiltersByAPIKey(_ context.Context, apiK
 	return f.byAPIKey[apiKeyID], nil
 }
 
+type invFakeToolPolicies struct {
+	rules []domain.ToolPolicyRule
+}
+
+func (f *invFakeToolPolicies) ListToolPolicies(_ context.Context) ([]domain.ToolPolicyRule, error) {
+	return f.rules, nil
+}
+
 // invRecordingInvoker 是 UpstreamInvoker 的内存假实现，记录最近一次转发调用的参数，
 // 并可返回预置结果，用于断言「以原始参数透传」与「结果原样返回」。
 type invRecordingInvoker struct {
@@ -110,7 +118,7 @@ func invNewService(
 	mcpFilters MCPFilterLister,
 	apiKeyFilters APIKeyFilterLister,
 ) *Service {
-	return NewService(cache, domain.NewRuleEngine(), upstreams, aliases, mcpFilters, apiKeyFilters)
+	return NewService(cache, domain.NewRuleEngine(), upstreams, aliases, mcpFilters, apiKeyFilters, &invFakeToolPolicies{})
 }
 
 // TestInvokeToolHitForwardsWithOriginalName 验证：命中可见集合时，InvokeTool 按反向映射

@@ -21,6 +21,7 @@ type backupPreviewResponse struct {
 	UpstreamCount         int    `json:"upstreamCount"`
 	AliasRuleCount        int    `json:"aliasRuleCount"`
 	MCPFilterRuleCount    int    `json:"mcpFilterRuleCount"`
+	ToolPolicyRuleCount   int    `json:"toolPolicyRuleCount"`
 	APIKeyCount           int    `json:"apiKeyCount"`
 	APIKeyFilterRuleCount int    `json:"apiKeyFilterRuleCount"`
 	ACLCount              int    `json:"aclCount"`
@@ -120,12 +121,13 @@ func parseBackupContent(content string) (backup.Backup, error) {
 
 func previewBackup(b backup.Backup) backupPreviewResponse {
 	resp := backupPreviewResponse{
-		Version:            b.Version,
-		UpstreamCount:      len(b.Business.Upstreams),
-		AliasRuleCount:     len(b.Business.AliasRules),
-		MCPFilterRuleCount: len(b.Business.MCPFilterRules),
-		APIKeyCount:        len(b.Business.APIKeys),
-		ContainsSecrets:    containsYAMLSecrets(b),
+		Version:             b.Version,
+		UpstreamCount:       len(b.Business.Upstreams),
+		AliasRuleCount:      len(b.Business.AliasRules),
+		MCPFilterRuleCount:  len(b.Business.MCPFilterRules),
+		ToolPolicyRuleCount: len(b.Business.ToolPolicyRules),
+		APIKeyCount:         len(b.Business.APIKeys),
+		ContainsSecrets:     containsYAMLSecrets(b),
 	}
 
 	for _, entry := range b.Business.Upstreams {

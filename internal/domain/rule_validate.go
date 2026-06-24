@@ -2,6 +2,7 @@ package domain
 
 import (
 	"fmt"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -19,6 +20,14 @@ const (
 	// MaxFilterRulesPerScope 为同一作用域（单个上游 MCP 或单个 API Key）允许维护的
 	// 屏蔽规则数量上限（Req 9.2、9.9、13.2、13.3）。导出以供规则管理任务（9.x、14.3）复用。
 	MaxFilterRulesPerScope = 100
+	// MaxToolPolicyRules 为工具策略规则总量上限。策略按每次调用读取并匹配，保持小而可控。
+	MaxToolPolicyRules = 100
+	// MaxToolPolicyRiskTags 为单条工具策略允许携带的自定义风险标签数量。
+	MaxToolPolicyRiskTags = 8
+	// MaxToolPolicyRiskTagRunes 为单个自定义风险标签的最大字符数。
+	MaxToolPolicyRiskTagRunes = 24
+	// MaxToolPolicyCacheTTLSeconds 为调用结果短 TTL 缓存上限，避免误配置造成陈旧数据长期驻留。
+	MaxToolPolicyCacheTTLSeconds = 3600
 )
 
 // ValidateAlias 在保存前校验别名规则（Req 8.1、8.9）。
@@ -88,6 +97,47 @@ func (e *engine) ValidateFilter(r FilterRule) error {
 
 	if len(fields) > 0 {
 		return NewValidationError("屏蔽规则校验失败", fields)
+	}
+	return nil
+}
+
+// ValidateToolPolicy 在保存前校验工具策略规则。
+func (e *engine) ValidateToolPolicy(r ToolPolicyRule) error {
+	fields := make(map[string]string)
+
+	e.validatePattern(r.Pattern, r.IsRegex, fields)
+
+	if r.RoutingStrategy != "" && !ValidToolRoutingStrategy(r.RoutingStrategy) {
+		fields["routingStrategy"] = "路由策略只能是 priority_fill 或 round_robin"
+	}
+
+	if r.CacheEnabled {
+		if r.CacheTTLSeconds <= 0 {
+			fields["cacheTtlSeconds"] = "启用缓存时 TTL 必须大于 0 秒"
+		} else if r.CacheTTLSeconds > MaxToolPolicyCacheTTLSeconds {
+			fields["cacheTtlSeconds"] = fmt.Sprintf("缓存 TTL 不能超过 %d 秒", MaxToolPolicyCacheTTLSeconds)
+		}
+	} else if r.CacheTTLSeconds < 0 {
+		fields["cacheTtlSeconds"] = "缓存 TTL 不能为负数"
+	}
+
+	if len(r.RiskTags) > MaxToolPolicyRiskTags {
+		fields["riskTags"] = fmt.Sprintf("自定义风险标签不能超过 %d 个", MaxToolPolicyRiskTags)
+	}
+	for i, tag := range r.RiskTags {
+		trimmed := strings.TrimSpace(tag)
+		key := fmt.Sprintf("riskTags[%d]", i)
+		if trimmed == "" {
+			fields[key] = "风险标签不能为空"
+			continue
+		}
+		if n := utf8.RuneCountInString(trimmed); n > MaxToolPolicyRiskTagRunes {
+			fields[key] = fmt.Sprintf("风险标签长度 %d 超过上限 %d 个字符", n, MaxToolPolicyRiskTagRunes)
+		}
+	}
+
+	if len(fields) > 0 {
+		return NewValidationError("工具策略规则校验失败", fields)
 	}
 	return nil
 }

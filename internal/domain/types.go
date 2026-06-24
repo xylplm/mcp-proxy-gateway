@@ -85,6 +85,7 @@ type ToolSourceView struct {
 type ToolDetail struct {
 	Tool    ToolDef          `json:"tool"`
 	Sources []ToolSourceView `json:"sources"`
+	Policy  *ToolPolicyView  `json:"policy,omitempty"`
 }
 
 // UpstreamConfig 表示上游 MCP 服务的配置。
@@ -159,6 +160,41 @@ func ValidToolRoutingStrategy(s ToolRoutingStrategy) bool {
 	default:
 		return false
 	}
+}
+
+// ToolPolicyRule 表示按对外工具名动态匹配的工具治理策略。
+//
+// 策略只在命中后覆盖显式配置的能力：路由策略、短 TTL 调用缓存、自定义风险标签。
+// 未配置的字段不会改变全局默认行为，避免为日常使用增加额外理解成本。
+type ToolPolicyRule struct {
+	// ID 为规则唯一标识。
+	ID string `json:"id"`
+	// Pattern 为匹配对外工具名的模式，长度需在 1 至 200 个字符之间。
+	Pattern string `json:"pattern"`
+	// IsRegex 表示是否启用正则匹配（完整匹配）。
+	IsRegex bool `json:"isRegex"`
+	// Enabled 表示该策略是否启用。
+	Enabled bool `json:"enabled"`
+	// SortOrder 为规则排序顺序，多策略匹配时仅应用首条。
+	SortOrder int `json:"sortOrder"`
+	// RoutingStrategy 为空时不覆盖全局路由策略。
+	RoutingStrategy ToolRoutingStrategy `json:"routingStrategy,omitempty"`
+	// CacheEnabled 表示是否为命中的工具启用成功结果短 TTL 缓存。
+	CacheEnabled bool `json:"cacheEnabled"`
+	// CacheTTLSeconds 为缓存有效期，CacheEnabled=true 时需在 1 至 3600 秒之间。
+	CacheTTLSeconds int `json:"cacheTtlSeconds,omitempty"`
+	// RiskTags 为用户自定义风险标签，仅用于提示和筛选，不阻断调用。
+	RiskTags []string `json:"riskTags,omitempty"`
+}
+
+// ToolPolicyView 是管理台工具详情里展示的命中策略快照。
+type ToolPolicyView struct {
+	RuleID          string              `json:"ruleId"`
+	Pattern         string              `json:"pattern"`
+	RoutingStrategy ToolRoutingStrategy `json:"routingStrategy,omitempty"`
+	CacheEnabled    bool                `json:"cacheEnabled"`
+	CacheTTLSeconds int                 `json:"cacheTtlSeconds,omitempty"`
+	RiskTags        []string            `json:"riskTags,omitempty"`
 }
 
 // Upstream 表示已持久化的上游 MCP 服务实例及其运行期状态。

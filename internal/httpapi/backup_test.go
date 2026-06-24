@@ -74,7 +74,7 @@ func TestPreviewBackupReturnsCountsAndSecretFlag(t *testing.T) {
 	if got.Version != backup.FormatVersion {
 		t.Fatalf("want version %q, got %q", backup.FormatVersion, got.Version)
 	}
-	if got.UpstreamCount != 1 || got.AliasRuleCount != 1 || got.MCPFilterRuleCount != 1 ||
+	if got.UpstreamCount != 1 || got.AliasRuleCount != 1 || got.MCPFilterRuleCount != 1 || got.ToolPolicyRuleCount != 1 ||
 		got.APIKeyCount != 1 || got.APIKeyFilterRuleCount != 1 || got.ACLCount != 2 {
 		t.Fatalf("unexpected preview counts: %+v", got)
 	}
@@ -168,6 +168,14 @@ func sampleHTTPBackup() backup.Backup {
 				UpstreamIDs: []string{"11111111-1111-4111-8111-111111111111"},
 				Pattern:     "blocked",
 				Enabled:     true,
+			}},
+			ToolPolicyRules: []domain.ToolPolicyRule{{
+				ID:              "policy-1",
+				Pattern:         "read",
+				Enabled:         true,
+				CacheEnabled:    true,
+				CacheTTLSeconds: 30,
+				RiskTags:        []string{"缓存"},
 			}},
 			APIKeys: []backup.APIKeyEntry{{
 				Meta: store.APIKey{

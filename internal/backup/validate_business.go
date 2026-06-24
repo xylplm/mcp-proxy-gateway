@@ -51,6 +51,13 @@ func validateBusiness(bc BusinessConfig) error {
 		validateRuleScope(fields, prefix, fr.ScopeType, fr.UpstreamIDs, seenUpstreamID)
 		mergeRuleValidation(fields, prefix, ruleEngine.ValidateFilter(fr))
 	}
+	for i, policy := range bc.ToolPolicyRules {
+		prefix := fmt.Sprintf("toolPolicyRules[%d]", i)
+		if strings.TrimSpace(policy.Pattern) == "" {
+			fields[prefix+".pattern"] = "工具策略匹配模式不能为空"
+		}
+		mergeRuleValidation(fields, prefix, ruleEngine.ValidateToolPolicy(policy))
+	}
 
 	seenKeyID := make(map[string]struct{})
 	for i, k := range bc.APIKeys {

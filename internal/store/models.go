@@ -101,6 +101,21 @@ type filterRuleMCPUpstreamModel struct {
 
 func (filterRuleMCPUpstreamModel) TableName() string { return "filter_rule_mcp_upstream" }
 
+type toolPolicyRuleModel struct {
+	ID              string    `gorm:"column:id;type:uuid;primaryKey"`
+	Pattern         string    `gorm:"column:pattern;type:varchar(200);not null"`
+	IsRegex         bool      `gorm:"column:is_regex;type:boolean;not null;default:false"`
+	Enabled         bool      `gorm:"column:enabled;type:boolean;not null;default:true"`
+	SortOrder       int       `gorm:"column:sort_order;type:integer;not null;index:idx_tool_policy_rule_order,priority:1"`
+	RoutingStrategy string    `gorm:"column:routing_strategy;type:varchar(32);not null;default:''"`
+	CacheEnabled    bool      `gorm:"column:cache_enabled;type:boolean;not null;default:false"`
+	CacheTTLSeconds int       `gorm:"column:cache_ttl_seconds;type:integer;not null;default:0"`
+	RiskTags        JSONB     `gorm:"column:risk_tags;type:jsonb;not null;default:'[]'"`
+	CreatedAt       time.Time `gorm:"column:created_at;type:timestamptz;not null;default:now();autoCreateTime:false"`
+}
+
+func (toolPolicyRuleModel) TableName() string { return "tool_policy_rule" }
+
 type apiKeyModel struct {
 	ID            string     `gorm:"column:id;type:uuid;primaryKey"`
 	Name          string     `gorm:"column:name;type:varchar(100);not null"`

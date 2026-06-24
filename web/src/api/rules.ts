@@ -4,6 +4,7 @@
 import request from '@/api/request'
 
 export type RuleScopeType = 'all' | 'upstreams'
+export type ToolRoutingStrategy = '' | 'priority_fill' | 'round_robin'
 
 /**
  * 别名/描述重写规则，与后端 domain.AliasRule 对齐。
@@ -65,6 +66,29 @@ export interface FilterRuleRequest {
   sortOrder: number
 }
 
+export interface ToolPolicyRule {
+  id: string
+  pattern: string
+  isRegex: boolean
+  enabled: boolean
+  sortOrder: number
+  routingStrategy?: ToolRoutingStrategy
+  cacheEnabled: boolean
+  cacheTtlSeconds?: number
+  riskTags?: string[]
+}
+
+export interface ToolPolicyRuleRequest {
+  pattern: string
+  isRegex: boolean
+  enabled: boolean
+  sortOrder: number
+  routingStrategy: ToolRoutingStrategy
+  cacheEnabled: boolean
+  cacheTtlSeconds: number
+  riskTags: string[]
+}
+
 /** 别名规则列表响应体：{ aliases: [...] }。 */
 interface ListAliasesResponse {
   aliases: AliasRule[] | null
@@ -73,6 +97,10 @@ interface ListAliasesResponse {
 /** 屏蔽规则列表响应体：{ filters: [...] }。 */
 interface ListFiltersResponse {
   filters: FilterRule[] | null
+}
+
+interface ListToolPoliciesResponse {
+  toolPolicies: ToolPolicyRule[] | null
 }
 
 /* ===================== 别名/描述重写规则（Req 8.1） ===================== */
@@ -132,4 +160,33 @@ export async function setFilterEnabled(ruleId: string, enabled: boolean): Promis
 /** 删除一条屏蔽规则（Req 9.1）。 */
 export async function deleteFilter(ruleId: string): Promise<void> {
   await request.delete(`/filters/${encodeURIComponent(ruleId)}`)
+}
+
+/* ===================== 工具策略规则 ===================== */
+
+export async function listToolPolicies(): Promise<ToolPolicyRule[]> {
+  const res = await request.get<ListToolPoliciesResponse>('/tool-policies')
+  return res.data?.toolPolicies ?? []
+}
+
+export async function createToolPolicy(payload: ToolPolicyRuleRequest): Promise<ToolPolicyRule> {
+  const res = await request.post<ToolPolicyRule>('/tool-policies', payload)
+  return res.data
+}
+
+export async function updateToolPolicy(
+  ruleId: string,
+  payload: ToolPolicyRuleRequest,
+): Promise<ToolPolicyRule> {
+  const res = await request.put<ToolPolicyRule>(`/tool-policies/${encodeURIComponent(ruleId)}`, payload)
+  return res.data
+}
+
+export async function setToolPolicyEnabled(ruleId: string, enabled: boolean): Promise<void> {
+  const action = enabled ? 'enable' : 'disable'
+  await request.post(`/tool-policies/${encodeURIComponent(ruleId)}/${action}`)
+}
+
+export async function deleteToolPolicy(ruleId: string): Promise<void> {
+  await request.delete(`/tool-policies/${encodeURIComponent(ruleId)}`)
 }

@@ -69,6 +69,7 @@ func (a *App) build(envCfg config.EnvConfig) error {
 		aliasListerAdapter{repo: repos.Alias},
 		mcpFilterListerAdapter{repo: repos.FilterMCP},
 		apiKeyFilterListerAdapter{repo: repos.FilterAPIKey},
+		toolPolicyListerAdapter{repo: repos.ToolPolicy},
 	)
 	agg.SetLogger(a.logger)
 	agg.SetRoutingStrategy(yamlCfg.Aggregation.ToolRoutingStrategy)
@@ -190,6 +191,7 @@ func (a *App) build(envCfg config.EnvConfig) error {
 		RuleValidator:   ruleEngine,
 		AliasStore:      repos.Alias,
 		FilterMCPStore:  repos.FilterMCP,
+		ToolPolicyStore: repos.ToolPolicy,
 		APIKeys:         apiKeyMgr,
 		APIKeyFilters:   apiKeyFilterMgr,
 		ACLStore:        repos.ACL,

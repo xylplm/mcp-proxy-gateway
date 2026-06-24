@@ -782,6 +782,10 @@ function degradedSources(detail: ToolDetail): ToolSource[] {
   return (detail.sources ?? []).filter((source) => source.temporarilyDegraded)
 }
 
+function policyRiskTags(detail: ToolDetail): string[] {
+  return detail.policy?.riskTags ?? []
+}
+
 function degradationText(source: ToolSource): string {
   const reason = source.degradationReason?.trim() || '该来源近期连续失败，网关会优先尝试其他健康来源。'
   if (!source.degradationUntil) return reason
@@ -1265,6 +1269,13 @@ const errClass = 'mt-1 text-xs text-error-500'
                 class="rounded-full bg-warning-50 px-2.5 py-1 text-xs font-medium text-warning-700 dark:bg-warning-500/10 dark:text-warning-400"
               >
                 {{ degradedSources(selectedToolDetail).length }} 个来源降级
+              </span>
+              <span
+                v-for="tag in policyRiskTags(selectedToolDetail)"
+                :key="tag"
+                class="rounded-full bg-warning-50 px-2.5 py-1 text-xs font-medium text-warning-700 dark:bg-warning-500/10 dark:text-warning-300"
+              >
+                {{ tag }}
               </span>
             </div>
 

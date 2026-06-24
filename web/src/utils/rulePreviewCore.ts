@@ -30,6 +30,7 @@ export interface ToolRulePreviewSummary {
 
 export interface ToolRulePreviewOptions {
   limit?: number
+  matchField?: 'originalName' | 'exposedName'
   emptyLabel?: string
   disabledLabel?: string
   noEnabledScopeLabel?: string
@@ -89,13 +90,15 @@ export function buildToolRulePreview(
   if (matcher === null) {
     return emptySummary(options.invalidPatternLabel ?? '匹配模式暂不可用')
   }
+  const matchField = options.matchField ?? 'originalName'
 
   const upstreamNames = new Map(upstreams.map((up) => [up.id, up.config.name || up.id]))
   const hits: ToolRulePreviewItem[] = []
   for (const upstreamID of scopedIDs) {
     const tools = toolsByUpstream[upstreamID] ?? []
     for (const tool of tools) {
-      if (!matcher(tool.originalName)) continue
+      const matchName = matchField === 'exposedName' ? tool.name : tool.originalName
+      if (!matcher(matchName)) continue
       hits.push({
         key: `${upstreamID}:${tool.originalName}:${hits.length}`,
         upstreamId: upstreamID,

@@ -5,6 +5,7 @@ export interface BackupPreview {
   upstreamCount: number
   aliasRuleCount: number
   mcpFilterRuleCount: number
+  toolPolicyRuleCount: number
   apiKeyCount: number
   apiKeyFilterRuleCount: number
   aclCount: number

@@ -99,7 +99,7 @@ func irBuildService(
 	callTimeout time.Duration,
 ) *Service {
 	invoker := NewSessionInvoker(states, sessions, callTimeout, nil)
-	return NewService(cache, domain.NewRuleEngine(), upstreams, aliases, mcpFilters, apiKeyFilters).SetInvoker(invoker)
+	return NewService(cache, domain.NewRuleEngine(), upstreams, aliases, mcpFilters, apiKeyFilters, &invFakeToolPolicies{}).SetInvoker(invoker)
 }
 
 // TestInvokeRoutingUnavailableUpstream 验证端到端：被调用工具所属上游连接不可用时，

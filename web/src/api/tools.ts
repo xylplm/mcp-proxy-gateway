@@ -27,9 +27,19 @@ export interface ToolSource {
   rateLimits?: UpstreamRateLimits
 }
 
+export interface ToolPolicyView {
+  ruleId: string
+  pattern: string
+  routingStrategy?: 'priority_fill' | 'round_robin'
+  cacheEnabled: boolean
+  cacheTtlSeconds?: number
+  riskTags?: string[]
+}
+
 export interface ToolDetail {
   tool: ToolDef
   sources: ToolSource[] | null
+  policy?: ToolPolicyView | null
 }
 
 export interface GatewayTool {

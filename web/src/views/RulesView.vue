@@ -13,6 +13,7 @@ import AdminLayout from '@/components/layout/AdminLayout.vue'
 import PageBreadcrumb from '@/components/common/PageBreadcrumb.vue'
 import AliasRuleSection from '@/components/rules/AliasRuleSection.vue'
 import FilterRuleSection from '@/components/rules/FilterRuleSection.vue'
+import ToolPolicySection from '@/components/rules/ToolPolicySection.vue'
 import { useBreakpoint } from '@/composables/useBreakpoint'
 import { useToast } from '@/composables/useToast'
 import { listUpstreams, type Upstream } from '@/api/upstreams'
@@ -24,6 +25,7 @@ const toast = useToast()
 const upstreams = ref<Upstream[]>([])
 const aliasSection = ref<InstanceType<typeof AliasRuleSection> | null>(null)
 const filterSection = ref<InstanceType<typeof FilterRuleSection> | null>(null)
+const toolPolicySection = ref<InstanceType<typeof ToolPolicySection> | null>(null)
 /** 上游列表加载/错误状态。 */
 const loading = ref(false)
 const errorMessage = ref('')
@@ -50,7 +52,11 @@ async function loadUpstreams(): Promise<void> {
 
 async function refreshAll(): Promise<void> {
   await loadUpstreams()
-  await Promise.all([aliasSection.value?.reload(), filterSection.value?.reload()])
+  await Promise.all([
+    aliasSection.value?.reload(),
+    filterSection.value?.reload(),
+    toolPolicySection.value?.reload(),
+  ])
 }
 
 onMounted(loadUpstreams)
@@ -102,9 +108,10 @@ onMounted(loadUpstreams)
     </div>
 
     <!-- 规则看板：两个规则区块按可用空间自动排列，内部卡片继续自适应。 -->
-    <div class="grid grid-cols-1 gap-5 lg:grid-cols-2" :data-large-screen="isLargeScreen">
+    <div class="grid grid-cols-1 gap-5 xl:grid-cols-3" :data-large-screen="isLargeScreen">
       <AliasRuleSection ref="aliasSection" :upstreams="upstreams" @toast="showToast" />
       <FilterRuleSection ref="filterSection" :upstreams="upstreams" @toast="showToast" />
+      <ToolPolicySection ref="toolPolicySection" :upstreams="upstreams" @toast="showToast" />
     </div>
   </AdminLayout>
 </template>

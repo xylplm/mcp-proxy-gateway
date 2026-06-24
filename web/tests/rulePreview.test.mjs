@@ -70,6 +70,22 @@ test('builds rule preview from cached tools', () => {
   assert.equal(summary.items[0].upstreamName, '文件')
 })
 
+test('can preview by exposed tool name for tool policies', () => {
+  const ups = [upstream('up-a', '文件')]
+  const summary = buildToolRulePreview(
+    { scopeType: 'all', pattern: 'fs_read', isRegex: false },
+    ups,
+    {
+      'up-a': [tool('up-a', 'read_file', 'fs_read'), tool('up-a', 'fs_read', 'raw_fs_read')],
+    },
+    { matchField: 'exposedName' },
+  )
+
+  assert.equal(summary.totalCount, 1)
+  assert.equal(summary.items[0].originalName, 'read_file')
+  assert.equal(summary.items[0].exposedName, 'fs_read')
+})
+
 test('keeps empty draft preview gentle', () => {
   const summary = buildToolRulePreview(
     { scopeType: 'all', pattern: ' ', isRegex: false },

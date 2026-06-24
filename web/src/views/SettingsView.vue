@@ -409,7 +409,7 @@ const errClass = 'mt-1 text-xs text-error-500'
                 {{ backupImporting ? '导入中…' : '导入并覆盖' }}
               </button>
             </div>
-            <div class="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+            <div class="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-7">
               <div class="rounded-lg bg-white px-3 py-2 dark:bg-gray-900/40">
                 <p class="text-xs text-gray-500 dark:text-gray-400">上游</p>
                 <p class="mt-1 text-base font-semibold text-gray-800 dark:text-white/90">
@@ -432,6 +432,12 @@ const errClass = 'mt-1 text-xs text-error-500'
                 <p class="text-xs text-gray-500 dark:text-gray-400">上游屏蔽</p>
                 <p class="mt-1 text-base font-semibold text-gray-800 dark:text-white/90">
                   {{ backupPreview.mcpFilterRuleCount }}
+                </p>
+              </div>
+              <div class="rounded-lg bg-white px-3 py-2 dark:bg-gray-900/40">
+                <p class="text-xs text-gray-500 dark:text-gray-400">工具策略</p>
+                <p class="mt-1 text-base font-semibold text-gray-800 dark:text-white/90">
+                  {{ backupPreview.toolPolicyRuleCount }}
                 </p>
               </div>
               <div class="rounded-lg bg-white px-3 py-2 dark:bg-gray-900/40">

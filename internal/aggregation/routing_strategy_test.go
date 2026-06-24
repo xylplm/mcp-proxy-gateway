@@ -102,6 +102,27 @@ func routeService(tools map[string][]domain.ToolDef, upstreams []domain.Upstream
 	return invNewService(cache, &invFakeUpstreams{upstreams: upstreams}, aliases, mcpFilters, apiKeyFilters).SetInvoker(invoker)
 }
 
+func routeServiceWithPolicies(
+	tools map[string][]domain.ToolDef,
+	upstreams []domain.Upstream,
+	invoker *routeRecordingInvoker,
+	policies []domain.ToolPolicyRule,
+) *Service {
+	cache := &invFakeCache{tools: tools}
+	aliases := &invFakeAliases{byUpstream: map[string][]domain.AliasRule{}}
+	mcpFilters := &invFakeMCPFilters{byUpstream: map[string][]domain.FilterRule{}}
+	apiKeyFilters := &invFakeAPIKeyFilters{byAPIKey: map[string][]domain.FilterRule{}}
+	return NewService(
+		cache,
+		domain.NewRuleEngine(),
+		&invFakeUpstreams{upstreams: upstreams},
+		aliases,
+		mcpFilters,
+		apiKeyFilters,
+		&invFakeToolPolicies{rules: policies},
+	).SetInvoker(invoker)
+}
+
 func TestPriorityFillSkipsUnavailableSource(t *testing.T) {
 	invoker := &routeRecordingInvoker{available: map[string]bool{"up-a": false, "up-b": true}}
 	svc := routeService(
@@ -166,6 +187,97 @@ func TestDefaultRoutingStrategyIsRoundRobin(t *testing.T) {
 	}
 	if got := invoker.callAt(1); got != "up-b:read" {
 		t.Fatalf("默认策略应轮询到第二个来源：got=%q", got)
+	}
+}
+
+func TestToolPolicyOverridesRoutingStrategy(t *testing.T) {
+	invoker := &routeRecordingInvoker{available: map[string]bool{"up-a": true, "up-b": true}}
+	svc := routeServiceWithPolicies(
+		map[string][]domain.ToolDef{
+			"up-a": {{OriginalName: "read", Name: "read", InputSchema: []byte("{}")}},
+			"up-b": {{OriginalName: "read", Name: "read", InputSchema: []byte("{}")}},
+		},
+		[]domain.Upstream{invEnabledUpstream("up-a", 0), invEnabledUpstream("up-b", 1)},
+		invoker,
+		[]domain.ToolPolicyRule{{
+			Pattern:         "read",
+			Enabled:         true,
+			RoutingStrategy: domain.ToolRoutingPriorityFill,
+		}},
+	).SetRoutingStrategy(domain.ToolRoutingRoundRobin)
+
+	for i := 0; i < 3; i++ {
+		if _, err := svc.InvokeTool(context.Background(), "", "read", json.RawMessage(`{}`)); err != nil {
+			t.Fatalf("第 %d 次策略路由调用失败：%v", i+1, err)
+		}
+	}
+	for i := 0; i < 3; i++ {
+		if got := invoker.callAt(i); got != "up-a:read" {
+			t.Fatalf("工具策略应覆盖为优先顺序，第 %d 次 got=%q", i+1, got)
+		}
+	}
+}
+
+func TestToolPolicyCachesSuccessfulResult(t *testing.T) {
+	invoker := &routeRecordingInvoker{available: map[string]bool{"up-a": true}}
+	svc := routeServiceWithPolicies(
+		map[string][]domain.ToolDef{
+			"up-a": {{OriginalName: "read", Name: "read", InputSchema: []byte("{}")}},
+		},
+		[]domain.Upstream{invEnabledUpstream("up-a", 0)},
+		invoker,
+		[]domain.ToolPolicyRule{{
+			Pattern:         "read",
+			Enabled:         true,
+			CacheEnabled:    true,
+			CacheTTLSeconds: 60,
+		}},
+	)
+
+	for i := 0; i < 2; i++ {
+		if _, err := svc.InvokeTool(context.Background(), "", "read", json.RawMessage(`{"q":1}`)); err != nil {
+			t.Fatalf("第 %d 次缓存策略调用失败：%v", i+1, err)
+		}
+	}
+	if got := invoker.callCount(); got != 1 {
+		t.Fatalf("第二次相同参数应命中缓存，不应再次调用上游，got calls=%d", got)
+	}
+
+	if _, err := svc.InvokeTool(context.Background(), "", "read", json.RawMessage(`{"q":2}`)); err != nil {
+		t.Fatalf("不同参数调用失败：%v", err)
+	}
+	if got := invoker.callCount(); got != 2 {
+		t.Fatalf("不同参数不应复用缓存，got calls=%d", got)
+	}
+}
+
+func TestBuildToolDetailsIncludesMatchedToolPolicy(t *testing.T) {
+	svc := routeServiceWithPolicies(
+		map[string][]domain.ToolDef{
+			"up-a": {{OriginalName: "send_report", Name: "send_report", InputSchema: []byte("{}")}},
+		},
+		[]domain.Upstream{invEnabledUpstream("up-a", 0)},
+		&routeRecordingInvoker{available: map[string]bool{"up-a": true}},
+		[]domain.ToolPolicyRule{{
+			ID:              "policy-1",
+			Pattern:         "send_.+",
+			IsRegex:         true,
+			Enabled:         true,
+			CacheEnabled:    true,
+			CacheTTLSeconds: 30,
+			RiskTags:        []string{"外发"},
+		}},
+	)
+
+	details, err := svc.BuildToolDetails(context.Background(), "")
+	if err != nil {
+		t.Fatalf("构建工具详情失败：%v", err)
+	}
+	if len(details) != 1 || details[0].Policy == nil {
+		t.Fatalf("应返回命中的工具策略：%+v", details)
+	}
+	if details[0].Policy.RuleID != "policy-1" || details[0].Policy.RiskTags[0] != "外发" {
+		t.Fatalf("策略详情不符合预期：%+v", details[0].Policy)
 	}
 }
 
