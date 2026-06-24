@@ -13,9 +13,10 @@ import (
 )
 
 type routeRecordingInvoker struct {
-	available map[string]bool
-	mu        sync.Mutex
-	calls     []string
+	available     map[string]bool
+	errByUpstream map[string]error
+	mu            sync.Mutex
+	calls         []string
 }
 
 func (i *routeRecordingInvoker) UpstreamAvailable(upstreamID string) bool {
@@ -29,6 +30,11 @@ func (i *routeRecordingInvoker) CallUpstream(_ context.Context, upstreamID, orig
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	i.calls = append(i.calls, upstreamID+":"+originalName)
+	if i.errByUpstream != nil {
+		if err := i.errByUpstream[upstreamID]; err != nil {
+			return domain.ToolResult{}, err
+		}
+	}
 	return domain.ToolResult{Content: json.RawMessage(`[]`)}, nil
 }
 
@@ -249,5 +255,99 @@ func TestQuotaReservationDoesNotConsumeEarlierWindowsWhenLaterWindowIsExhausted(
 	}
 	if got := counter.totalForWindow("month"); got != 1 {
 		t.Fatalf("拒绝请求不应继续增加月度额度，got=%d want=1", got)
+	}
+}
+
+func TestSourceFailureCooldownSkipsRecentlyFailingSource(t *testing.T) {
+	upstreamErr := domain.NewError(domain.CodeUpstreamUnavailable, "连接不可用")
+	invoker := &routeRecordingInvoker{
+		available:     map[string]bool{"up-a": true, "up-b": true},
+		errByUpstream: map[string]error{"up-a": upstreamErr},
+	}
+	svc := routeService(
+		map[string][]domain.ToolDef{
+			"up-a": {{OriginalName: "write", Name: "write", InputSchema: []byte("{}")}},
+			"up-b": {{OriginalName: "write", Name: "write", InputSchema: []byte("{}")}},
+		},
+		[]domain.Upstream{invEnabledUpstream("up-a", 0), invEnabledUpstream("up-b", 1)},
+		invoker,
+	).SetRoutingStrategy(domain.ToolRoutingPriorityFill)
+	base := time.Date(2026, 6, 23, 10, 30, 0, 0, time.UTC)
+	svc.now = func() time.Time { return base }
+
+	for i := 0; i < defaultSourceFailureThreshold; i++ {
+		_, err := svc.InvokeTool(context.Background(), "", "write", json.RawMessage(`{}`))
+		if !errors.Is(err, upstreamErr) {
+			t.Fatalf("第 %d 次失败应直接返回 up-a 错误，got=%v", i+1, err)
+		}
+	}
+
+	if _, err := svc.InvokeTool(context.Background(), "", "write", json.RawMessage(`{}`)); err != nil {
+		t.Fatalf("up-a 连续失败后应短暂降级到 up-b，got err=%v", err)
+	}
+
+	want := []string{"up-a:write", "up-a:write", "up-a:write", "up-b:write"}
+	for i, expected := range want {
+		if got := invoker.callAt(i); got != expected {
+			t.Fatalf("第 %d 次调用来源错误：got=%q want=%q", i+1, got, expected)
+		}
+	}
+}
+
+func TestSourceFailureCooldownExpiresAndRetriesOriginalSource(t *testing.T) {
+	upstreamErr := domain.NewError(domain.CodeUpstreamUnavailable, "连接不可用")
+	invoker := &routeRecordingInvoker{
+		available:     map[string]bool{"up-a": true, "up-b": true},
+		errByUpstream: map[string]error{"up-a": upstreamErr},
+	}
+	svc := routeService(
+		map[string][]domain.ToolDef{
+			"up-a": {{OriginalName: "read", Name: "read", InputSchema: []byte("{}")}},
+			"up-b": {{OriginalName: "read", Name: "read", InputSchema: []byte("{}")}},
+		},
+		[]domain.Upstream{invEnabledUpstream("up-a", 0), invEnabledUpstream("up-b", 1)},
+		invoker,
+	).SetRoutingStrategy(domain.ToolRoutingPriorityFill)
+	base := time.Date(2026, 6, 23, 10, 30, 0, 0, time.UTC)
+	now := base
+	svc.now = func() time.Time { return now }
+
+	for i := 0; i < defaultSourceFailureThreshold; i++ {
+		_, _ = svc.InvokeTool(context.Background(), "", "read", json.RawMessage(`{}`))
+	}
+	now = base.Add(defaultSourceFailureCooldown + time.Second)
+
+	_, err := svc.InvokeTool(context.Background(), "", "read", json.RawMessage(`{}`))
+	if !errors.Is(err, upstreamErr) {
+		t.Fatalf("冷却过期后应重新尝试原优先来源，got=%v", err)
+	}
+	if got := invoker.callAt(defaultSourceFailureThreshold); got != "up-a:read" {
+		t.Fatalf("冷却过期后调用来源错误：got=%q want=%q", got, "up-a:read")
+	}
+}
+
+func TestSourceFailureDoesNotHideSingleSourceTool(t *testing.T) {
+	upstreamErr := domain.NewError(domain.CodeUpstreamUnavailable, "连接不可用")
+	invoker := &routeRecordingInvoker{
+		available:     map[string]bool{"up-a": true},
+		errByUpstream: map[string]error{"up-a": upstreamErr},
+	}
+	svc := routeService(
+		map[string][]domain.ToolDef{
+			"up-a": {{OriginalName: "read", Name: "read", InputSchema: []byte("{}")}},
+		},
+		[]domain.Upstream{invEnabledUpstream("up-a", 0)},
+		invoker,
+	).SetRoutingStrategy(domain.ToolRoutingPriorityFill)
+	svc.now = func() time.Time { return time.Date(2026, 6, 23, 10, 30, 0, 0, time.UTC) }
+
+	for i := 0; i < defaultSourceFailureThreshold+1; i++ {
+		_, err := svc.InvokeTool(context.Background(), "", "read", json.RawMessage(`{}`))
+		if !errors.Is(err, upstreamErr) {
+			t.Fatalf("单来源工具不应因降级状态被隐藏，第 %d 次 got=%v", i+1, err)
+		}
+	}
+	if got := invoker.callCount(); got != defaultSourceFailureThreshold+1 {
+		t.Fatalf("单来源工具每次都应尝试真实来源，got calls=%d", got)
 	}
 }

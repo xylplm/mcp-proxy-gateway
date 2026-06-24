@@ -6,8 +6,10 @@ import { getAggregatedTools, type ToolDef, type ToolDetail, type ToolSource } fr
 import type { UpstreamRateLimits } from '@/api/rateLimits'
 import { RefreshIcon } from '@/icons'
 import { explainToolGovernance, type ToolGovernanceTone } from '@/utils/toolGovernanceExplain'
+import { highestRiskLevel, toolRiskTags, type ToolRiskLevel, type ToolRiskTag } from '@/utils/toolRiskTags'
 
 type ConflictFilter = 'all' | 'conflict' | 'multi'
+type RiskFilter = 'all' | 'risk'
 
 const loading = ref(false)
 const refreshing = ref(false)
@@ -16,6 +18,7 @@ const toolDetails = ref<ToolDetail[]>([])
 const searchKeyword = ref('')
 const selectedUpstream = ref('')
 const conflictFilter = ref<ConflictFilter>('all')
+const riskFilter = ref<RiskFilter>('all')
 const selectedToolName = ref('')
 const detailOpen = ref(false)
 
@@ -56,6 +59,7 @@ const visibleToolDetails = computed(() => {
     }
     if (conflictFilter.value === 'conflict' && !detail.tool.schemaConflict) return false
     if (conflictFilter.value === 'multi' && (detail.tool.sourceCount ?? detail.sources?.length ?? 1) <= 1) return false
+    if (riskFilter.value === 'risk' && toolRiskTags(detail).length === 0) return false
     if (keyword !== '' && !toolSearchText(detail).includes(keyword)) return false
     return true
   })
@@ -78,8 +82,9 @@ const multiSourceCount = computed(
 const schemaConflictCount = computed(
   () => toolDetails.value.filter((detail) => detail.tool.schemaConflict === true).length,
 )
+const riskToolCount = computed(() => toolDetails.value.filter((detail) => toolRiskTags(detail).length > 0).length)
 const visibleCountLabel = computed(() => {
-  if (hasSearchKeyword.value || selectedUpstream.value !== '' || conflictFilter.value !== 'all') {
+  if (hasSearchKeyword.value || selectedUpstream.value !== '' || conflictFilter.value !== 'all' || riskFilter.value !== 'all') {
     return `${visibleToolDetails.value.length.toLocaleString('zh-CN')} / ${toolDetails.value.length.toLocaleString('zh-CN')}`
   }
   return toolDetails.value.length.toLocaleString('zh-CN')
@@ -122,6 +127,7 @@ function toolSearchText(detail: ToolDetail): string {
     detail.tool.name,
     detail.tool.originalName,
     toolDescription(detail.tool),
+    ...toolRiskTags(detail).map((tag) => tag.label),
     ...(detail.sources ?? []).flatMap((source) => [
       source.upstreamId,
       source.upstreamName,
@@ -146,6 +152,7 @@ function resetFilters(): void {
   searchKeyword.value = ''
   selectedUpstream.value = ''
   conflictFilter.value = 'all'
+  riskFilter.value = 'all'
 }
 
 function sourceCountText(detail: ToolDetail): string {
@@ -195,6 +202,28 @@ function governanceToneClass(tone: ToolGovernanceTone): string {
     default:
       return 'border-gray-200 bg-gray-50 text-gray-600 dark:border-gray-800 dark:bg-white/[0.03] dark:text-gray-300'
   }
+}
+
+function riskTags(detail: ToolDetail): ToolRiskTag[] {
+  return toolRiskTags(detail)
+}
+
+function riskTagClass(level: ToolRiskLevel): string {
+  if (level === 'high') {
+    return 'bg-error-50 text-error-700 dark:bg-error-500/10 dark:text-error-300'
+  }
+  if (level === 'medium') {
+    return 'bg-warning-50 text-warning-700 dark:bg-warning-500/10 dark:text-warning-300'
+  }
+  return 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300'
+}
+
+function riskNoticeClass(detail: ToolDetail): string {
+  const level = highestRiskLevel(riskTags(detail))
+  if (level === 'high') {
+    return 'border-error-100 bg-error-50 text-error-700 dark:border-error-500/20 dark:bg-error-500/10 dark:text-error-300'
+  }
+  return 'border-warning-200 bg-warning-50 text-warning-700 dark:border-warning-500/30 dark:bg-warning-500/10 dark:text-warning-300'
 }
 
 onMounted(() => {
@@ -251,17 +280,17 @@ onMounted(() => {
       </section>
       <section :class="cardClass">
         <p class="text-sm text-gray-500 dark:text-gray-400">需关注</p>
-        <p class="mt-2 text-2xl font-semibold" :class="schemaConflictCount > 0 ? 'text-warning-700 dark:text-warning-400' : 'text-success-700 dark:text-success-400'">
-          {{ schemaConflictCount.toLocaleString('zh-CN') }}
+        <p class="mt-2 text-2xl font-semibold" :class="schemaConflictCount + riskToolCount > 0 ? 'text-warning-700 dark:text-warning-400' : 'text-success-700 dark:text-success-400'">
+          {{ (schemaConflictCount + riskToolCount).toLocaleString('zh-CN') }}
         </p>
         <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-          多来源 {{ multiSourceCount.toLocaleString('zh-CN') }} 个
+          风险提示 {{ riskToolCount.toLocaleString('zh-CN') }} 个
         </p>
       </section>
     </div>
 
     <section :class="[cardClass, 'mb-5']">
-      <div class="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_260px_180px_auto] lg:items-end">
+      <div class="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_220px_170px_160px_auto] lg:items-end">
         <label class="block">
           <span class="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400">搜索工具</span>
           <input
@@ -286,6 +315,13 @@ onMounted(() => {
             <option value="all">全部工具</option>
             <option value="multi">多来源工具</option>
             <option value="conflict">Schema 不一致</option>
+          </select>
+        </label>
+        <label class="block">
+          <span class="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400">风险提示</span>
+          <select v-model="riskFilter" :class="[controlClass, 'w-full']">
+            <option value="all">全部工具</option>
+            <option value="risk">仅看风险提示</option>
           </select>
         </label>
         <button
@@ -348,6 +384,14 @@ onMounted(() => {
             >
               Schema 不一致
             </span>
+            <span
+              v-for="tag in riskTags(detail).slice(0, 2)"
+              :key="tag.key"
+              class="rounded-full px-2 py-0.5 text-[11px] font-medium"
+              :class="riskTagClass(tag.level)"
+            >
+              {{ tag.label }}
+            </span>
           </div>
         </div>
         <p class="mt-3 line-clamp-3 text-sm leading-6 text-gray-500 dark:text-gray-400">
@@ -406,6 +450,22 @@ onMounted(() => {
               >
                 Schema 不一致
               </span>
+              <span
+                v-for="tag in riskTags(selectedToolDetail)"
+                :key="tag.key"
+                class="rounded-full px-2.5 py-1 text-xs font-medium"
+                :class="riskTagClass(tag.level)"
+              >
+                {{ tag.label }}
+              </span>
+            </div>
+
+            <div
+              v-if="riskTags(selectedToolDetail).length > 0"
+              class="mt-4 rounded-lg border px-3 py-2 text-xs leading-5"
+              :class="riskNoticeClass(selectedToolDetail)"
+            >
+              该工具名称或描述包含可能改变数据、发送消息或触发财务动作的关键词；网关仅做提示与筛选，不会默认拦截。
             </div>
 
             <div

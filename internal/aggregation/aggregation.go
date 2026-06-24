@@ -116,6 +116,13 @@ type Service struct {
 	roundRobin      map[string]uint64
 	roundRobinMu    sync.Mutex
 	quota           *QuotaManager
+	sourceFailures  map[string]sourceFailureState
+	sourceFailureMu sync.Mutex
+	// sourceFailureThreshold/sourceFailureCooldown 是轻量故障降级的固定默认值。
+	// 不暴露管理配置，避免为了小概率调参增加用户理解成本。
+	sourceFailureThreshold int
+	sourceFailureCooldown  time.Duration
+	now                    func() time.Time
 	// invoker 为上游调用转发器（窄接口），可选注入（生产装配见 app/build.go）。
 	// 为 nil 时（仅未接线装配或单元测试）InvokeTool 在通过可见性校验后返回防御性
 	// 占位错误；可见性校验逻辑始终完整执行（Req 10.4、11.7）。
@@ -127,6 +134,16 @@ type Service struct {
 	// log 为结构化日志器，用于记录调用链关键节点（入口/可见性拒绝/失败源头/统计提交）。
 	// 为 nil 时回退到 slog.Default()。
 	log *slog.Logger
+}
+
+const (
+	defaultSourceFailureThreshold = 3
+	defaultSourceFailureCooldown  = 30 * time.Second
+)
+
+type sourceFailureState struct {
+	Consecutive    int
+	SuspendedUntil time.Time
 }
 
 // 编译期断言：Service 必须满足 domain.Aggregation_Service 接口契约。
@@ -142,16 +159,20 @@ func NewService(
 	apiKeyFilters APIKeyFilterLister,
 ) *Service {
 	return &Service{
-		cache:           cache,
-		engine:          engine,
-		upstreams:       upstreams,
-		aliases:         aliases,
-		mcpFilters:      mcpFilters,
-		apiKeyFilters:   apiKeyFilters,
-		upstreamConfigs: make(map[string]domain.UpstreamConfig),
-		routingStrategy: domain.ToolRoutingRoundRobin,
-		roundRobin:      make(map[string]uint64),
-		log:             slog.Default(),
+		cache:                  cache,
+		engine:                 engine,
+		upstreams:              upstreams,
+		aliases:                aliases,
+		mcpFilters:             mcpFilters,
+		apiKeyFilters:          apiKeyFilters,
+		upstreamConfigs:        make(map[string]domain.UpstreamConfig),
+		routingStrategy:        domain.ToolRoutingRoundRobin,
+		roundRobin:             make(map[string]uint64),
+		sourceFailures:         make(map[string]sourceFailureState),
+		sourceFailureThreshold: defaultSourceFailureThreshold,
+		sourceFailureCooldown:  defaultSourceFailureCooldown,
+		now:                    time.Now,
+		log:                    slog.Default(),
 	}
 }
 
@@ -316,6 +337,7 @@ func (s *Service) InvokeTool(ctx context.Context, apiKeyID, exposedName string, 
 	log.Debug("工具调用转发上游", "exposedName", exposedName, "upstreamID", candidate.UpstreamID, "originalName", candidate.OriginalName, "apiKeyID", apiKeyID, "mode", mode)
 	startedAt := time.Now()
 	result, callErr := s.invoker.CallUpstream(ctx, candidate.UpstreamID, candidate.OriginalName, args)
+	s.recordSourceResult(candidate, callErr)
 
 	// 步骤 5：异步采集调用统计（Req 16.1、16.8、16.9）。
 	// 以非阻塞方式提交，主流程附加耗时极小且永不阻塞；记录器未注入时跳过。
@@ -353,12 +375,20 @@ func (s *Service) selectCandidate(ctx context.Context, entry ReverseEntry) (Tool
 	availability, hasAvailability := s.invoker.(UpstreamAvailability)
 	sawAvailable := false
 	sawQuotaLimited := false
+	sawFailureDegraded := false
 	for i := 0; i < len(candidates); i++ {
 		idx := i
 		if strategy == domain.ToolRoutingRoundRobin {
 			idx = (start + i) % len(candidates)
 		}
 		c := candidates[idx]
+		if len(candidates) > 1 {
+			if degraded, reason := s.sourceTemporarilyDegraded(c); degraded {
+				sawFailureDegraded = true
+				lastReason = reason
+				continue
+			}
+		}
 		if hasAvailability && !availability.UpstreamAvailable(c.UpstreamID) {
 			lastReason = "所有上游来源当前均不可用"
 			continue
@@ -384,10 +414,94 @@ func (s *Service) selectCandidate(ctx context.Context, entry ReverseEntry) (Tool
 	if hasAvailability && !sawAvailable {
 		return ToolCandidate{}, domain.NewError(domain.CodeUpstreamUnavailable, lastReason)
 	}
+	if sawFailureDegraded && !sawQuotaLimited {
+		return ToolCandidate{}, domain.NewError(domain.CodeUpstreamUnavailable, lastReason)
+	}
 	if sawQuotaLimited {
 		return ToolCandidate{}, domain.NewError(domain.CodeRateLimited, lastReason)
 	}
 	return ToolCandidate{}, domain.NewError(domain.CodeRateLimited, lastReason)
+}
+
+func (s *Service) sourceTemporarilyDegraded(c ToolCandidate) (bool, string) {
+	if s == nil {
+		return false, ""
+	}
+	now := s.currentTime()
+	key := sourceFailureKey(c)
+	s.sourceFailureMu.Lock()
+	defer s.sourceFailureMu.Unlock()
+	state, ok := s.sourceFailures[key]
+	if !ok {
+		return false, ""
+	}
+	if !state.SuspendedUntil.IsZero() {
+		if state.SuspendedUntil.After(now) {
+			return true, "部分上游近期连续失败，已短暂降级到其他健康来源"
+		}
+		delete(s.sourceFailures, key)
+	}
+	return false, ""
+}
+
+func (s *Service) recordSourceResult(c ToolCandidate, err error) {
+	if s == nil {
+		return
+	}
+	if err == nil {
+		// 上游已响应，即使 MCP 结果表示业务错误，也不视为连接健康失败。
+		s.resetSourceFailure(c)
+		return
+	}
+	if !isRoutableSourceFailure(err) {
+		return
+	}
+
+	key := sourceFailureKey(c)
+	now := s.currentTime()
+	threshold := s.sourceFailureThreshold
+	if threshold <= 0 {
+		threshold = defaultSourceFailureThreshold
+	}
+	cooldown := s.sourceFailureCooldown
+	if cooldown <= 0 {
+		cooldown = defaultSourceFailureCooldown
+	}
+
+	s.sourceFailureMu.Lock()
+	state := s.sourceFailures[key]
+	state.Consecutive++
+	if state.Consecutive >= threshold {
+		state.SuspendedUntil = now.Add(cooldown)
+	}
+	s.sourceFailures[key] = state
+	s.sourceFailureMu.Unlock()
+}
+
+func (s *Service) resetSourceFailure(c ToolCandidate) {
+	key := sourceFailureKey(c)
+	s.sourceFailureMu.Lock()
+	delete(s.sourceFailures, key)
+	s.sourceFailureMu.Unlock()
+}
+
+func sourceFailureKey(c ToolCandidate) string {
+	return c.UpstreamID + "|" + c.OriginalName
+}
+
+func (s *Service) currentTime() time.Time {
+	if s != nil && s.now != nil {
+		return s.now()
+	}
+	return time.Now()
+}
+
+func isRoutableSourceFailure(err error) bool {
+	var apiErr *domain.APIError
+	if errors.As(err, &apiErr) {
+		return apiErr.Code == domain.CodeUpstreamUnavailable || apiErr.Code == domain.CodeUpstreamTimeout
+	}
+	return true
 }
 
 func (s *Service) upstreamConfig(id string) (domain.UpstreamConfig, bool) {
