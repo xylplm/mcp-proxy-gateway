@@ -134,6 +134,14 @@ export function collectSettingsChanges(before: YAMLConfig, after: YAMLConfig): S
     after.mcp_api.smart_discovery_limit,
     runtimeOnly,
   )
+  addChange(
+    changes,
+    'MCP 请求体上限',
+    before.mcp_api.request_body_limit_mib,
+    after.mcp_api.request_body_limit_mib,
+    runtimeOnly,
+    mibLabel,
+  )
   addChange(changes, '安全防护模式', before.security.mode, after.security.mode, runtimeOnly, securityModeLabel)
   addChange(
     changes,
@@ -298,6 +306,10 @@ function secondsLabel(value: unknown): string {
 
 function daysLabel(value: unknown): string {
   return `${value} 天`
+}
+
+function mibLabel(value: unknown): string {
+  return `${value} MiB`
 }
 
 function securityModeLabel(value: unknown): string {

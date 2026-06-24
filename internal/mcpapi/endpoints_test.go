@@ -64,7 +64,7 @@ var _ domain.Aggregation_Service = (*epFakeAggregation)(nil)
 //
 // resolveKey 模拟前置鉴权中间件：本测试直接从查询参数 api_key 取标识写入 gin.Context，
 // 再由 APIKeyResolver 取出，等价于真实链路中鉴权中间件写入元数据后的读取。
-func epNewTestServer(t *testing.T, agg domain.Aggregation_Service) *httptest.Server {
+func epNewTestServer(t *testing.T, agg domain.Aggregation_Service, configure ...func(*Endpoints)) *httptest.Server {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
@@ -84,6 +84,11 @@ func epNewTestServer(t *testing.T, agg domain.Aggregation_Service) *httptest.Ser
 		return v.(string), true
 	}
 	eps := NewEndpoints(svc, resolve, nil)
+	for _, fn := range configure {
+		if fn != nil {
+			fn(eps)
+		}
+	}
 	eps.Register(r)
 	eps.RegisterSmart(r)
 
@@ -179,12 +184,10 @@ func TestEndpointsStreamableHTTPFullMode(t *testing.T) {
 }
 
 func TestEndpointsRejectOversizedPostBody(t *testing.T) {
-	oldLimit := mcpRequestBodyLimit
-	mcpRequestBodyLimit = 32
-	t.Cleanup(func() { mcpRequestBodyLimit = oldLimit })
-
 	agg := &epFakeAggregation{buildResult: epToolDefs()}
-	srv := epNewTestServer(t, agg)
+	srv := epNewTestServer(t, agg, func(eps *Endpoints) {
+		eps.setRequestBodyLimitBytes(32)
+	})
 
 	for _, path := range []string{PathSSE, PathHTTP, PathSmartSSE, PathSmartHTTP} {
 		t.Run(path, func(t *testing.T) {

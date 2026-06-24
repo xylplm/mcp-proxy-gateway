@@ -218,6 +218,7 @@ func TestSaveNormalizesDefaultableFields(t *testing.T) {
 
 	cfg := mgr.Config()
 	cfg.Aggregation.ToolRoutingStrategy = ""
+	cfg.MCPAPI.RequestBodyLimitMiB = 0
 	cfg.Security = SecurityConfig{}
 	if err := mgr.Save(cfg); err != nil {
 		t.Fatalf("Save 不应返回错误：%v", err)
@@ -230,6 +231,9 @@ func TestSaveNormalizesDefaultableFields(t *testing.T) {
 	if !reflect.DeepEqual(got.Security, DefaultYAMLConfig().Security) {
 		t.Fatalf("保存后安全配置未补齐默认值：got=%+v want=%+v", got.Security, DefaultYAMLConfig().Security)
 	}
+	if got.MCPAPI.RequestBodyLimitMiB != DefaultMCPRequestBodyLimitMiB {
+		t.Fatalf("保存后 MCP 请求体上限未补齐默认值：got=%d want=%d", got.MCPAPI.RequestBodyLimitMiB, DefaultMCPRequestBodyLimitMiB)
+	}
 
 	reloaded, err := Load(nil, dataDir)
 	if err != nil {
@@ -240,6 +244,9 @@ func TestSaveNormalizesDefaultableFields(t *testing.T) {
 	}
 	if !reflect.DeepEqual(reloaded.Config().Security, DefaultYAMLConfig().Security) {
 		t.Fatalf("落盘后的安全配置未补齐默认值：got=%+v", reloaded.Config().Security)
+	}
+	if reloaded.Config().MCPAPI.RequestBodyLimitMiB != DefaultMCPRequestBodyLimitMiB {
+		t.Fatalf("落盘后的 MCP 请求体上限未补齐默认值：got=%d", reloaded.Config().MCPAPI.RequestBodyLimitMiB)
 	}
 }
 

@@ -150,6 +150,8 @@ func (a *App) build(envCfg config.EnvConfig) error {
 	mcpService := mcpapi.NewService(agg, yamlCfg.MCPAPI.SmartDiscoveryLimit, a.logger)
 	a.mcpService = mcpService
 	mcpEndpoints := mcpapi.NewEndpoints(mcpService, resolveAPIKeyID, a.logger)
+	mcpEndpoints.SetRequestBodyLimitMiB(yamlCfg.MCPAPI.RequestBodyLimitMiB)
+	a.mcpEndpoints = mcpEndpoints
 
 	// --- 小智接入服务（XiaoZhi_Connector）：出站 WS 客户端，按配置启停 ---
 	xzBackoff := xiaozhiBackoffFromConfig(yamlCfg.Connection)

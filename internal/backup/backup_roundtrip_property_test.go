@@ -118,6 +118,7 @@ func genValidYAMLConfig(t *rapid.T) config.YAMLConfig {
 	cfg.Connection.FailureThreshold = rapid.IntRange(1, 100).Draw(t, "failureThreshold")
 	cfg.Aggregation.UpstreamCallTimeoutS = rapid.IntRange(1, 600).Draw(t, "aggTimeout")
 	cfg.MCPAPI.SmartDiscoveryLimit = rapid.IntRange(1, 200).Draw(t, "smartLimit")
+	cfg.MCPAPI.RequestBodyLimitMiB = rapid.IntRange(config.MinMCPRequestBodyLimitMiB, config.MaxMCPRequestBodyLimitMiB).Draw(t, "mcpBodyLimit")
 	cfg.Statistics.TopLimitDefault = rapid.IntRange(1, 100).Draw(t, "topLimit")
 	cfg.Statistics.RetentionDays = rapid.IntRange(1, 3650).Draw(t, "statRetention")
 	cfg.Audit.PageSizeDefault = rapid.IntRange(1, 200).Draw(t, "auditPage")

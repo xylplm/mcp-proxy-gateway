@@ -98,6 +98,7 @@ func sampleBusiness() BusinessConfig {
 func TestExportImportRoundTrip(t *testing.T) {
 	srcYAML := &fakeYAMLStore{cfg: config.DefaultYAMLConfig()}
 	srcYAML.cfg.MCPAPI.SmartDiscoveryLimit = 77 // 制造一处非默认值以确保确实被还原
+	srcYAML.cfg.MCPAPI.RequestBodyLimitMiB = 64
 	srcBiz := &fakeBusinessStore{bc: sampleBusiness()}
 	srcSvc := NewService(srcYAML, srcBiz)
 
@@ -186,8 +187,10 @@ func TestImportDoesNotApplyInvalidBackup(t *testing.T) {
 func TestImportRestoresYAMLWhenBusinessImportFails(t *testing.T) {
 	originalYAML := config.DefaultYAMLConfig()
 	originalYAML.MCPAPI.SmartDiscoveryLimit = 12
+	originalYAML.MCPAPI.RequestBodyLimitMiB = 16
 	importYAML := config.DefaultYAMLConfig()
 	importYAML.MCPAPI.SmartDiscoveryLimit = 88
+	importYAML.MCPAPI.RequestBodyLimitMiB = 128
 	originalBusiness := sampleBusiness()
 	importBusiness := sampleBusiness()
 	importBusiness.Upstreams[0].Config.Name = "imported-upstream"
@@ -219,6 +222,7 @@ func TestImportDoesNotApplyBusinessWhenYAMLSaveFails(t *testing.T) {
 	originalYAML := config.DefaultYAMLConfig()
 	importYAML := config.DefaultYAMLConfig()
 	importYAML.MCPAPI.SmartDiscoveryLimit = 99
+	importYAML.MCPAPI.RequestBodyLimitMiB = 96
 	originalBusiness := sampleBusiness()
 	importBusiness := sampleBusiness()
 	importBusiness.Upstreams[0].Config.Name = "imported-upstream"

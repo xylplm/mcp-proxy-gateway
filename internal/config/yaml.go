@@ -95,6 +95,8 @@ type AggregationConfig struct {
 type MCPAPIConfig struct {
 	// SmartDiscoveryLimit 为智能模式工具发现返回数，范围 1 至 200，默认 50（Req 11.4）。
 	SmartDiscoveryLimit int `yaml:"smart_discovery_limit" json:"smart_discovery_limit"`
+	// RequestBodyLimitMiB 为单次对外 MCP POST 请求体上限，单位 MiB。
+	RequestBodyLimitMiB int `yaml:"request_body_limit_mib" json:"request_body_limit_mib"`
 }
 
 // StatisticsConfig 为统计服务配置（Req 16）。
@@ -153,6 +155,12 @@ const (
 	ModeSmart = "smart"
 	// ModeFull 为全量模式，一次性暴露全部聚合工具。
 	ModeFull = "full"
+)
+
+const (
+	DefaultMCPRequestBodyLimitMiB = 8
+	MinMCPRequestBodyLimitMiB     = 1
+	MaxMCPRequestBodyLimitMiB     = 256
 )
 
 // 日志级别取值常量。与 slog 级别对应，空串视为默认 info。
@@ -251,6 +259,7 @@ func DefaultYAMLConfig() YAMLConfig {
 		},
 		MCPAPI: MCPAPIConfig{
 			SmartDiscoveryLimit: 50,
+			RequestBodyLimitMiB: DefaultMCPRequestBodyLimitMiB,
 		},
 		Statistics: StatisticsConfig{
 			TopLimitDefault: 10,
@@ -273,6 +282,9 @@ func DefaultYAMLConfig() YAMLConfig {
 func NormalizeYAMLConfig(cfg YAMLConfig) YAMLConfig {
 	if cfg.Aggregation.ToolRoutingStrategy == "" {
 		cfg.Aggregation.ToolRoutingStrategy = domain.ToolRoutingRoundRobin
+	}
+	if cfg.MCPAPI.RequestBodyLimitMiB == 0 {
+		cfg.MCPAPI.RequestBodyLimitMiB = DefaultMCPRequestBodyLimitMiB
 	}
 	defSecurity := defaultSecurityConfig()
 	if cfg.Security.Mode == "" {

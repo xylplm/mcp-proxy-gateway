@@ -189,6 +189,9 @@ func (a *App) ApplySettings(cfg config.YAMLConfig) error {
 	if a.mcpService != nil {
 		a.mcpService.SetDiscoveryLimit(cfg.MCPAPI.SmartDiscoveryLimit)
 	}
+	if a.mcpEndpoints != nil {
+		a.mcpEndpoints.SetRequestBodyLimitMiB(cfg.MCPAPI.RequestBodyLimitMiB)
+	}
 	if a.agg != nil {
 		a.agg.SetRoutingStrategy(cfg.Aggregation.ToolRoutingStrategy)
 	}

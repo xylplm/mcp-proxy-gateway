@@ -305,6 +305,8 @@ async function confirmImportBackup(): Promise<void> {
 /** 通用样式类（TailAdmin 风格）。 */
 const inputClass =
   'h-11 w-full rounded-lg border border-gray-300 bg-transparent px-4 text-sm text-gray-800 shadow-sm placeholder:text-gray-400 focus:border-brand-300 focus:ring-3 focus:ring-brand-500/10 focus:outline-none dark:border-gray-700 dark:text-white/90 dark:placeholder:text-white/30'
+const inputWithSuffixClass =
+  'h-11 w-full rounded-l-lg border border-gray-300 bg-transparent px-4 text-sm text-gray-800 shadow-sm placeholder:text-gray-400 focus:border-brand-300 focus:ring-3 focus:ring-brand-500/10 focus:outline-none dark:border-gray-700 dark:text-white/90 dark:placeholder:text-white/30'
 const hintClass = 'mt-1 text-xs text-gray-400 dark:text-gray-500'
 const errClass = 'mt-1 text-xs text-error-500'
 </script>
@@ -701,7 +703,7 @@ const errClass = 'mt-1 text-xs text-error-500'
         >
           <h3 class="mb-1 text-base font-semibold text-gray-800 dark:text-white/90">对外 API 默认值</h3>
           <p class="mb-5 text-sm text-gray-500 dark:text-gray-400">
-            对外 MCP 服务在智能模式下使用的默认参数。
+            对外 MCP 服务的默认参数，保存后立即应用到新请求。
           </p>
           <div :class="gridClass">
             <div>
@@ -716,6 +718,27 @@ const errClass = 'mt-1 text-xs text-error-500'
               <p :class="hintClass">范围 1 – 200，默认 50。</p>
               <p v-if="fieldErrors['mcp_api.smart_discovery_limit']" :class="errClass">
                 {{ fieldErrors['mcp_api.smart_discovery_limit'] }}
+              </p>
+            </div>
+            <div>
+              <FieldLabel label="请求体上限" required tooltip="单次对外 MCP POST 请求体的最大大小。图片或资源类工具可按需调大，普通 JSON 调用建议保持默认。" />
+              <div class="flex">
+                <input
+                  v-model.number="config.mcp_api.request_body_limit_mib"
+                  type="number"
+                  min="1"
+                  max="256"
+                  :class="inputWithSuffixClass"
+                />
+                <span
+                  class="inline-flex items-center rounded-r-lg border border-l-0 border-gray-300 bg-gray-50 px-3 text-sm text-gray-500 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-400"
+                >
+                  MiB
+                </span>
+              </div>
+              <p :class="hintClass">范围 1 – 256 MiB，默认 8 MiB；调大后会占用更多请求处理内存。</p>
+              <p v-if="fieldErrors['mcp_api.request_body_limit_mib']" :class="errClass">
+                {{ fieldErrors['mcp_api.request_body_limit_mib'] }}
               </p>
             </div>
           </div>

@@ -96,6 +96,8 @@ export interface AggregationConfig {
 export interface MCPAPIConfig {
   /** 智能模式工具发现返回数，范围 1-200，默认 50。 */
   smart_discovery_limit: number
+  /** 单次对外 MCP POST 请求体上限，单位 MiB，默认 8。 */
+  request_body_limit_mib: number
 }
 
 /** 统计服务配置（对应后端 StatisticsConfig）。 */

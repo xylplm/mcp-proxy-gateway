@@ -90,6 +90,7 @@ type App struct {
 	auditRecorder *audit.Recorder
 	xiaozhiConn   *xiaozhi.Connector
 	mcpService    *mcpapi.Service
+	mcpEndpoints  *mcpapi.Endpoints
 	agg           *aggregation.Service
 	securityGuard *security.Guard
 	mgr           *manager.Manager

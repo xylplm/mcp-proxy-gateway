@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/coder/websocket"
 	"github.com/gin-gonic/gin"
@@ -54,10 +55,10 @@ const (
 // 以兼顾安全与可用。
 const wsServerReadLimit = 32 << 20
 
-// mcpRequestBodyLimit limits public MCP POST bodies before handing them to the
-// SDK transport. Normal JSON-RPC tool arguments have plenty of room, while
-// malformed or oversized requests are stopped before they can pressure memory.
-var mcpRequestBodyLimit int64 = 8 << 20
+const (
+	defaultRequestBodyLimitMiB   = 8
+	defaultRequestBodyLimitBytes = int64(defaultRequestBodyLimitMiB << 20)
+)
 
 // modeContextKey 用于把 MCP 模式注入 *http.Request 上下文。
 type modeContextKey struct{}
@@ -97,6 +98,8 @@ type Endpoints struct {
 	// sseHandler / httpHandler 为复用的 SDK server transport handler。
 	sseHandler  *mcp.SSEHandler
 	httpHandler *mcp.StreamableHTTPHandler
+
+	requestBodyLimitBytes atomic.Int64
 }
 
 // NewEndpoints 构造对外多传输端点接线。
@@ -109,9 +112,31 @@ func NewEndpoints(svc *Service, resolveKey APIKeyResolver, logger *slog.Logger) 
 		logger = slog.Default()
 	}
 	e := &Endpoints{svc: svc, resolveKey: resolveKey, logger: logger}
+	e.requestBodyLimitBytes.Store(defaultRequestBodyLimitBytes)
 	e.sseHandler = mcp.NewSSEHandler(e.getServer, nil)
 	e.httpHandler = mcp.NewStreamableHTTPHandler(e.getServer, nil)
 	return e
+}
+
+// SetRequestBodyLimitMiB updates the public MCP POST body limit at runtime.
+func (e *Endpoints) SetRequestBodyLimitMiB(limitMiB int) {
+	if e == nil {
+		return
+	}
+	if limitMiB <= 0 {
+		limitMiB = defaultRequestBodyLimitMiB
+	}
+	e.setRequestBodyLimitBytes(int64(limitMiB) << 20)
+}
+
+func (e *Endpoints) setRequestBodyLimitBytes(limit int64) {
+	if e == nil {
+		return
+	}
+	if limit <= 0 {
+		limit = defaultRequestBodyLimitBytes
+	}
+	e.requestBodyLimitBytes.Store(limit)
 }
 
 // Register 在给定 gin 路由组上注册三个对外传输端点。
@@ -168,7 +193,7 @@ func (e *Endpoints) withAPIKey(c *gin.Context, mode string) *http.Request {
 // handleSSE 以 SSE 传输对外暴露聚合能力（Req 11.8）。委派给 SDK 的 SSEHandler，
 // 构建 server 前已注入 API Key 视角（Req 11.9）。
 func (e *Endpoints) handleSSE(c *gin.Context) {
-	if !limitRequestBody(c) {
+	if !e.limitRequestBody(c) {
 		return
 	}
 	e.sseHandler.ServeHTTP(c.Writer, e.withAPIKey(c, ModeFull))
@@ -177,24 +202,28 @@ func (e *Endpoints) handleSSE(c *gin.Context) {
 // handleHTTP 以 Streamable-HTTP 传输对外暴露聚合能力（Req 11.8）。委派给 SDK 的
 // StreamableHTTPHandler，构建 server 前已注入 API Key 视角（Req 11.9）。
 func (e *Endpoints) handleHTTP(c *gin.Context) {
-	if !limitRequestBody(c) {
+	if !e.limitRequestBody(c) {
 		return
 	}
 	e.httpHandler.ServeHTTP(c.Writer, e.withAPIKey(c, ModeFull))
 }
 
-func limitRequestBody(c *gin.Context) bool {
+func (e *Endpoints) limitRequestBody(c *gin.Context) bool {
 	if c == nil || c.Request == nil || c.Request.Body == nil || c.Request.Method != http.MethodPost {
 		return true
 	}
-	if mcpRequestBodyLimit <= 0 {
+	limit := defaultRequestBodyLimitBytes
+	if e != nil {
+		limit = e.requestBodyLimitBytes.Load()
+	}
+	if limit <= 0 {
 		return true
 	}
-	if c.Request.ContentLength > mcpRequestBodyLimit {
+	if c.Request.ContentLength > limit {
 		c.AbortWithStatus(http.StatusRequestEntityTooLarge)
 		return false
 	}
-	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, mcpRequestBodyLimit)
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, limit)
 	return true
 }
 
@@ -350,14 +379,14 @@ func (e *Endpoints) RegisterSmart(rg gin.IRoutes) {
 }
 
 func (e *Endpoints) handleSmartSSE(c *gin.Context) {
-	if !limitRequestBody(c) {
+	if !e.limitRequestBody(c) {
 		return
 	}
 	e.sseHandler.ServeHTTP(c.Writer, e.withAPIKey(c, ModeSmart))
 }
 
 func (e *Endpoints) handleSmartHTTP(c *gin.Context) {
-	if !limitRequestBody(c) {
+	if !e.limitRequestBody(c) {
 		return
 	}
 	e.httpHandler.ServeHTTP(c.Writer, e.withAPIKey(c, ModeSmart))

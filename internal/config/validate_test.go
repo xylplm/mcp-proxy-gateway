@@ -24,6 +24,7 @@ func TestValidateYAMLConfigReportsFieldErrors(t *testing.T) {
 	cfg.Connection.RetryInitialBackoffS = 0 // < 1
 	cfg.Server.AdminAddr = "http://:8080"   // 含协议非法
 	cfg.MCPAPI.SmartDiscoveryLimit = 0      // < 1
+	cfg.MCPAPI.RequestBodyLimitMiB = 999    // > 256
 	cfg.Statistics.RetentionDays = 99999    // > 3650
 	cfg.Audit.PageSizeDefault = 0           // < 1
 
@@ -46,6 +47,7 @@ func TestValidateYAMLConfigReportsFieldErrors(t *testing.T) {
 		"connection.retry_initial_backoff_s",
 		"server.admin_addr",
 		"mcp_api.smart_discovery_limit",
+		"mcp_api.request_body_limit_mib",
 		"statistics.retention_days",
 		"audit.page_size_default",
 	}
@@ -85,8 +87,9 @@ func TestValidateYAMLConfigBoundaryValues(t *testing.T) {
 	cfg.Connection.FailureThreshold = 100      // 上限
 	cfg.Aggregation.UpstreamCallTimeoutS = 600 // 上限
 	cfg.MCPAPI.SmartDiscoveryLimit = 1         // 下限
-	cfg.Statistics.TopLimitDefault = 100       // 上限
-	cfg.Audit.RetentionDays = 3650             // 上限
+	cfg.MCPAPI.RequestBodyLimitMiB = MaxMCPRequestBodyLimitMiB
+	cfg.Statistics.TopLimitDefault = 100 // 上限
+	cfg.Audit.RetentionDays = 3650       // 上限
 
 	if err := ValidateYAMLConfig(cfg); err != nil {
 		t.Fatalf("范围端点值应通过校验，却返回错误：%v", err)
