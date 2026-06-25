@@ -13,7 +13,7 @@ Connect heterogeneous MCP services once, aggregate tools into one governed catal
 [![Docker Pulls](https://img.shields.io/docker/pulls/xylplm/mcp-proxy-gateway?logo=docker)](https://hub.docker.com/r/xylplm/mcp-proxy-gateway)
 [![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![Vue](https://img.shields.io/badge/Vue-3-42b883?logo=vuedotjs&logoColor=white)](https://vuejs.org/)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](#license)
+[![License](https://img.shields.io/badge/license-AGPL--3.0%20%2B%20Commercial-blue.svg)](#license)
 
 [中文](README.md) · **English**
 
@@ -371,4 +371,7 @@ Required repository secrets:
 
 ## License
 
-Licensed under the [MIT](LICENSE) License.
+This project is dual-licensed under the [GNU Affero General Public License v3.0](LICENSE) (AGPLv3) and a separate commercial license.
+
+- You may use, modify and distribute this project for free under the terms of AGPLv3.
+- For closed-source commercial integration, SaaS/hosted service offerings, or any use that does not comply with AGPLv3 source disclosure obligations, please contact the author through the GitHub repository to obtain a commercial license.

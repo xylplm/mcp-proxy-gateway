@@ -13,7 +13,7 @@
 [![Docker Pulls](https://img.shields.io/docker/pulls/xylplm/mcp-proxy-gateway?logo=docker)](https://hub.docker.com/r/xylplm/mcp-proxy-gateway)
 [![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![Vue](https://img.shields.io/badge/Vue-3-42b883?logo=vuedotjs&logoColor=white)](https://vuejs.org/)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](#许可证)
+[![License](https://img.shields.io/badge/license-AGPL--3.0%20%2B%20Commercial-blue.svg)](#许可证)
 
 **中文** · [English](README.en.md)
 
@@ -371,4 +371,7 @@ mcp-proxy-gateway/
 
 ## 许可证
 
-本项目基于 [MIT](LICENSE) 许可证开源。
+本项目采用 [GNU Affero General Public License v3.0](LICENSE)（AGPLv3）与商业授权双授权模式。
+
+- 在遵守 AGPLv3 条款的前提下，你可以免费使用、修改和分发本项目。
+- 如需在闭源商业产品中集成、以 SaaS/托管服务形式提供，或不希望履行 AGPLv3 的源代码开放义务，请通过 GitHub 仓库联系作者获取单独商业授权。

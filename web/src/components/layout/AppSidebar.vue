@@ -65,12 +65,13 @@
                 >
                   <span
                     :class="[
+                      'shrink-0',
                       isActive(item.path) ? 'menu-item-icon-active' : 'menu-item-icon-inactive',
                     ]"
                   >
                     <component :is="item.icon" />
                   </span>
-                  <span v-if="isExpanded || isHovered || isMobileOpen" class="menu-item-text">{{
+                  <span v-if="isExpanded || isHovered || isMobileOpen" class="menu-item-text min-w-0 flex-1 truncate whitespace-nowrap">{{
                     item.name
                   }}</span>
                 </router-link>
