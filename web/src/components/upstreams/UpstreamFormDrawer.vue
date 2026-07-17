@@ -23,11 +23,17 @@ import {
   SuccessIcon,
 } from '@/icons'
 import { testStageLabel, upstreamTestDiagnostic } from '@/utils/upstreamTestDiagnostics'
+import { buildUpstreamCloneFormSource } from '@/utils/upstreamCopy'
+import { normalizeTags } from '@/utils/upstreamTags'
 
 const props = defineProps<{
   open: boolean
   upstream: Upstream | null
   prefill: PrefillForm | null
+  /** 复制来源；与编辑互斥，优先级低于编辑。 */
+  cloneSource?: Upstream | null
+  /** 复制时建议名称（父组件保证尽量唯一）。 */
+  cloneName?: string
   tagOptions?: string[]
   nextSortOrder?: number
 }>()
@@ -106,7 +112,10 @@ const openAPIAuthOptions: ReadonlyArray<{ value: OpenAPIAuthMode; label: string;
 ]
 
 const isEdit = computed(() => props.upstream !== null)
-const fromTemplate = computed(() => props.prefill !== null && !isEdit.value)
+const fromClone = computed(() => !isEdit.value && props.cloneSource != null)
+const fromTemplate = computed(
+  () => props.prefill !== null && !isEdit.value && !fromClone.value,
+)
 const currentTransport = computed(() => transportHelp[form.transport])
 const isRemoteTransport = computed(() => form.transport !== 'stdio')
 const isOpenAPITransport = computed(() => form.transport === 'openapi')
@@ -122,6 +131,9 @@ const transportCards = computed(() =>
 
 const title = computed(() => {
   if (isEdit.value) return '编辑上游 MCP'
+  if (fromClone.value && props.cloneSource != null) {
+    return `复制上游：${props.cloneSource.config.name}`
+  }
   if (props.prefill !== null) return `基于模板创建：${props.prefill.name}`
   return '新建上游 MCP'
 })
@@ -243,20 +255,6 @@ function parseTags(raw: string): string[] {
     .split(/[\n,，、;；]/)
     .map((s) => s.trim())
     .filter(Boolean)
-}
-
-function normalizeTags(tags: string[]): string[] {
-  const seen = new Set<string>()
-  const out: string[] = []
-  for (const tag of tags) {
-    const value = tag.trim()
-    if (value === '') continue
-    const key = value.toLowerCase()
-    if (seen.has(key)) continue
-    seen.add(key)
-    out.push(value)
-  }
-  return out
 }
 
 function addTag(tag: string): void {
@@ -496,48 +494,91 @@ function parseCustomParams(): ConnParams | null {
   }
 }
 
+function fillFromConfig(
+  cfg: {
+    name: string
+    tags?: string[]
+    transport: TransportType
+    connParams?: ConnParams | null
+    credential?: string
+    enabled: boolean
+    autoSync: boolean
+    rateLimits?: UpstreamRateLimits
+  },
+  options?: { forceName?: string },
+): void {
+  // 崩溃防御：异常/残缺配置不得让抽屉初始化抛错。
+  const connParams =
+    cfg.connParams !== null &&
+    cfg.connParams !== undefined &&
+    typeof cfg.connParams === 'object' &&
+    !Array.isArray(cfg.connParams)
+      ? cfg.connParams
+      : {}
+  const headers = normalizeRecord(connParams.headers)
+  const env = normalizeRecord(connParams.env)
+
+  form.name = options?.forceName ?? cfg.name
+  form.tags = normalizeTags(cfg.tags ?? [])
+  form.tagDraft = ''
+  form.transport = cfg.transport
+  resetManualFields()
+  form.command = typeof connParams.command === 'string' ? connParams.command : ''
+  form.args = Array.isArray(connParams.args) ? connParams.args.join('\n') : ''
+  form.url = typeof connParams.url === 'string' ? connParams.url : ''
+  form.openAPIBaseUrl = typeof connParams.baseUrl === 'string' ? connParams.baseUrl : ''
+  form.openAPIDocUrl = typeof connParams.docUrl === 'string' ? connParams.docUrl : ''
+  form.openAPIDocContent =
+    typeof connParams.docContent === 'string' ? connParams.docContent : ''
+  form.openAPIDocMode = form.openAPIDocContent.trim() !== '' ? 'content' : 'url'
+  form.openAPIAuthMode = normalizeOpenAPIAuthMode(connParams.authType)
+  form.openAPIAuthName =
+    typeof connParams.authName === 'string' ? connParams.authName : 'X-API-Key'
+  form.credential = cfg.credential ?? ''
+  applyDetectedAuth(headers, env)
+  form.headersText = formatKeyValues(headers, ':')
+  form.envText = formatKeyValues(env, '=')
+  form.cwd = typeof connParams.cwd === 'string' ? connParams.cwd : ''
+  form.customParamsJson = customParamsFrom(connParams)
+  form.advancedOpen =
+    form.headersText !== '' ||
+    form.envText !== '' ||
+    form.cwd !== '' ||
+    form.customParamsJson !== ''
+  form.enabled = cfg.enabled
+  form.autoSync = cfg.autoSync
+  applyRateLimits(cfg.rateLimits)
+  placeholders.value = []
+  presetParams.value = {}
+}
+
 function resetForm(): void {
   clearErrors()
   invalidateTestResult()
   for (const k of Object.keys(placeholderValues)) delete placeholderValues[k]
 
+  // 优先级：编辑 > 复制 > 模板 > 空白创建
   if (props.upstream !== null) {
-    const cfg = props.upstream.config
-    const headers = normalizeRecord(cfg.connParams.headers)
-    const env = normalizeRecord(cfg.connParams.env)
+    fillFromConfig(props.upstream.config)
+    return
+  }
 
-    form.name = cfg.name
-    form.tags = normalizeTags(cfg.tags ?? [])
-    form.tagDraft = ''
-    form.transport = cfg.transport
-    resetManualFields()
-    form.command = typeof cfg.connParams.command === 'string' ? cfg.connParams.command : ''
-    form.args = Array.isArray(cfg.connParams.args) ? cfg.connParams.args.join('\n') : ''
-    form.url = typeof cfg.connParams.url === 'string' ? cfg.connParams.url : ''
-    form.openAPIBaseUrl = typeof cfg.connParams.baseUrl === 'string' ? cfg.connParams.baseUrl : ''
-    form.openAPIDocUrl = typeof cfg.connParams.docUrl === 'string' ? cfg.connParams.docUrl : ''
-    form.openAPIDocContent =
-      typeof cfg.connParams.docContent === 'string' ? cfg.connParams.docContent : ''
-    form.openAPIDocMode = form.openAPIDocContent.trim() !== '' ? 'content' : 'url'
-    form.openAPIAuthMode = normalizeOpenAPIAuthMode(cfg.connParams.authType)
-    form.openAPIAuthName =
-      typeof cfg.connParams.authName === 'string' ? cfg.connParams.authName : 'X-API-Key'
-    form.credential = cfg.credential ?? ''
-    applyDetectedAuth(headers, env)
-    form.headersText = formatKeyValues(headers, ':')
-    form.envText = formatKeyValues(env, '=')
-    form.cwd = typeof cfg.connParams.cwd === 'string' ? cfg.connParams.cwd : ''
-    form.customParamsJson = customParamsFrom(cfg.connParams)
-    form.advancedOpen =
-      form.headersText !== '' ||
-      form.envText !== '' ||
-      form.cwd !== '' ||
-      form.customParamsJson !== ''
-    form.enabled = cfg.enabled
-    form.autoSync = cfg.autoSync
-    applyRateLimits(cfg.rateLimits)
-    placeholders.value = []
-    presetParams.value = {}
+  if (props.cloneSource != null) {
+    const suggested = (props.cloneName ?? '').trim() || `${props.cloneSource.config.name} 副本`
+    const clone = buildUpstreamCloneFormSource(props.cloneSource, suggested)
+    fillFromConfig(
+      {
+        name: clone.name,
+        tags: clone.tags,
+        transport: clone.transport,
+        connParams: clone.connParams,
+        credential: clone.credential,
+        enabled: clone.enabled,
+        autoSync: clone.autoSync,
+        rateLimits: clone.rateLimits,
+      },
+      { forceName: clone.name },
+    )
     return
   }
 
@@ -555,7 +596,7 @@ function resetForm(): void {
 }
 
 watch(
-  () => [props.open, props.upstream, props.prefill],
+  () => [props.open, props.upstream, props.prefill, props.cloneSource, props.cloneName],
   () => {
     if (props.open) resetForm()
   },
@@ -1074,6 +1115,22 @@ const errorClass = 'mt-1.5 text-xs text-error-500'
           @submit.prevent="handleSubmit"
         >
           <div class="space-y-6">
+            <div
+              v-if="fromClone"
+              class="border-brand-200 bg-brand-50/80 dark:border-brand-500/20 dark:bg-brand-500/10 flex gap-3 rounded-xl border border-l-4 border-l-brand-500 px-4 py-3"
+            >
+              <InfoCircleIcon
+                class="text-brand-500 dark:text-brand-300 mt-0.5 h-4 w-4 shrink-0"
+                aria-hidden="true"
+              />
+              <div class="min-w-0 text-sm leading-6 text-gray-700 dark:text-gray-200">
+                <p class="font-medium text-gray-800 dark:text-white/90">已预填连接配置与凭证</p>
+                <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                  请确认认证信息后创建。复制会生成独立上游，不会带走工具缓存与规则绑定。
+                </p>
+              </div>
+            </div>
+
             <section class="space-y-4">
               <div>
                 <label for="up-name" :class="labelClass"
@@ -1116,7 +1173,7 @@ const errorClass = 'mt-1.5 text-xs text-error-500'
                     @blur="commitTagDraft"
                   />
                 </div>
-                <p :class="helpClass">用于列表识别和归类，输入后回车加入，也可点选已有标签。</p>
+                <p :class="helpClass">用于管理台分组与识别，输入后回车加入，也可点选已有标签。</p>
                 <p v-if="fieldErrors.tags" :class="errorClass">{{ fieldErrors.tags }}</p>
                 <div v-if="availableTagOptions.length > 0" class="mt-2 flex flex-wrap gap-2">
                   <button
