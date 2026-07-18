@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onUnmounted, reactive, ref, watch } from 'vue'
 import {
   createUpstream,
   testUpstream,
@@ -267,7 +267,7 @@ const preflightBanner = computed(() => {
     ),
   }
 })
-const suggestedFromCommand = computed(() => inferToolsFromCommand(form.command))
+const suggestedFromCommand = computed(() => inferToolsFromCommand(stdioCommandForPreflight()))
 
 const normalizedTagOptions = computed(() => normalizeTags(props.tagOptions ?? []))
 const formTags = computed(() => normalizeTags([...form.tags, ...parseTags(form.tagDraft)]))
@@ -507,11 +507,35 @@ function customParamsFrom(params: ConnParams): string {
         'authType',
         'authName',
         'authValue',
+        'runtimeRequirements',
       ].includes(key)
     )
       custom[key] = value
   }
   return Object.keys(custom).length > 0 ? JSON.stringify(custom, null, 2) : ''
+}
+
+function buildRuntimeRequirementsPayload(): NonNullable<ConnParams['runtimeRequirements']> {
+  const tools =
+    form.reqMode === 'manual'
+      ? form.reqTools
+      : form.reqTools.length > 0
+        ? form.reqTools
+        : inferToolsFromCommand(stdioCommandForPreflight())
+  return {
+    mode: form.reqMode,
+    tools: [...tools],
+    ...(form.reqNote.trim() !== '' ? { note: form.reqNote.trim() } : {}),
+  }
+}
+
+/** 模板模式 form.command 可能为空，预检/推断改用预设 command。 */
+function stdioCommandForPreflight(): string {
+  if (form.command.trim() !== '') return form.command.trim()
+  if (fromTemplate.value && typeof presetParams.value.command === 'string') {
+    return presetParams.value.command.trim()
+  }
+  return ''
 }
 
 function normalizeOpenAPIAuthMode(value: unknown): OpenAPIAuthMode {
@@ -655,6 +679,12 @@ function resetForm(): void {
   placeholders.value = props.prefill?.placeholders ?? []
   presetParams.value = props.prefill?.presetParams ?? {}
   for (const ph of placeholders.value) placeholderValues[ph.name] = ''
+  // 模板 stdio：用预设 command 初始化依赖建议并预检。
+  if (form.transport === 'stdio') {
+    form.reqMode = 'auto'
+    form.reqTools = inferToolsFromCommand(stdioCommandForPreflight())
+    schedulePreflight()
+  }
 }
 
 watch(
@@ -697,10 +727,10 @@ watch(
 )
 
 watch(
-  () => form.command,
-  (cmd) => {
+  () => [form.command, form.transport, fromTemplate.value, presetParams.value],
+  () => {
     if (form.transport !== 'stdio' || form.reqMode !== 'auto') return
-    form.reqTools = inferToolsFromCommand(cmd)
+    form.reqTools = inferToolsFromCommand(stdioCommandForPreflight())
   },
 )
 
@@ -744,7 +774,7 @@ async function runPreflight(): Promise<void> {
   try {
     const result = await preflightRuntime({
       transport: 'stdio',
-      command: form.command.trim(),
+      command: stdioCommandForPreflight(),
       requirements: {
         mode: form.reqMode,
         tools: form.reqTools,
@@ -769,7 +799,7 @@ function toggleReqTool(name: string): void {
 
 function setReqMode(mode: RequirementsMode): void {
   form.reqMode = mode
-  if (mode === 'auto') form.reqTools = inferToolsFromCommand(form.command)
+  if (mode === 'auto') form.reqTools = inferToolsFromCommand(stdioCommandForPreflight())
   schedulePreflight()
 }
 
@@ -811,6 +841,14 @@ function bannerClass(tone: 'success' | 'warning' | 'error'): string {
   if (tone === 'error') return 'border-error-200 bg-error-50/70 dark:border-error-500/20 dark:bg-error-500/10'
   return 'border-warning-200 bg-warning-50/70 dark:border-warning-500/20 dark:bg-warning-500/10'
 }
+
+onUnmounted(() => {
+  if (preflightTimer !== null) {
+    clearTimeout(preflightTimer)
+    preflightTimer = null
+  }
+  preflightSeq += 1
+})
 
 function placeholderLabel(ph: Placeholder): string {
   return ph.label?.trim() ? ph.label : ph.name
@@ -949,17 +987,7 @@ function buildManualConnParams(): ConnParams | null {
     if (args.length > 0) params.args = args
     if (Object.keys(env).length > 0) params.env = env
     if (form.cwd.trim() !== '') params.cwd = form.cwd.trim()
-    const tools =
-      form.reqMode === 'manual'
-        ? form.reqTools
-        : form.reqTools.length > 0
-          ? form.reqTools
-          : inferToolsFromCommand(form.command)
-    params.runtimeRequirements = {
-      mode: form.reqMode,
-      tools: [...tools],
-      ...(form.reqNote.trim() !== '' ? { note: form.reqNote.trim() } : {}),
-    }
+    params.runtimeRequirements = buildRuntimeRequirementsPayload()
     return params
   }
 
@@ -1113,6 +1141,10 @@ function buildConnectionDraft(): { connParams: ConnParams; credential: string } 
     const built = buildTemplateConnParams(resolved)
     connParams = built.connParams
     credential = built.credential
+    // 模板创建也写入依赖声明，便于详情预检与一键补齐。
+    if (form.transport === 'stdio') {
+      connParams.runtimeRequirements = buildRuntimeRequirementsPayload()
+    }
   } else {
     ok = validateManualBasics() && ok
     const built = buildManualConnParams()
@@ -1481,6 +1513,108 @@ const errorClass = 'mt-1.5 text-xs text-error-500'
                   >{{ JSON.stringify(presetParams, null, 2) }}</pre
                 >
               </details>
+            </section>
+
+            <!-- 模板 stdio：依赖卡片与手动模式共用，保存时写入 runtimeRequirements -->
+            <section
+              v-if="fromTemplate && form.transport === 'stdio'"
+              class="space-y-3 rounded-xl border border-gray-200 p-4 dark:border-gray-800"
+            >
+              <div class="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <h4 class="text-sm font-semibold text-gray-800 dark:text-white/90">
+                    运行环境依赖
+                  </h4>
+                  <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
+                    根据模板启动命令检测宿主工具；可手动调整并一键安装。
+                  </p>
+                </div>
+                <span
+                  v-if="preflightBanner"
+                  class="inline-flex rounded-full px-2.5 py-1 text-[11px] font-medium"
+                  :class="itemStatusClass(preflightBanner.tone === 'success')"
+                >
+                  {{ preflightLoading ? '检测中…' : preflightBanner.label }}
+                </span>
+              </div>
+              <div class="inline-flex rounded-lg bg-gray-100 p-1 dark:bg-white/[0.04]">
+                <button
+                  type="button"
+                  class="rounded-md px-3 py-1.5 text-xs font-medium transition"
+                  :class="
+                    form.reqMode === 'auto'
+                      ? 'bg-white text-gray-900 shadow-sm dark:bg-gray-800 dark:text-white'
+                      : 'text-gray-500 dark:text-gray-400'
+                  "
+                  @click="setReqMode('auto')"
+                >
+                  按命令自动
+                </button>
+                <button
+                  type="button"
+                  class="rounded-md px-3 py-1.5 text-xs font-medium transition"
+                  :class="
+                    form.reqMode === 'manual'
+                      ? 'bg-white text-gray-900 shadow-sm dark:bg-gray-800 dark:text-white'
+                      : 'text-gray-500 dark:text-gray-400'
+                  "
+                  @click="setReqMode('manual')"
+                >
+                  我自己选择
+                </button>
+              </div>
+              <div class="flex flex-wrap gap-2">
+                <button
+                  v-for="tool in knownTools"
+                  :key="`tpl-${tool.name}`"
+                  type="button"
+                  class="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition"
+                  :class="
+                    form.reqTools.includes(tool.name)
+                      ? 'border-brand-300 bg-brand-50 text-brand-700 dark:border-brand-500/40 dark:bg-brand-500/10 dark:text-brand-300'
+                      : 'border-gray-200 text-gray-500 dark:border-gray-700 dark:text-gray-400'
+                  "
+                  :disabled="form.reqMode === 'auto'"
+                  @click="toggleReqTool(tool.name)"
+                >
+                  {{ tool.label }}
+                </button>
+              </div>
+              <div
+                v-if="preflight?.items?.length"
+                class="space-y-1.5 rounded-lg bg-gray-50 p-3 dark:bg-white/[0.03]"
+              >
+                <div
+                  v-for="item in preflight.items"
+                  :key="`tpl-item-${item.name}`"
+                  class="flex flex-wrap items-center justify-between gap-2 text-xs"
+                >
+                  <span class="font-mono text-gray-700 dark:text-gray-200">{{ item.label }}</span>
+                  <span class="inline-flex items-center gap-2">
+                    <span
+                      class="rounded-full px-2 py-0.5 font-medium"
+                      :class="itemStatusClass(item.available)"
+                    >
+                      {{ item.available ? '可用' : '缺失' }}
+                    </span>
+                    <button
+                      v-if="!item.available && item.fixable && item.packageId"
+                      type="button"
+                      class="font-medium text-brand-600 hover:underline disabled:opacity-50 dark:text-brand-400"
+                      :disabled="installingPackageId !== ''"
+                      @click="handleInstallPackage(item.packageId!)"
+                    >
+                      {{ installingPackageId === item.packageId ? '安装中…' : '一键安装' }}
+                    </button>
+                  </span>
+                </div>
+              </div>
+              <router-link
+                to="/runtime"
+                class="text-xs font-medium text-brand-600 hover:underline dark:text-brand-400"
+              >
+                打开运行环境
+              </router-link>
             </section>
 
             <template v-else>

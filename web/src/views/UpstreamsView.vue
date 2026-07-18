@@ -339,6 +339,7 @@ function depChipClass(available: boolean): string {
 watch(
   () => detailUpstream.value?.id,
   () => {
+    detailPreflightSeq += 1
     void loadDetailPreflight()
   },
 )

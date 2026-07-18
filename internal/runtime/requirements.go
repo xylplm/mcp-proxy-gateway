@@ -220,35 +220,46 @@ func ValidateRequirements(raw any) (RuntimeRequirements, error) {
 		return RuntimeRequirements{}, fmt.Errorf("依赖工具最多 16 项")
 	}
 	// 再确认无未知项被静默丢弃：若用户传入未知名则报错
-	if m, ok := raw.(map[string]any); ok {
-		if toolsRaw, exists := m["tools"]; exists && toolsRaw != nil {
-			var original []string
-			switch v := toolsRaw.(type) {
-			case []string:
-				original = v
-			case []any:
-				for _, item := range v {
-					if s, ok := item.(string); ok {
-						original = append(original, s)
-					} else {
-						return RuntimeRequirements{}, fmt.Errorf("runtimeRequirements.tools 必须为字符串数组")
-					}
-				}
-			default:
-				return RuntimeRequirements{}, fmt.Errorf("runtimeRequirements.tools 必须为字符串数组")
-			}
-			for _, t := range original {
-				name := strings.ToLower(strings.TrimSpace(t))
-				if name == "" {
-					return RuntimeRequirements{}, fmt.Errorf("依赖工具名不能为空")
-				}
-				if !IsKnownTool(name) {
-					return RuntimeRequirements{}, fmt.Errorf("未知依赖工具 %q（仅支持运行环境探测清单中的工具）", name)
-				}
-			}
+	switch m := raw.(type) {
+	case map[string]any:
+		if err := validateRawToolsField(m["tools"]); err != nil {
+			return RuntimeRequirements{}, err
 		}
+	case RuntimeRequirements:
+		// 已规范化；未知项在 normalize 中丢弃，类型路径不再重复校验。
 	}
 	return req, nil
+}
+
+func validateRawToolsField(toolsRaw any) error {
+	if toolsRaw == nil {
+		return nil
+	}
+	var original []string
+	switch v := toolsRaw.(type) {
+	case []string:
+		original = v
+	case []any:
+		for _, item := range v {
+			s, ok := item.(string)
+			if !ok {
+				return fmt.Errorf("runtimeRequirements.tools 必须为字符串数组")
+			}
+			original = append(original, s)
+		}
+	default:
+		return fmt.Errorf("runtimeRequirements.tools 必须为字符串数组")
+	}
+	for _, t := range original {
+		name := strings.ToLower(strings.TrimSpace(t))
+		if name == "" {
+			return fmt.Errorf("依赖工具名不能为空")
+		}
+		if !IsKnownTool(name) {
+			return fmt.Errorf("未知依赖工具 %q（仅支持运行环境探测清单中的工具）", name)
+		}
+	}
+	return nil
 }
 
 // ParseRequirements 从 JSON 对象解析依赖声明。

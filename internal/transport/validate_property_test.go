@@ -259,6 +259,12 @@ func stdioValidRef(params map[string]any) bool {
 			return false
 		}
 	}
+	// 对齐 validateRuntimeRequirements：缺省合法；提供时须为可解析对象。
+	if raw, ok := params[ParamRuntimeRequirements]; ok && raw != nil {
+		if _, err := runtime.ValidateRequirements(raw); err != nil {
+			return false
+		}
+	}
 	return true
 }
 
