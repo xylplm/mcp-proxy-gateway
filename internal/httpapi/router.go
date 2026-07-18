@@ -383,6 +383,10 @@ type Router struct {
 // RuntimeEnvironmentService 为管理台「运行环境」页的窄接口。
 type RuntimeEnvironmentService interface {
 	Summary() rtenv.Summary
+	Catalog() []rtenv.CatalogPackage
+	PreviewInstall(packageID string) (rtenv.CatalogPackage, error)
+	InstallPackage(ctx context.Context, packageID string) (rtenv.InstallResult, error)
+	UninstallPackage(packageID string) error
 }
 
 // Deps 聚合构造 Router 所需的全部依赖，便于装配层一次性注入。

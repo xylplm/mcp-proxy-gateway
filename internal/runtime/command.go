@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// 始终拒绝作为 stdio command 的危险解释器 / shell（不可通过 allowlist 放开）。
+// 始终拒绝作为 stdio command 的危险解释器 / shell / 包装器（不可通过 allowlist 放开）。
 var deniedCommandBases = map[string]struct{}{
 	"sh":             {},
 	"bash":           {},
@@ -30,6 +30,18 @@ var deniedCommandBases = map[string]struct{}{
 	"sudo":           {},
 	"su":             {},
 	"doas":           {},
+	// 包装器：可把任意命令当参数执行，绕过「command 白名单」。
+	"env":     {},
+	"nice":    {},
+	"nohup":   {},
+	"xargs":   {},
+	"time":    {},
+	"timeout": {},
+	"stdbuf":  {},
+	"busybox": {},
+	"perl":    {},
+	"ruby":    {},
+	"lua":     {},
 }
 
 // ValidateCommand 校验 stdio 启动命令是否允许。

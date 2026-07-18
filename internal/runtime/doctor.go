@@ -1,8 +1,10 @@
 package runtime
 
 import (
+	"context"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 )
@@ -16,16 +18,20 @@ type ToolStatus struct {
 
 // Summary 为管理台「运行环境」摘要。
 type Summary struct {
-	StdioEnabled     bool         `json:"stdioEnabled"`
-	CommandAllowlist []string     `json:"commandAllowlist"`
-	Tools            []ToolStatus `json:"tools"`
-	AvailableCount   int          `json:"availableCount"`
-	MissingCount     int          `json:"missingCount"`
-	DataDir          string       `json:"dataDir,omitempty"`
-	RuntimeDir       string       `json:"runtimeDir,omitempty"`
-	PathPrefixes     []string     `json:"pathPrefixes,omitempty"`
-	LayoutReady      bool         `json:"layoutReady"`
-	RiskNotes        []string     `json:"riskNotes"`
+	StdioEnabled      bool                `json:"stdioEnabled"`
+	CommandAllowlist  []string            `json:"commandAllowlist"`
+	Tools             []ToolStatus        `json:"tools"`
+	AvailableCount    int                 `json:"availableCount"`
+	MissingCount      int                 `json:"missingCount"`
+	DataDir           string              `json:"dataDir,omitempty"`
+	RuntimeDir        string              `json:"runtimeDir,omitempty"`
+	PathPrefixes      []string            `json:"pathPrefixes,omitempty"`
+	LayoutReady       bool                `json:"layoutReady"`
+	ProcessHardening  bool                `json:"processHardening"`
+	Sandbox           SandboxCapabilities `json:"sandbox"`
+	Catalog           []CatalogPackage    `json:"catalog,omitempty"`
+	InstalledPackages []InstallRecord     `json:"installedPackages,omitempty"`
+	RiskNotes         []string            `json:"riskNotes"`
 }
 
 // LookPathFunc 便于单测注入。
@@ -70,11 +76,17 @@ func (d *Doctor) Probe() []ToolStatus {
 }
 
 // BuildSummary 组合策略与探测结果。
-func BuildSummary(policy Policy, tools []ToolStatus, dataDir, runtimeDir string, pathPrefixes []string) Summary {
+func BuildSummary(
+	policy Policy,
+	tools []ToolStatus,
+	dataDir, runtimeDir string,
+	pathPrefixes []string,
+	catalog []CatalogPackage,
+	installed []InstallRecord,
+) Summary {
 	policy = NormalizePolicy(policy)
 	allowlist := policy.CommandAllowlist
 	if allowlist == nil {
-		// 展示层：nil 表示沿用产品默认白名单文案。
 		allowlist = DefaultCommandAllowlist()
 	}
 	available := 0
@@ -84,42 +96,47 @@ func BuildSummary(policy Policy, tools []ToolStatus, dataDir, runtimeDir string,
 		}
 	}
 	missing := len(tools) - available
-	layoutReady := runtimeDir != ""
+	layoutReady := false
 	if runtimeDir != "" {
-		if st, err := os.Stat(runtimeDir); err != nil || !st.IsDir() {
-			layoutReady = false
+		if st, err := os.Stat(runtimeDir); err == nil && st.IsDir() {
+			if stBin, err := os.Stat(filepath.Join(runtimeDir, RuntimeSubdirBin)); err == nil && stBin.IsDir() {
+				layoutReady = true
+			}
 		}
 	}
 	notes := []string{
 		"stdio 上游在网关进程旁启动本地子进程，请仅接入可信命令与包来源。",
 		"远程 SSE / HTTP / WebSocket / OpenAPI 上游不依赖本页工具探测。",
+		"预置安装仅允许内置目录中的 Node / uv 固定版本，禁止任意 URL 或 npm 包名。",
 	}
 	if !policy.StdioEnabled {
 		notes = append([]string{"本地 stdio 上游已禁用，仅可使用远程与 OpenAPI 上游。"}, notes...)
 	}
 	if missing > 0 && runtimeDir != "" {
+		binHint := filepath.Join(runtimeDir, RuntimeSubdirBin)
 		notes = append(notes,
-			"可将 node、npx、uv 等可执行文件放入 "+runtimeDir+"/bin（或 node/bin 等），重启网关进程后刷新本页。默认镜像不含这些工具，数据卷内安装可在容器更新后保留。",
+			"可将工具放入 "+binHint+"，或使用本页「预置安装」拉取官方 Node / uv；完成后刷新探测即可。",
 		)
 	}
-	if len(pathPrefixes) == 0 && runtimeDir != "" {
-		notes = append(notes, "运行时目录已配置，但尚未发现可用的 bin 子目录；请按目录说明放置工具。")
-	}
 	return Summary{
-		StdioEnabled:     policy.StdioEnabled,
-		CommandAllowlist: append([]string{}, allowlist...),
-		Tools:            tools,
-		AvailableCount:   available,
-		MissingCount:     missing,
-		DataDir:          dataDir,
-		RuntimeDir:       runtimeDir,
-		PathPrefixes:     append([]string{}, pathPrefixes...),
-		LayoutReady:      layoutReady,
-		RiskNotes:        notes,
+		StdioEnabled:      policy.StdioEnabled,
+		CommandAllowlist:  append([]string{}, allowlist...),
+		Tools:             tools,
+		AvailableCount:    available,
+		MissingCount:      missing,
+		DataDir:           dataDir,
+		RuntimeDir:        runtimeDir,
+		PathPrefixes:      append([]string{}, pathPrefixes...),
+		LayoutReady:       layoutReady,
+		ProcessHardening:  policy.ProcessHardening,
+		Sandbox:           DescribeSandbox(),
+		Catalog:           catalog,
+		InstalledPackages: installed,
+		RiskNotes:         notes,
 	}
 }
 
-// Service 聚合策略读取与探测，供 HTTP 与 transport 注入。
+// Service 聚合策略读取、探测与受控安装，供 HTTP 与 transport 注入。
 type Service struct {
 	mu           sync.RWMutex
 	policyFn     func() Policy
@@ -184,10 +201,14 @@ func (s *Service) RuntimeDir() string {
 	return ResolveRuntimeDir(dataDir, os.Getenv("MPG_RUNTIME_DIR"))
 }
 
+func (s *Service) installer() *Installer {
+	return NewInstaller(s.RuntimeDir(), nil)
+}
+
 // Summary 返回管理台摘要。
 func (s *Service) Summary() Summary {
 	if s == nil {
-		return BuildSummary(DefaultPolicy(), nil, "", "", nil)
+		return BuildSummary(DefaultPolicy(), nil, "", "", nil, nil, nil)
 	}
 	policy := s.Policy()
 	dataDir := ""
@@ -195,16 +216,67 @@ func (s *Service) Summary() Summary {
 		dataDir = s.dataDirFn()
 	}
 	runtimeDir := s.RuntimeDir()
-	// 本机/容器均幂等确保目录存在，便于用户直接往里放工具。
 	_ = EnsureRuntimeLayout(runtimeDir)
 	prefixes := PathPrefixes(runtimeDir)
 	doctor := NewDoctor(func(file string) (string, error) {
 		return LookPathWithPrefixes(file, prefixes, exec.LookPath)
 	})
-	return BuildSummary(policy, doctor.Probe(), dataDir, runtimeDir, prefixes)
+	inst := s.installer()
+	return BuildSummary(
+		policy,
+		doctor.Probe(),
+		dataDir,
+		runtimeDir,
+		prefixes,
+		inst.CatalogWithStatus(),
+		inst.ListInstalled(),
+	)
+}
+
+// Catalog 返回预置包目录与安装状态。
+func (s *Service) Catalog() []CatalogPackage {
+	if s == nil {
+		return nil
+	}
+	return s.installer().CatalogWithStatus()
+}
+
+// PreviewInstall 预览安装。
+func (s *Service) PreviewInstall(packageID string) (CatalogPackage, error) {
+	if s == nil {
+		return CatalogPackage{}, fmtUnavailable("运行环境服务未就绪")
+	}
+	return s.installer().PreviewInstall(packageID)
+}
+
+// InstallPackage 执行受控安装。
+func (s *Service) InstallPackage(ctx context.Context, packageID string) (InstallResult, error) {
+	if s == nil {
+		return InstallResult{}, fmtUnavailable("运行环境服务未就绪")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return s.installer().Install(ctx, packageID)
+}
+
+// UninstallPackage 卸载预置包。
+func (s *Service) UninstallPackage(packageID string) error {
+	if s == nil {
+		return fmtUnavailable("运行环境服务未就绪")
+	}
+	return s.installer().Uninstall(packageID)
 }
 
 // ValidateStdioCommand 供 transport 校验调用。
 func (s *Service) ValidateStdioCommand(command string) error {
 	return ValidateCommand(command, s.Policy())
 }
+
+func fmtUnavailable(msg string) error {
+	return &simpleError{s: msg}
+}
+
+type simpleError struct{ s string }
+
+func (e *simpleError) Error() string { return e.s }

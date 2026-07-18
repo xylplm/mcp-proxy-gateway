@@ -18,9 +18,9 @@ func TestValidateCommandDefaults(t *testing.T) {
 
 func TestValidateCommandDeniesShells(t *testing.T) {
 	t.Parallel()
-	policy := NormalizePolicy(Policy{StdioEnabled: true, CommandAllowlist: []string{"bash", "npx"}})
-	// shell 即使出现在 allowlist 也必须拒绝
-	for _, cmd := range []string{"bash", "/bin/bash", "cmd.exe", "powershell", "pwsh", "sh"} {
+	policy := NormalizePolicy(Policy{StdioEnabled: true, CommandAllowlist: []string{"bash", "npx", "env", "busybox"}})
+	// shell / 包装器即使出现在 allowlist 也必须拒绝
+	for _, cmd := range []string{"bash", "/bin/bash", "cmd.exe", "powershell", "pwsh", "sh", "env", "busybox"} {
 		err := ValidateCommand(cmd, policy)
 		if err == nil {
 			t.Fatalf("command %q must be denied", cmd)

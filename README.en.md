@@ -192,7 +192,7 @@ docker pull xylplm/mcp-proxy-gateway:latest
 docker pull xylplm/mcp-proxy-gateway:1.0.202606071302
 ```
 
-> `stdio` upstreams launch subprocesses inside the gateway runtime. The default image stays minimal (no Node / Python / uv). Prefer placing tools on the data volume under **`$MPG_DATA_DIR/runtime`** (override with `MPG_RUNTIME_DIR`): put `node`, `npx`, `uv`, etc. into `runtime/bin` (or `node/bin`, …), restart the container, then refresh **Runtime** in the admin UI. A custom image with runtimes preinstalled also works. Remote SSE, Streamable HTTP, WebSocket and OpenAPI upstreams do not have this constraint.
+> `stdio` upstreams launch subprocesses inside the gateway runtime. The default image stays minimal (no Node / Python / uv). Prefer: (1) controlled preset install from the admin **Runtime** page (fixed official Node/uv builds with SHA256 checks); (2) place tools under **`$MPG_DATA_DIR/runtime`** (`MPG_RUNTIME_DIR` override); or (3) optional `Dockerfile.stdio` / a custom image. See [docs/runtime.md](docs/runtime.md). Remote SSE, Streamable HTTP, WebSocket and OpenAPI upstreams do not have this constraint.
 
 ## Service Endpoints
 

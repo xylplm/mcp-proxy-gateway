@@ -23,6 +23,7 @@ function ensureRuntime(config: YAMLConfig): void {
       stdio_enabled: true,
       command_allowlist: ['node', 'npx', 'npm', 'python', 'python3', 'uv', 'uvx', 'docker'],
       extra_sensitive_env_prefixes: [],
+      process_hardening: true,
     }
   }
   if (!Array.isArray(config.runtime.command_allowlist)) {
@@ -30,6 +31,9 @@ function ensureRuntime(config: YAMLConfig): void {
   }
   if (!Array.isArray(config.runtime.extra_sensitive_env_prefixes)) {
     config.runtime.extra_sensitive_env_prefixes = []
+  }
+  if (config.runtime.process_hardening == null) {
+    config.runtime.process_hardening = true
   }
 }
 
@@ -257,6 +261,14 @@ export function collectSettingsChanges(before: YAMLConfig, after: YAMLConfig): S
     after.runtime?.extra_sensitive_env_prefixes ?? [],
     runtimeOnly,
     (v) => (Array.isArray(v) && v.length > 0 ? v.join('、') : '无'),
+  )
+  addChange(
+    changes,
+    'stdio 进程加固',
+    before.runtime?.process_hardening ?? true,
+    after.runtime?.process_hardening ?? true,
+    runtimeOnly,
+    (v) => (v ? '启用' : '关闭'),
   )
   addChange(
     changes,

@@ -46,14 +46,21 @@ func (a *App) build(envCfg config.EnvConfig) error {
 	// --- 出站适配：工具缓存、传输工厂、连接拨号/会话注册 ---
 	toolCache := cache.New(a.rdb, repos.ToolCache, a.logger)
 	// stdio 安全策略：每次从配置快照读取，保存设置后无需重启即可生效。
-	transport.SetPolicyProvider(func() rtenv.Policy {
+	policyFromCfg := func() rtenv.Policy {
 		rt := a.cfg.Config().Runtime
+		hardening := true
+		if rt.ProcessHardening != nil {
+			hardening = *rt.ProcessHardening
+		}
 		return rtenv.Policy{
 			StdioEnabled:              rt.StdioEnabled,
 			CommandAllowlist:          append([]string{}, rt.CommandAllowlist...),
 			ExtraSensitiveEnvPrefixes: append([]string{}, rt.ExtraSensitiveEnvPrefixes...),
+			ProcessHardening:          hardening,
+			PreferRuntimePath:         true,
 		}
-	})
+	}
+	transport.SetPolicyProvider(policyFromCfg)
 	// 卷内运行时目录：优先 MPG_RUNTIME_DIR，否则 {DataDir}/runtime。
 	runtimeDirFn := func() string {
 		env := a.cfg.Env()
@@ -63,14 +70,7 @@ func (a *App) build(envCfg config.EnvConfig) error {
 	// 启动时幂等创建目录布局（失败不阻断主业务；Summary 时也会再试）。
 	_ = rtenv.EnsureRuntimeLayout(runtimeDirFn())
 	runtimeSvc := rtenv.NewService(
-		func() rtenv.Policy {
-			rt := a.cfg.Config().Runtime
-			return rtenv.Policy{
-				StdioEnabled:              rt.StdioEnabled,
-				CommandAllowlist:          append([]string{}, rt.CommandAllowlist...),
-				ExtraSensitiveEnvPrefixes: append([]string{}, rt.ExtraSensitiveEnvPrefixes...),
-			}
-		},
+		policyFromCfg,
 		func() string { return a.cfg.Env().DataDir },
 		runtimeDirFn,
 	)

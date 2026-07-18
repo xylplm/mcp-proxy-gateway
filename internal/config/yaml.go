@@ -45,6 +45,9 @@ type RuntimeConfig struct {
 	CommandAllowlist []string `yaml:"command_allowlist" json:"command_allowlist"`
 	// ExtraSensitiveEnvPrefixes 追加到内置敏感环境变量前缀（仅剥离父进程继承项）。
 	ExtraSensitiveEnvPrefixes []string `yaml:"extra_sensitive_env_prefixes" json:"extra_sensitive_env_prefixes"`
+	// ProcessHardening 为 true 时对 stdio 子进程应用平台可用的进程隔离（默认 true）。
+	// 使用指针以区分「缺省」与显式 false；Normalize 时缺省回填 true。
+	ProcessHardening *bool `yaml:"process_hardening" json:"process_hardening"`
 }
 
 // ServerConfig 为 HTTP 服务监听配置。
@@ -236,6 +239,7 @@ func defaultSecurityConfig() SecurityConfig {
 }
 
 func defaultRuntimeConfig() RuntimeConfig {
+	hardening := true
 	return RuntimeConfig{
 		StdioEnabled: true,
 		// 与模板市场常用命令对齐；空列表在 Normalize 时也会回填。
@@ -243,6 +247,7 @@ func defaultRuntimeConfig() RuntimeConfig {
 			"node", "npx", "npm", "python", "python3", "uv", "uvx", "docker",
 		},
 		ExtraSensitiveEnvPrefixes: []string{},
+		ProcessHardening:          &hardening,
 	}
 }
 
@@ -358,6 +363,10 @@ func NormalizeYAMLConfig(cfg YAMLConfig) YAMLConfig {
 	}
 	if cfg.Runtime.ExtraSensitiveEnvPrefixes == nil {
 		cfg.Runtime.ExtraSensitiveEnvPrefixes = []string{}
+	}
+	if cfg.Runtime.ProcessHardening == nil {
+		v := true
+		cfg.Runtime.ProcessHardening = &v
 	}
 	return cfg
 }

@@ -1,4 +1,4 @@
-import type { RuntimeSummary, RuntimeToolStatus } from '../api/runtime'
+import type { RuntimeCatalogPackage, RuntimeSummary, RuntimeToolStatus } from '../api/runtime'
 
 export function toolStatusLabel(tool: RuntimeToolStatus): string {
   return tool.available ? '可用' : '未检测到'
@@ -8,7 +8,9 @@ export function toolStatusTone(tool: RuntimeToolStatus): 'success' | 'warning' {
   return tool.available ? 'success' : 'warning'
 }
 
-export function summarizeToolHealth(summary: Pick<RuntimeSummary, 'availableCount' | 'missingCount' | 'tools'>): string {
+export function summarizeToolHealth(
+  summary: Pick<RuntimeSummary, 'availableCount' | 'missingCount' | 'tools'>,
+): string {
   const fromTools = summary.tools?.length ?? 0
   const fromCounts = (summary.availableCount ?? 0) + (summary.missingCount ?? 0)
   const total = Math.max(fromTools, fromCounts)
@@ -38,15 +40,41 @@ export function runtimeBinDir(summary: Pick<RuntimeSummary, 'runtimeDir' | 'path
 }
 
 /** 工具缺失时是否展示卷路径引导。 */
-export function shouldShowRuntimeGuide(summary: Pick<RuntimeSummary, 'missingCount' | 'runtimeDir'>): boolean {
+export function shouldShowRuntimeGuide(
+  summary: Pick<RuntimeSummary, 'missingCount' | 'runtimeDir'>,
+): boolean {
   return (summary.missingCount ?? 0) > 0 && !!summary.runtimeDir?.trim()
 }
 
-export function runtimeGuideSteps(summary: Pick<RuntimeSummary, 'runtimeDir' | 'pathPrefixes'>): string[] {
+export function runtimeGuideSteps(
+  summary: Pick<RuntimeSummary, 'runtimeDir' | 'pathPrefixes'>,
+): string[] {
   const bin = runtimeBinDir(summary) || `${summary.runtimeDir ?? ''}/bin`
   return [
-    `将 node、npx、uv、uvx 等可执行文件放入 ${bin}`,
+    `使用本页「预置安装」一键安装官方 Node / uv，或手动将可执行文件放入 ${bin}`,
     '也可使用 node/bin、python/bin、uv/bin 等发行版布局',
-    '重启网关进程后，回到本页点击「刷新探测」',
+    '安装完成后点击「刷新探测」（Docker 入口 PATH 变更需重启容器）',
   ]
+}
+
+export function packageStatusLabel(pkg: Pick<RuntimeCatalogPackage, 'installed' | 'supported'>): string {
+  if (pkg.installed) return '已安装'
+  if (!pkg.supported) return '当前平台不可用'
+  return '可安装'
+}
+
+export function packageStatusTone(
+  pkg: Pick<RuntimeCatalogPackage, 'installed' | 'supported'>,
+): 'success' | 'warning' | 'muted' {
+  if (pkg.installed) return 'success'
+  if (!pkg.supported) return 'muted'
+  return 'warning'
+}
+
+export function sandboxHardeningLabel(
+  summary: Pick<RuntimeSummary, 'processHardening' | 'sandbox'>,
+): string {
+  if (summary.processHardening === false) return '进程加固已关闭'
+  if (summary.sandbox?.processHardeningSupported) return 'Linux 进程加固已启用'
+  return '策略加固已启用'
 }

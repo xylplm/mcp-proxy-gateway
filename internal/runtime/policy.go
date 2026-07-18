@@ -1,9 +1,10 @@
-// Package runtime 提供 stdio 本地运行时的安全策略、命令校验、环境清理与能力探测。
+// Package runtime 提供 stdio 本地运行时的安全策略、命令校验、环境清理、
+// 卷路径解析、受控预置安装与进程级加固。
 //
-// 设计边界（P0）：
-//   - 不负责在线装包 / 容器沙箱；
+// 边界：
+//   - 不提供任意 shell / 任意 URL 装包；
 //   - 策略对 stdio 热生效，不影响远程传输主路径；
-//   - 默认兼容现有模板常用命令（node/npx/uvx 等）。
+//   - 默认兼容模板常用命令（node/npx/uvx 等）；docker 仍在默认白名单以兼容内置模板。
 package runtime
 
 import (
@@ -15,10 +16,16 @@ import (
 type Policy struct {
 	// StdioEnabled 为 false 时拒绝一切 stdio 上游配置与连接。
 	StdioEnabled bool
-	// CommandAllowlist 为允许的可执行文件基名（小写）；空表示仅拒绝危险命令。
+	// CommandAllowlist 为允许的可执行文件基名（小写）；空表示仅拒绝危险命令（测试/高级用法）。
+	// 生产配置层会把空列表回填为 DefaultCommandAllowlist，避免误开「允许一切」。
 	CommandAllowlist []string
 	// ExtraSensitiveEnvPrefixes 为追加到内置敏感前缀的自定义前缀（大写比较）。
 	ExtraSensitiveEnvPrefixes []string
+	// ProcessHardening 为 true 时对 stdio 子进程应用平台可用的进程隔离（Linux: 进程组/父亡杀子等）。
+	// 默认 true；不影响远程传输。
+	ProcessHardening bool
+	// PreferRuntimePath 为 true 时优先使用卷内 runtime 路径解析命令（默认 true）。
+	PreferRuntimePath bool
 }
 
 // DefaultCommandAllowlist 与模板市场常用 stdio 命令对齐。
@@ -49,10 +56,10 @@ func DefaultProbeTools() []string {
 	}
 }
 
-// NormalizePolicy 清洗 allowlist / 前缀。
+// NormalizePolicy 清洗 allowlist / 前缀，并补齐布尔默认语义。
 //
-// 注意：CommandAllowlist 为 nil 或空时表示「仅应用危险命令 denylist、不启用白名单」。
-// 生产默认白名单由 config.defaultRuntimeConfig 写入；nil provider 时由调用方显式填入 DefaultCommandAllowlist。
+// CommandAllowlist 为 nil 或空时：保持空切片语义给 ValidateCommand（denylist-only）。
+// 产品配置层（config.NormalizeYAMLConfig）负责把空列表回填为默认白名单。
 func NormalizePolicy(p Policy) Policy {
 	if p.CommandAllowlist != nil {
 		p.CommandAllowlist = normalizeNameList(p.CommandAllowlist)
@@ -61,11 +68,13 @@ func NormalizePolicy(p Policy) Policy {
 	return p
 }
 
-// DefaultPolicy 返回与网关出厂配置一致的策略（stdio 启用 + 默认白名单）。
+// DefaultPolicy 返回与网关出厂配置一致的策略（stdio 启用 + 默认白名单 + 进程加固）。
 func DefaultPolicy() Policy {
 	return NormalizePolicy(Policy{
-		StdioEnabled:     true,
-		CommandAllowlist: DefaultCommandAllowlist(),
+		StdioEnabled:      true,
+		CommandAllowlist:  DefaultCommandAllowlist(),
+		ProcessHardening:  true,
+		PreferRuntimePath: true,
 	})
 }
 

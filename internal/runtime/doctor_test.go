@@ -22,7 +22,7 @@ func TestDoctorProbeAndSummary(t *testing.T) {
 	if len(tools) != len(DefaultProbeTools()) {
 		t.Fatalf("tool count=%d", len(tools))
 	}
-	sum := BuildSummary(DefaultPolicy(), tools, "/data", "/data/runtime", []string{"/data/runtime/bin"})
+	sum := BuildSummary(DefaultPolicy(), tools, "/data", "/data/runtime", []string{"/data/runtime/bin"}, nil, nil)
 	if sum.AvailableCount != 2 {
 		t.Fatalf("available=%d", sum.AvailableCount)
 	}
@@ -44,9 +44,12 @@ func TestDoctorProbeAndSummary(t *testing.T) {
 	if len(sum.CommandAllowlist) == 0 {
 		t.Fatal("allowlist should be present for default policy")
 	}
+	if sum.Sandbox.Platform == "" {
+		t.Fatal("sandbox platform should be set")
+	}
 	foundGuide := false
 	for _, n := range sum.RiskNotes {
-		if strings.Contains(n, "/data/runtime") {
+		if strings.Contains(n, "runtime") || strings.Contains(n, "预置") {
 			foundGuide = true
 			break
 		}
@@ -74,5 +77,8 @@ func TestServiceSummaryCreatesLayout(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(rt, "bin")); err != nil {
 		t.Fatalf("bin not created: %v", err)
+	}
+	if len(sum.Catalog) == 0 {
+		t.Fatal("catalog should be present")
 	}
 }

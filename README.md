@@ -192,7 +192,11 @@ docker pull xylplm/mcp-proxy-gateway:latest
 docker pull xylplm/mcp-proxy-gateway:1.0.202606071302
 ```
 
-> `stdio` 上游需要在网关运行环境中启动子进程。默认镜像刻意保持极简（不含 Node / Python / uv）。推荐将工具放入数据卷 **`$MPG_DATA_DIR/runtime`**（可用 `MPG_RUNTIME_DIR` 覆盖）：把 `node`、`npx`、`uv` 等放入 `runtime/bin`（或 `node/bin` 等），重启容器后即可被管理台「运行环境」探测并用于 stdio。也可继续使用包含运行时的自定义镜像。远程 SSE、Streamable HTTP、WebSocket 与 OpenAPI 上游不受此限制。
+> `stdio` 上游需要在网关运行环境中启动子进程。默认镜像刻意保持极简（不含 Node / Python / uv）。推荐：
+> 1）管理台「运行环境」使用**受控预置安装**（仅官方 Node / uv 固定版本，SHA256 校验）；或
+> 2）将工具放入数据卷 **`$MPG_DATA_DIR/runtime`**（`MPG_RUNTIME_DIR` 可覆盖）；或
+> 3）使用可选 `Dockerfile.stdio` / 自定义镜像。
+> 详见 [docs/runtime.md](docs/runtime.md)。远程 SSE、Streamable HTTP、WebSocket 与 OpenAPI 上游不受此限制。
 
 ## 服务入口
 

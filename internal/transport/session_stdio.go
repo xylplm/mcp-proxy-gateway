@@ -71,6 +71,8 @@ func (s *stdioSession) Connect(ctx context.Context) error {
 		}
 		// 始终显式设置 Env：剥离敏感父进程变量，并前置卷内 runtime PATH。
 		cmd.Env = runtime.BuildChildEnv(os.Environ(), userEnv, policy, pathPrefixes...)
+		// 进程级加固（Linux: 进程组 + Pdeathsig；其他平台 no-op）。
+		runtime.ApplySandbox(cmd, runtime.SandboxOptions{Enabled: policy.ProcessHardening})
 		transport := &mcp.CommandTransport{Command: cmd}
 		return connectWithTimeout(dialCtx, transport)
 	})

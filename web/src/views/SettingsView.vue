@@ -166,7 +166,11 @@ function ensureRuntimeConfig(): void {
       stdio_enabled: true,
       command_allowlist: ['node', 'npx', 'npm', 'python', 'python3', 'uv', 'uvx', 'docker'],
       extra_sensitive_env_prefixes: [],
+      process_hardening: true,
     }
+  }
+  if (config.value.runtime.process_hardening == null) {
+    config.value.runtime.process_hardening = true
   }
 }
 
@@ -884,7 +888,7 @@ const errClass = 'mt-1 text-xs text-error-500'
             </router-link>
           </div>
 
-          <div class="mb-5">
+          <div class="mb-5 space-y-3">
             <label class="flex cursor-pointer items-start gap-3 rounded-xl border border-gray-200 p-4 dark:border-gray-800">
               <input
                 v-model="config.runtime.stdio_enabled"
@@ -903,6 +907,21 @@ const errClass = 'mt-1 text-xs text-error-500'
             <p v-if="fieldErrors['runtime.stdio_enabled']" :class="errClass">
               {{ fieldErrors['runtime.stdio_enabled'] }}
             </p>
+            <label class="flex cursor-pointer items-start gap-3 rounded-xl border border-gray-200 p-4 dark:border-gray-800">
+              <input
+                v-model="config.runtime.process_hardening"
+                type="checkbox"
+                class="mt-1 h-4 w-4 rounded border-gray-300 text-brand-500 focus:ring-brand-500/30"
+              />
+              <span>
+                <span class="block text-sm font-medium text-gray-800 dark:text-white/90">
+                  启用 stdio 进程加固
+                </span>
+                <span class="mt-1 block text-xs leading-5 text-gray-500 dark:text-gray-400">
+                  Linux 上为子进程设置独立进程组并在网关退出时终止子进程；其他平台保留策略层加固。保存后立即生效。
+                </span>
+              </span>
+            </label>
           </div>
 
           <div :class="gridClass">

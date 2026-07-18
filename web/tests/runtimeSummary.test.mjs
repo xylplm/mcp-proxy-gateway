@@ -2,8 +2,11 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   formatAllowlist,
+  packageStatusLabel,
+  packageStatusTone,
   runtimeBinDir,
   runtimeGuideSteps,
+  sandboxHardeningLabel,
   shouldShowRuntimeGuide,
   stdioPolicyLabel,
   summarizeToolHealth,
@@ -55,5 +58,20 @@ test('runtime volume guide helpers', () => {
   assert.equal(shouldShowRuntimeGuide({ missingCount: 1, runtimeDir: '' }), false)
   const steps = runtimeGuideSteps({ runtimeDir: '/data/runtime', pathPrefixes: [] })
   assert.equal(steps.length, 3)
-  assert.match(steps[0], /\/data\/runtime\/bin/)
+  assert.match(steps[0], /预置安装|bin/)
+})
+
+test('package and sandbox labels', () => {
+  assert.equal(packageStatusLabel({ installed: true, supported: true }), '已安装')
+  assert.equal(packageStatusLabel({ installed: false, supported: false }), '当前平台不可用')
+  assert.equal(packageStatusTone({ installed: true, supported: true }), 'success')
+  assert.equal(packageStatusTone({ installed: false, supported: false }), 'muted')
+  assert.equal(
+    sandboxHardeningLabel({
+      processHardening: true,
+      sandbox: { processHardeningSupported: true, platform: 'linux', description: 'x' },
+    }),
+    'Linux 进程加固已启用',
+  )
+  assert.equal(sandboxHardeningLabel({ processHardening: false, sandbox: undefined }), '进程加固已关闭')
 })

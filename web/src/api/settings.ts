@@ -137,6 +137,8 @@ export interface RuntimePolicyConfig {
   command_allowlist: string[]
   /** 追加到内置敏感环境变量前缀（仅剥离父进程继承项）。 */
   extra_sensitive_env_prefixes: string[]
+  /** 是否启用 stdio 进程加固（Linux 进程组/父亡杀子等），默认 true。 */
+  process_hardening?: boolean
 }
 
 /** 小智接入配置（对应后端 XiaoZhiConfig，Req 15）。 */
