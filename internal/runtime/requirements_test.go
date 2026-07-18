@@ -114,6 +114,34 @@ func TestEvaluatePreflightCommandDenied(t *testing.T) {
 	}
 }
 
+func TestEvaluatePreflightInstallActionsStableOrder(t *testing.T) {
+	t.Parallel()
+	res := EvaluatePreflight(PreflightRequest{
+		Transport: "stdio",
+		Command:   "npx",
+		Requirements: &RuntimeRequirements{
+			Mode:  RequirementsManual,
+			Tools: []string{"uv", "node", "npx"},
+		},
+	}, DefaultPolicy(), "", func(string) (string, error) {
+		return "", errNotFound("missing")
+	})
+	var installIDs []string
+	for _, a := range res.Actions {
+		if a.Type == "install" {
+			installIDs = append(installIDs, a.PackageID)
+		}
+	}
+	if len(installIDs) < 2 {
+		t.Fatalf("expected multiple install actions, got %v", res.Actions)
+	}
+	for i := 1; i < len(installIDs); i++ {
+		if installIDs[i-1] > installIDs[i] {
+			t.Fatalf("install actions not sorted: %v", installIDs)
+		}
+	}
+}
+
 type errNotFound string
 
 func (e errNotFound) Error() string { return string(e) }

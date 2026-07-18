@@ -564,7 +564,10 @@ function parseCustomParams(): ConnParams | null {
       fieldErrors.customParamsJson = '额外连接参数必须是 JSON 对象'
       return null
     }
-    return value as ConnParams
+    const obj = { ...(value as ConnParams) }
+    // 依赖声明只由表单「运行环境依赖」写入，禁止从高级 JSON 夹带/覆盖。
+    delete obj.runtimeRequirements
+    return obj
   } catch (err) {
     fieldErrors.customParamsJson =
       err instanceof Error ? `JSON 格式错误：${err.message}` : 'JSON 格式错误'
@@ -690,7 +693,15 @@ function resetForm(): void {
 watch(
   () => [props.open, props.upstream, props.prefill, props.cloneSource, props.cloneName],
   () => {
-    if (props.open) resetForm()
+    if (props.open) {
+      resetForm()
+      return
+    }
+    // 关闭抽屉：取消挂起的预检，避免卸载前仍写状态。
+    clearPreflightTimer()
+    preflightSeq += 1
+    preflightLoading.value = false
+    preflight.value = null
   },
   { immediate: true },
 )
@@ -752,10 +763,19 @@ async function ensureKnownTools(): Promise<void> {
   }
 }
 
+function clearPreflightTimer(): void {
+  if (preflightTimer !== null) {
+    clearTimeout(preflightTimer)
+    preflightTimer = null
+  }
+}
+
 function schedulePreflight(): void {
-  if (preflightTimer !== null) clearTimeout(preflightTimer)
-  if (form.transport !== 'stdio') {
+  clearPreflightTimer()
+  // 抽屉关闭或非 stdio：不发请求，避免后台空跑与竞态写回。
+  if (!props.open || form.transport !== 'stdio') {
     preflight.value = null
+    preflightLoading.value = false
     return
   }
   preflightTimer = setTimeout(() => {
@@ -764,11 +784,12 @@ function schedulePreflight(): void {
 }
 
 async function runPreflight(): Promise<void> {
-  if (form.transport !== 'stdio') {
+  if (!props.open || form.transport !== 'stdio') {
     preflight.value = null
     return
   }
   await ensureKnownTools()
+  if (!props.open) return
   const seq = ++preflightSeq
   preflightLoading.value = true
   try {
@@ -781,9 +802,9 @@ async function runPreflight(): Promise<void> {
         ...(form.reqNote.trim() !== '' ? { note: form.reqNote.trim() } : {}),
       },
     })
-    if (seq === preflightSeq) preflight.value = result
+    if (seq === preflightSeq && props.open) preflight.value = result
   } catch {
-    if (seq === preflightSeq) preflight.value = null
+    if (seq === preflightSeq && props.open) preflight.value = null
   } finally {
     if (seq === preflightSeq) preflightLoading.value = false
   }
@@ -843,10 +864,7 @@ function bannerClass(tone: 'success' | 'warning' | 'error'): string {
 }
 
 onUnmounted(() => {
-  if (preflightTimer !== null) {
-    clearTimeout(preflightTimer)
-    preflightTimer = null
-  }
+  clearPreflightTimer()
   preflightSeq += 1
 })
 
@@ -1214,6 +1232,7 @@ function mapServerField(field: string): string {
     env: 'envText',
     cwd: 'cwd',
     headers: 'headersText',
+    runtimeRequirements: 'runtimeRequirements',
     rateLimits: 'rateLimits',
     'rateLimits.timezone': 'rateLimitTimezone',
     'rateLimits.perSecond': 'perSecond',

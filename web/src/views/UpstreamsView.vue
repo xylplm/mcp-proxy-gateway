@@ -337,7 +337,17 @@ function depChipClass(available: boolean): string {
 }
 
 watch(
-  () => detailUpstream.value?.id,
+  () => {
+    const u = detailUpstream.value
+    if (u === null) return ''
+    const rr = u.config.connParams?.runtimeRequirements
+    return [
+      u.id,
+      u.config.transport,
+      typeof u.config.connParams?.command === 'string' ? u.config.connParams.command : '',
+      JSON.stringify(rr ?? null),
+    ].join('|')
+  },
   () => {
     detailPreflightSeq += 1
     void loadDetailPreflight()

@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -410,12 +411,19 @@ func EvaluatePreflight(req PreflightRequest, policy Policy, runtimeDir string, l
 			Label: "在系统设置中启用本地 stdio",
 		})
 	}
-	for pkgID, label := range missingFixable {
-		result.Actions = append(result.Actions, PreflightAction{
-			Type:      "install",
-			PackageID: pkgID,
-			Label:     "安装 " + label + " 运行时",
-		})
+	if len(missingFixable) > 0 {
+		pkgIDs := make([]string, 0, len(missingFixable))
+		for pkgID := range missingFixable {
+			pkgIDs = append(pkgIDs, pkgID)
+		}
+		sort.Strings(pkgIDs)
+		for _, pkgID := range pkgIDs {
+			result.Actions = append(result.Actions, PreflightAction{
+				Type:      "install",
+				PackageID: pkgID,
+				Label:     "安装 " + missingFixable[pkgID] + " 运行时",
+			})
+		}
 	}
 	if !allAvailable {
 		result.Actions = append(result.Actions, PreflightAction{
