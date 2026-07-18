@@ -148,6 +148,15 @@ const router = createRouter({
       },
     },
     {
+      path: '/runtime',
+      name: 'RuntimeEnvironment',
+      component: () => import('../views/RuntimeEnvironmentView.vue'),
+      meta: {
+        title: '运行环境',
+        requiresAuth: true,
+      },
+    },
+    {
       path: '/security',
       name: 'SecurityCenter',
       component: () => import('../views/SecurityCenterView.vue'),

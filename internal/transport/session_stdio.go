@@ -8,6 +8,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
+	"github.com/myGithub/mcp-proxy-gateway/internal/runtime"
 )
 
 // 本文件（任务 8.3）实现 stdio 传输会话：以子进程方式启动上游 MCP，
@@ -46,16 +47,29 @@ func (s *stdioSession) Connect(ctx context.Context) error {
 		// establish 在连接成功后会立即取消它；若将子进程绑定到 dialCtx，进程会被随之杀死。
 		// 子进程生命周期应等同于会话生命周期，由 CommandTransport 在 Close 时关闭 stdin 优雅终止
 		//（必要时 SIGTERM/SIGKILL）。
-		cmd := exec.Command(s.params.command, resolveStringSliceCredentials(s.params.args, s.credential)...)
+		policy := currentPolicy()
+		if err := runtime.ValidateCommand(s.params.command, policy); err != nil {
+			return nil, err
+		}
+		command := s.params.command
+		if resolved, err := runtime.ResolveCommand(command); err == nil {
+			command = resolved
+			// 解析后的绝对路径再按基名校验，防止 PATH 劫持绕过 allowlist。
+			if err := runtime.ValidateCommand(command, policy); err != nil {
+				return nil, err
+			}
+		} else {
+			// LookPath 失败：返回可读错误（仍让 exec 失败路径一致地进入连接错误分类）。
+			return nil, err
+		}
+
+		userEnv := resolveStringMapCredentials(s.params.env, s.credential)
+		cmd := exec.Command(command, resolveStringSliceCredentials(s.params.args, s.credential)...)
 		if s.params.cwd != "" {
 			cmd.Dir = resolveCredentialPlaceholders(s.params.cwd, s.credential)
 		}
-		if len(s.params.env) > 0 {
-			cmd.Env = os.Environ()
-			for k, v := range resolveStringMapCredentials(s.params.env, s.credential) {
-				cmd.Env = append(cmd.Env, k+"="+v)
-			}
-		}
+		// 始终显式设置 Env，确保敏感父进程变量被剥离；保留 PATH 等非敏感项。
+		cmd.Env = runtime.BuildChildEnv(os.Environ(), userEnv, policy)
 		transport := &mcp.CommandTransport{Command: cmd}
 		return connectWithTimeout(dialCtx, transport)
 	})

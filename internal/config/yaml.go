@@ -28,8 +28,23 @@ type YAMLConfig struct {
 	Audit AuditConfig `yaml:"audit" json:"audit"`
 	// Security 为对外 MCP API 的安全防护配置。
 	Security SecurityConfig `yaml:"security" json:"security"`
+	// Runtime 为本地 stdio 运行时安全策略（命令白名单、启停等）。
+	Runtime RuntimeConfig `yaml:"runtime" json:"runtime"`
 	// XiaoZhi 为小智接入配置（Req 15）。
 	XiaoZhi XiaoZhiConfig `yaml:"xiaozhi" json:"xiaozhi"`
+}
+
+// RuntimeConfig 控制网关进程内 stdio 上游的本地执行策略。
+//
+// 热生效：transport / 运行环境页每次读取配置快照，无需重启进程。
+// 远程 SSE/HTTP/WS/OpenAPI 不受本段配置影响。
+type RuntimeConfig struct {
+	// StdioEnabled 为 false 时拒绝创建与连接本地 stdio 上游，默认 true。
+	StdioEnabled bool `yaml:"stdio_enabled" json:"stdio_enabled"`
+	// CommandAllowlist 为允许的 stdio 可执行文件基名；空则使用内置默认列表。
+	CommandAllowlist []string `yaml:"command_allowlist" json:"command_allowlist"`
+	// ExtraSensitiveEnvPrefixes 追加到内置敏感环境变量前缀（仅剥离父进程继承项）。
+	ExtraSensitiveEnvPrefixes []string `yaml:"extra_sensitive_env_prefixes" json:"extra_sensitive_env_prefixes"`
 }
 
 // ServerConfig 为 HTTP 服务监听配置。
@@ -220,6 +235,17 @@ func defaultSecurityConfig() SecurityConfig {
 	}
 }
 
+func defaultRuntimeConfig() RuntimeConfig {
+	return RuntimeConfig{
+		StdioEnabled: true,
+		// 与模板市场常用命令对齐；空列表在 Normalize 时也会回填。
+		CommandAllowlist: []string{
+			"node", "npx", "npm", "python", "python3", "uv", "uvx", "docker",
+		},
+		ExtraSensitiveEnvPrefixes: []string{},
+	}
+}
+
 // DefaultYAMLConfig 返回带有设计文档约定默认值的 YAML 配置（Req 18.5）。
 //
 // 该默认配置在 YAML 文件不存在时用于创建初始配置文件；其中管理员凭证为空、
@@ -270,6 +296,7 @@ func DefaultYAMLConfig() YAMLConfig {
 			RetentionDays:   180,
 		},
 		Security: defaultSecurityConfig(),
+		Runtime:  defaultRuntimeConfig(),
 		XiaoZhi: XiaoZhiConfig{
 			Enabled:  false,
 			Endpoint: "",
@@ -314,6 +341,23 @@ func NormalizeYAMLConfig(cfg YAMLConfig) YAMLConfig {
 	}
 	if cfg.Security.ExemptCIDRs == nil {
 		cfg.Security.ExemptCIDRs = []string{}
+	}
+	defRuntime := defaultRuntimeConfig()
+	// 注意：bool 零值 false 与「显式关闭」无法区分；仅在 allowlist 为空时回填默认命令列表。
+	// StdioEnabled 默认 true 写在 DefaultYAMLConfig；旧文件缺字段时 Go 零值为 false，
+	// 这里对「整段 runtime 未配置」的兼容：若 allowlist 与 extra 皆空且未显式写过，
+	// 仍保持文件中的 false 可能误伤。故：allowlist 为空时补默认列表，但不强制改 StdioEnabled。
+	// 新装默认 true；从无 Runtime 字段的旧配置升级时，StdioEnabled 会是 false——
+	// 为兼容旧部署，当 CommandAllowlist 为 nil（缺省）时视为沿用默认启用。
+	if cfg.Runtime.CommandAllowlist == nil {
+		cfg.Runtime.StdioEnabled = true
+		cfg.Runtime.CommandAllowlist = append([]string{}, defRuntime.CommandAllowlist...)
+	} else if len(cfg.Runtime.CommandAllowlist) == 0 {
+		// 显式空数组：回退默认列表，避免管理员误配成「允许一切仅 denylist」。
+		cfg.Runtime.CommandAllowlist = append([]string{}, defRuntime.CommandAllowlist...)
+	}
+	if cfg.Runtime.ExtraSensitiveEnvPrefixes == nil {
+		cfg.Runtime.ExtraSensitiveEnvPrefixes = []string{}
 	}
 	return cfg
 }

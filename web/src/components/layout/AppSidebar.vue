@@ -101,6 +101,7 @@ import {
   InfoCircleIcon,
   UserGroupIcon,
   SendIcon,
+  BoxCubeIcon,
 } from '@/icons'
 import { useSidebar } from '@/composables/useSidebar'
 
@@ -171,6 +172,11 @@ const menuGroups = [
         icon: SettingsIcon,
         name: '系统设置',
         path: '/settings',
+      },
+      {
+        icon: BoxCubeIcon,
+        name: '运行环境',
+        path: '/runtime',
       },
       {
         icon: ErrorHexaIcon,

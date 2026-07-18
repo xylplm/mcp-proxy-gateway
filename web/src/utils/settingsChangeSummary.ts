@@ -13,6 +13,24 @@ export interface SettingsDraftInput {
   publicMCPAddr: string
   trustedProxyCIDRs: string[]
   exemptCIDRs: string[]
+  commandAllowlist: string[]
+  extraSensitiveEnvPrefixes: string[]
+}
+
+function ensureRuntime(config: YAMLConfig): void {
+  if (config.runtime == null) {
+    config.runtime = {
+      stdio_enabled: true,
+      command_allowlist: ['node', 'npx', 'npm', 'python', 'python3', 'uv', 'uvx', 'docker'],
+      extra_sensitive_env_prefixes: [],
+    }
+  }
+  if (!Array.isArray(config.runtime.command_allowlist)) {
+    config.runtime.command_allowlist = []
+  }
+  if (!Array.isArray(config.runtime.extra_sensitive_env_prefixes)) {
+    config.runtime.extra_sensitive_env_prefixes = []
+  }
 }
 
 type ValueFormatter = (value: unknown) => string
@@ -35,10 +53,13 @@ export function cloneSettingsConfig(value: YAMLConfig): YAMLConfig {
 
 export function buildSettingsDraft(config: YAMLConfig, input: SettingsDraftInput): YAMLConfig {
   const draft = cloneSettingsConfig(config)
+  ensureRuntime(draft)
   draft.server.admin_addr = input.adminAddr
   draft.server.public_mcp_addr = input.publicMCPAddr
   draft.security.trusted_proxy_cidrs = input.trustedProxyCIDRs
   draft.security.exempt_cidrs = input.exemptCIDRs
+  draft.runtime!.command_allowlist = input.commandAllowlist
+  draft.runtime!.extra_sensitive_env_prefixes = input.extraSensitiveEnvPrefixes
   return draft
 }
 
@@ -212,6 +233,30 @@ export function collectSettingsChanges(before: YAMLConfig, after: YAMLConfig): S
     after.security.exempt_cidrs ?? [],
     runtimeOnly,
     cidrListLabel,
+  )
+  addChange(
+    changes,
+    '本地 stdio',
+    before.runtime?.stdio_enabled ?? true,
+    after.runtime?.stdio_enabled ?? true,
+    runtimeOnly,
+    (v) => (v ? '启用' : '禁用'),
+  )
+  addChange(
+    changes,
+    'stdio 命令白名单',
+    before.runtime?.command_allowlist ?? [],
+    after.runtime?.command_allowlist ?? [],
+    runtimeOnly,
+    (v) => (Array.isArray(v) && v.length > 0 ? v.join('、') : '默认列表'),
+  )
+  addChange(
+    changes,
+    '额外敏感环境变量前缀',
+    before.runtime?.extra_sensitive_env_prefixes ?? [],
+    after.runtime?.extra_sensitive_env_prefixes ?? [],
+    runtimeOnly,
+    (v) => (Array.isArray(v) && v.length > 0 ? v.join('、') : '无'),
   )
   addChange(
     changes,

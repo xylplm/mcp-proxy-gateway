@@ -125,6 +125,24 @@ func ValidateYAMLConfig(cfg YAMLConfig) error {
 		}
 	}
 
+	// runtime.command_allowlist：每项为非空命令基名，数量上限防止配置膨胀。
+	if len(cfg.Runtime.CommandAllowlist) > 64 {
+		fields["runtime.command_allowlist"] = "stdio 命令白名单最多 64 项"
+	}
+	for i, item := range cfg.Runtime.CommandAllowlist {
+		if strings.TrimSpace(item) == "" {
+			fields[fmt.Sprintf("runtime.command_allowlist.%d", i)] = "命令白名单项不能为空"
+		}
+	}
+	if len(cfg.Runtime.ExtraSensitiveEnvPrefixes) > 64 {
+		fields["runtime.extra_sensitive_env_prefixes"] = "额外敏感环境变量前缀最多 64 项"
+	}
+	for i, item := range cfg.Runtime.ExtraSensitiveEnvPrefixes {
+		if strings.TrimSpace(item) == "" {
+			fields[fmt.Sprintf("runtime.extra_sensitive_env_prefixes.%d", i)] = "前缀不能为空"
+		}
+	}
+
 	if len(fields) > 0 {
 		return domain.NewValidationError("YAML 配置校验失败", fields)
 	}

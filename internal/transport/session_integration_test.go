@@ -15,6 +15,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
+	"github.com/myGithub/mcp-proxy-gateway/internal/runtime"
 )
 
 // 本文件（任务 8.8）实现四种传输类型的连接与初始化集成/冒烟测试。
@@ -202,14 +203,19 @@ func toolNames(tools []domain.ToolDef) []string {
 // TestIntegrationStdioConnectAndToolFlow 通过把测试二进制自身作为 stdio 上游子进程，
 // 验证 stdio 传输的连接、初始化、tools/list 与 tools/call。
 func TestIntegrationStdioConnectAndToolFlow(t *testing.T) {
-	// 让子进程以 mock server 模式运行（被 TestMain 捕获）；子进程默认继承父进程环境变量。
-	t.Setenv(stdioServerEnv, "1")
+	// 测试二进制基名不在产品默认白名单内；此处仅禁用白名单、保留危险命令 denylist。
+	SetPolicyProvider(func() runtime.Policy {
+		return runtime.Policy{StdioEnabled: true, CommandAllowlist: []string{}}
+	})
+	t.Cleanup(func() { SetPolicyProvider(nil) })
 
 	cfg := domain.UpstreamConfig{
 		Name:      "stdio-upstream",
 		Transport: domain.TransportStdio,
 		ConnParams: map[string]any{
 			ParamCommand: os.Args[0], // 重新执行测试二进制本身
+			// 通过用户 env 注入（不被敏感前缀清理），触发 TestMain 的 mock server 模式。
+			ParamEnv: map[string]string{stdioServerEnv: "1"},
 		},
 	}
 

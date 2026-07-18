@@ -55,6 +55,8 @@ const savedConfig = ref<YAMLConfig | null>(null)
 
 const trustedProxyCIDRs = ref('')
 const exemptCIDRs = ref('')
+const commandAllowlistText = ref('')
+const extraSensitiveEnvPrefixesText = ref('')
 
 /** Port helpers: strip ':prefix on load, restore on save. */
 const adminPort = ref<number|string>('')
@@ -111,6 +113,10 @@ const securityModes = [
 
 const trustedProxyCIDRError = computed(() => firstIndexedError('security.trusted_proxy_cidrs'))
 const exemptCIDRError = computed(() => firstIndexedError('security.exempt_cidrs'))
+const commandAllowlistError = computed(() => firstIndexedError('runtime.command_allowlist'))
+const extraSensitivePrefixError = computed(() =>
+  firstIndexedError('runtime.extra_sensitive_env_prefixes'),
+)
 
 function firstIndexedError(prefix: string): string {
   for (const [key, value] of Object.entries(fieldErrors)) {
@@ -137,6 +143,8 @@ function currentDraftConfig(): YAMLConfig | null {
     publicMCPAddr: portToAddr(publicMCPPort.value),
     trustedProxyCIDRs: textToCIDRList(trustedProxyCIDRs.value),
     exemptCIDRs: textToCIDRList(exemptCIDRs.value),
+    commandAllowlist: textToCIDRList(commandAllowlistText.value),
+    extraSensitiveEnvPrefixes: textToCIDRList(extraSensitiveEnvPrefixesText.value),
   })
 }
 
@@ -144,6 +152,22 @@ function syncSecurityTextFields(): void {
   if (config.value === null) return
   trustedProxyCIDRs.value = cidrListToText(config.value.security.trusted_proxy_cidrs ?? [])
   exemptCIDRs.value = cidrListToText(config.value.security.exempt_cidrs ?? [])
+  ensureRuntimeConfig()
+  commandAllowlistText.value = cidrListToText(config.value.runtime?.command_allowlist ?? [])
+  extraSensitiveEnvPrefixesText.value = cidrListToText(
+    config.value.runtime?.extra_sensitive_env_prefixes ?? [],
+  )
+}
+
+function ensureRuntimeConfig(): void {
+  if (config.value === null) return
+  if (config.value.runtime == null) {
+    config.value.runtime = {
+      stdio_enabled: true,
+      command_allowlist: ['node', 'npx', 'npm', 'python', 'python3', 'uv', 'uvx', 'docker'],
+      extra_sensitive_env_prefixes: [],
+    }
+  }
 }
 
 /** 清空所有字段级错误与整体错误。 */
@@ -834,6 +858,83 @@ const errClass = 'mt-1 text-xs text-error-500'
               <textarea v-model="exemptCIDRs" rows="4" :class="[inputClass, 'h-auto py-3 font-mono']" placeholder="192.168.0.0/16"></textarea>
               <p :class="hintClass">适合内网监控、探活或固定可信出口。</p>
               <p v-if="exemptCIDRError" :class="errClass">{{ exemptCIDRError }}</p>
+            </div>
+          </div>
+        </section>
+
+        <!-- 本地运行时 / stdio 安全 -->
+        <section
+          v-if="config.runtime"
+          class="rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03]"
+        >
+          <div class="mb-5 flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h3 class="mb-1 text-base font-semibold text-gray-800 dark:text-white/90">
+                本地运行时（stdio）
+              </h3>
+              <p class="text-sm text-gray-500 dark:text-gray-400">
+                控制网关进程内启动本地 MCP 的安全策略。保存后立即生效，无需重启。远程上游不受影响。
+              </p>
+            </div>
+            <router-link
+              to="/runtime"
+              class="rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+            >
+              打开运行环境
+            </router-link>
+          </div>
+
+          <div class="mb-5">
+            <label class="flex cursor-pointer items-start gap-3 rounded-xl border border-gray-200 p-4 dark:border-gray-800">
+              <input
+                v-model="config.runtime.stdio_enabled"
+                type="checkbox"
+                class="mt-1 h-4 w-4 rounded border-gray-300 text-brand-500 focus:ring-brand-500/30"
+              />
+              <span>
+                <span class="block text-sm font-medium text-gray-800 dark:text-white/90">
+                  允许本地 stdio 上游
+                </span>
+                <span class="mt-1 block text-xs leading-5 text-gray-500 dark:text-gray-400">
+                  关闭后无法创建或连接 command 型本地上游，仅保留远程 SSE/HTTP/WS 与 OpenAPI。
+                </span>
+              </span>
+            </label>
+            <p v-if="fieldErrors['runtime.stdio_enabled']" :class="errClass">
+              {{ fieldErrors['runtime.stdio_enabled'] }}
+            </p>
+          </div>
+
+          <div :class="gridClass">
+            <div class="sm:col-span-2">
+              <FieldLabel
+                label="stdio 命令白名单"
+                tooltip="每行一个可执行文件基名，如 npx、node。shell 类命令始终禁止。"
+              />
+              <textarea
+                v-model="commandAllowlistText"
+                rows="4"
+                :class="[inputClass, 'h-auto py-3 font-mono']"
+                placeholder="node&#10;npx&#10;python3&#10;uvx"
+              ></textarea>
+              <p :class="hintClass">默认包含 node/npx/npm/python/python3/uv/uvx/docker。</p>
+              <p v-if="commandAllowlistError" :class="errClass">{{ commandAllowlistError }}</p>
+            </div>
+            <div class="sm:col-span-2">
+              <FieldLabel
+                label="额外敏感环境变量前缀"
+                tooltip="从父进程继承环境时额外剥离的键前缀（大小写不敏感）。用户在上游显式配置的 env 仍会注入。"
+              />
+              <textarea
+                v-model="extraSensitiveEnvPrefixesText"
+                rows="3"
+                :class="[inputClass, 'h-auto py-3 font-mono']"
+                placeholder="CORP_&#10;PRIVATE_"
+              ></textarea>
+              <p :class="hintClass">内置已剥离 MPG_、云厂商密钥等；此处仅追加。</p>
+              <p v-if="extraSensitivePrefixError" :class="errClass">
+                {{ extraSensitivePrefixError }}
+              </p>
             </div>
           </div>
         </section>

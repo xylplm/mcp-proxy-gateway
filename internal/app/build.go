@@ -19,6 +19,7 @@ import (
 	"github.com/myGithub/mcp-proxy-gateway/internal/httpapi"
 	"github.com/myGithub/mcp-proxy-gateway/internal/manager"
 	"github.com/myGithub/mcp-proxy-gateway/internal/mcpapi"
+	rtenv "github.com/myGithub/mcp-proxy-gateway/internal/runtime"
 	"github.com/myGithub/mcp-proxy-gateway/internal/security"
 	"github.com/myGithub/mcp-proxy-gateway/internal/stats"
 	"github.com/myGithub/mcp-proxy-gateway/internal/store"
@@ -44,6 +45,26 @@ func (a *App) build(envCfg config.EnvConfig) error {
 
 	// --- 出站适配：工具缓存、传输工厂、连接拨号/会话注册 ---
 	toolCache := cache.New(a.rdb, repos.ToolCache, a.logger)
+	// stdio 安全策略：每次从配置快照读取，保存设置后无需重启即可生效。
+	transport.SetPolicyProvider(func() rtenv.Policy {
+		rt := a.cfg.Config().Runtime
+		return rtenv.Policy{
+			StdioEnabled:              rt.StdioEnabled,
+			CommandAllowlist:          append([]string{}, rt.CommandAllowlist...),
+			ExtraSensitiveEnvPrefixes: append([]string{}, rt.ExtraSensitiveEnvPrefixes...),
+		}
+	})
+	runtimeSvc := rtenv.NewService(
+		func() rtenv.Policy {
+			rt := a.cfg.Config().Runtime
+			return rtenv.Policy{
+				StdioEnabled:              rt.StdioEnabled,
+				CommandAllowlist:          append([]string{}, rt.CommandAllowlist...),
+				ExtraSensitiveEnvPrefixes: append([]string{}, rt.ExtraSensitiveEnvPrefixes...),
+			}
+		},
+		func() string { return a.cfg.Env().DataDir },
+	)
 	factory := transport.NewFactory()
 	dialer := newSessionDialer(factory)
 	a.dialer = dialer
@@ -209,6 +230,7 @@ func (a *App) build(envCfg config.EnvConfig) error {
 		Security:        securityGuard,
 		SystemLogs:      a.systemLogs,
 		Templates:       templateMarket,
+		RuntimeEnv:      runtimeSvc,
 	})
 
 	// --- 入站路由分面装配 ---

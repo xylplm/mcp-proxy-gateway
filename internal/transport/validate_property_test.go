@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
+	"github.com/myGithub/mcp-proxy-gateway/internal/runtime"
 	"pgregory.net/rapid"
 )
 
@@ -181,6 +182,36 @@ func transportSupported(tp domain.TransportType) bool {
 
 // requireStringRef 是必填字符串参数提取的参考判定：缺失 / nil / 非字符串 / 空白
 // 均视为不齐备。
+// optionalStringMapValidRef 对齐 validateOptionalStringMapParam：缺省合法；
+// 提供时须为 map[string]string 或 map[string]any（值均为 string），且无空键。
+func optionalStringMapValidRef(params map[string]any, key string) bool {
+	raw, ok := params[key]
+	if !ok || raw == nil {
+		return true
+	}
+	switch v := raw.(type) {
+	case map[string]string:
+		for k := range v {
+			if strings.TrimSpace(k) == "" {
+				return false
+			}
+		}
+		return true
+	case map[string]any:
+		for k, item := range v {
+			if strings.TrimSpace(k) == "" {
+				return false
+			}
+			if _, isStr := item.(string); !isStr {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
+}
+
 func requireStringRef(params map[string]any, key string) bool {
 	raw, ok := params[key]
 	if !ok || raw == nil {
@@ -195,22 +226,36 @@ func requireStringRef(params map[string]any, key string) bool {
 
 // stdioValidRef 是 stdio 连接参数的参考判定：command 必填且为非空字符串；
 // 若提供 args 则须为字符串数组（[]string 或元素全为字符串的 []any）。
+// 同时对齐当前安全策略（denylist / allowlist / stdio 开关）。
 func stdioValidRef(params map[string]any) bool {
 	if !requireStringRef(params, ParamCommand) {
 		return false
 	}
+	if raw, ok := params[ParamCommand].(string); ok {
+		if err := runtime.ValidateCommand(raw, currentPolicy()); err != nil {
+			return false
+		}
+	}
 	if raw, ok := params[ParamArgs]; ok && raw != nil {
 		switch v := raw.(type) {
 		case []string:
-			return true
+			// ok
 		case []any:
 			for _, item := range v {
 				if _, isStr := item.(string); !isStr {
 					return false
 				}
 			}
-			return true
 		default:
+			return false
+		}
+	}
+	if !optionalStringMapValidRef(params, ParamEnv) {
+		return false
+	}
+	if raw, ok := params[ParamCWD]; ok && raw != nil {
+		s, ok := raw.(string)
+		if !ok || strings.TrimSpace(s) == "" {
 			return false
 		}
 	}
@@ -367,6 +412,13 @@ func assertConnParamsResult(t *rapid.T, err error, wantValid, supported bool, de
 // 期望结果由不依赖被测实现的独立参考判定 connParamsValidRef 推导；非法时进一步
 // 校验字段标注约定（transport / connParams.<参数名>）。rapid 默认执行 100 次迭代。
 func TestProperty30TransportConnParamsValidation(t *testing.T) {
+	// 属性测试覆盖「结构合法性」；随机 command 基名通常不在产品白名单。
+	// 此处仅启用 denylist（空白名单），避免安全策略干扰结构属性。
+	SetPolicyProvider(func() runtime.Policy {
+		return runtime.Policy{StdioEnabled: true, CommandAllowlist: []string{}}
+	})
+	t.Cleanup(func() { SetPolicyProvider(nil) })
+
 	rapid.Check(t, func(t *rapid.T) {
 		cfg := domain.UpstreamConfig{
 			Name:       "probe",

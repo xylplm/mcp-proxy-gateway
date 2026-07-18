@@ -129,6 +129,16 @@ export interface SecurityConfig {
   exempt_cidrs: string[]
 }
 
+/** 本地 stdio 运行时安全策略（对应后端 RuntimeConfig）。 */
+export interface RuntimePolicyConfig {
+  /** 是否允许创建/连接本地 stdio 上游，默认 true。 */
+  stdio_enabled: boolean
+  /** stdio 可执行文件白名单（基名）；空则服务端回填默认列表。 */
+  command_allowlist: string[]
+  /** 追加到内置敏感环境变量前缀（仅剥离父进程继承项）。 */
+  extra_sensitive_env_prefixes: string[]
+}
+
 /** 小智接入配置（对应后端 XiaoZhiConfig，Req 15）。 */
 export interface XiaoZhiConfig {
   /** 是否启用小智接入。 */
@@ -157,6 +167,8 @@ export interface YAMLConfig {
   statistics: StatisticsConfig
   audit: AuditConfig
   security: SecurityConfig
+  /** 本地运行时策略；旧配置可能缺省，前端读写前需兜底。 */
+  runtime?: RuntimePolicyConfig
   xiaozhi: XiaoZhiConfig
 }
 

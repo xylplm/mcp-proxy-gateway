@@ -11,6 +11,7 @@ import (
 	"github.com/myGithub/mcp-proxy-gateway/internal/audit"
 	"github.com/myGithub/mcp-proxy-gateway/internal/config"
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
+	rtenv "github.com/myGithub/mcp-proxy-gateway/internal/runtime"
 	"github.com/myGithub/mcp-proxy-gateway/internal/store"
 	"github.com/myGithub/mcp-proxy-gateway/internal/syslog"
 	"github.com/myGithub/mcp-proxy-gateway/internal/template"
@@ -375,6 +376,13 @@ type Router struct {
 	systemLogs SystemLogService
 	// templates 为模板市场只读查询应用服务。
 	templates TemplateService
+	// runtimeEnv 为本地运行时能力探测与策略摘要。
+	runtimeEnv RuntimeEnvironmentService
+}
+
+// RuntimeEnvironmentService 为管理台「运行环境」页的窄接口。
+type RuntimeEnvironmentService interface {
+	Summary() rtenv.Summary
 }
 
 // Deps 聚合构造 Router 所需的全部依赖，便于装配层一次性注入。
@@ -404,6 +412,7 @@ type Deps struct {
 	Security        SecurityService
 	SystemLogs      SystemLogService
 	Templates       TemplateService
+	RuntimeEnv      RuntimeEnvironmentService
 }
 
 // NewRouter 构造管理 REST API 路由器。
@@ -434,6 +443,7 @@ func NewRouter(d Deps) *Router {
 		security:        d.Security,
 		systemLogs:      d.SystemLogs,
 		templates:       d.Templates,
+		runtimeEnv:      d.RuntimeEnv,
 	}
 }
 
@@ -467,6 +477,7 @@ func (r *Router) Register(router gin.IRouter, adminAuth gin.HandlerFunc) {
 	r.registerStatsRoutes(admin)
 	r.registerAuditRoutes(admin)
 	r.registerSecurityRoutes(admin)
+	r.registerRuntimeRoutes(admin)
 	r.registerSystemLogRoutes(admin)
 	r.registerTemplateRoutes(admin)
 	r.registerProtectedAuthRoutes(admin)

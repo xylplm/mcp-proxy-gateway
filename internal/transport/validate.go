@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
+	"github.com/myGithub/mcp-proxy-gateway/internal/runtime"
 )
 
 // 连接参数键名常量，集中定义以便各传输类型会话实现（任务 8.3-8.6）复用，
@@ -87,7 +88,13 @@ func ValidateConnParams(cfg domain.UpstreamConfig) error {
 
 // validateStdioParams 校验 stdio 传输的连接参数：command 必填，args/env/cwd 可选。
 func validateStdioParams(params map[string]any, fields map[string]string) {
-	requireStringParam(params, ParamCommand, fields)
+	command, ok := requireStringParam(params, ParamCommand, fields)
+	if ok {
+		// 安全策略：危险 shell denylist + 可配置 allowlist + stdio 总开关。
+		if err := runtime.ValidateCommand(command, currentPolicy()); err != nil {
+			fields[fieldKey(ParamCommand)] = err.Error()
+		}
+	}
 
 	// args 为可选参数；若提供则必须为字符串数组（兼容 JSON 解析得到的 []any）。
 	if raw, ok := params[ParamArgs]; ok && raw != nil {

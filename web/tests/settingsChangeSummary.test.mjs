@@ -46,6 +46,11 @@ function baseConfig() {
       trusted_proxy_cidrs: [],
       exempt_cidrs: [],
     },
+    runtime: {
+      stdio_enabled: true,
+      command_allowlist: ['node', 'npx'],
+      extra_sensitive_env_prefixes: [],
+    },
     xiaozhi: { enabled: false, endpoint: '', mode: 'full' },
   }
 }
@@ -86,9 +91,13 @@ test('buildSettingsDraft normalizes form-only fields without mutating the source
     publicMCPAddr: '',
     trustedProxyCIDRs: ['10.0.0.0/8'],
     exemptCIDRs: ['192.168.0.0/16'],
+    commandAllowlist: ['node', 'uvx'],
+    extraSensitiveEnvPrefixes: ['CORP_'],
   })
 
   assert.equal(draft.server.admin_addr, ':9000')
   assert.deepEqual(before.security.trusted_proxy_cidrs, [])
   assert.deepEqual(draft.security.trusted_proxy_cidrs, ['10.0.0.0/8'])
+  assert.deepEqual(draft.runtime.command_allowlist, ['node', 'uvx'])
+  assert.deepEqual(before.runtime.command_allowlist, ['node', 'npx'])
 })
