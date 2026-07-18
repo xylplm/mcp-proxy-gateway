@@ -11,6 +11,13 @@ import {
   type UpstreamConfigRequest,
   type UpstreamTestResult,
 } from '@/api/upstreams'
+import {
+  getRuntimeKnownTools,
+  installRuntimePackage,
+  preflightRuntime,
+  type RuntimeKnownTool,
+  type RuntimePreflightResult,
+} from '@/api/runtime'
 import { emptyRateLimits, type UpstreamRateLimits } from '@/api/rateLimits'
 import type { PrefillForm, Placeholder } from '@/api/templates'
 import { ApiError } from '@/api/request'
@@ -25,6 +32,15 @@ import {
 import { testStageLabel, upstreamTestDiagnostic } from '@/utils/upstreamTestDiagnostics'
 import { buildUpstreamCloneFormSource } from '@/utils/upstreamCopy'
 import { normalizeTags } from '@/utils/upstreamTags'
+import {
+  inferToolsFromCommand,
+  normalizeRequirements,
+  preflightReadyLabel,
+  preflightTone,
+  type RequirementsMode,
+} from '@/utils/runtimeRequirements'
+import { useToast } from '@/composables/useToast'
+import { useConfirm } from '@/composables/useConfirm'
 
 const props = defineProps<{
   open: boolean
@@ -172,6 +188,9 @@ const form = reactive<{
   perDay: number | null
   perWeek: number | null
   perMonth: number | null
+  reqMode: RequirementsMode
+  reqTools: string[]
+  reqNote: string
 }>({
   name: '',
   tagDraft: '',
@@ -206,8 +225,13 @@ const form = reactive<{
   perDay: null,
   perWeek: null,
   perMonth: null,
+  reqMode: 'auto',
+  reqTools: [],
+  reqNote: '',
 })
 
+const toast = useToast()
+const { confirm } = useConfirm()
 const placeholderValues = reactive<Record<string, string>>({})
 const placeholders = ref<Placeholder[]>([])
 const presetParams = ref<ConnParams>({})
@@ -218,6 +242,32 @@ const testRequestToken = ref(0)
 const fieldErrors = reactive<Record<string, string>>({})
 const formError = ref('')
 const testDiagnostic = computed(() => upstreamTestDiagnostic(testResult.value, form.transport))
+const knownTools = ref<RuntimeKnownTool[]>([])
+const preflight = ref<RuntimePreflightResult | null>(null)
+const preflightLoading = ref(false)
+const installingPackageId = ref('')
+let preflightTimer: ReturnType<typeof setTimeout> | null = null
+let preflightSeq = 0
+
+const showRuntimeDeps = computed(() => form.transport === 'stdio')
+const preflightBanner = computed(() => {
+  if (form.transport !== 'stdio') return null
+  if (preflight.value === null) return null
+  const tone = preflightTone(
+    preflight.value.ready,
+    preflight.value.stdioEnabled,
+    preflight.value.commandAllowed,
+  )
+  return {
+    tone,
+    label: preflightReadyLabel(
+      preflight.value.ready,
+      preflight.value.stdioEnabled,
+      preflight.value.commandAllowed,
+    ),
+  }
+})
+const suggestedFromCommand = computed(() => inferToolsFromCommand(form.command))
 
 const normalizedTagOptions = computed(() => normalizeTags(props.tagOptions ?? []))
 const formTags = computed(() => normalizeTags([...form.tags, ...parseTags(form.tagDraft)]))
@@ -285,6 +335,10 @@ function removeTag(tag: string): void {
 }
 
 function resetManualFields(): void {
+  form.reqMode = 'auto'
+  form.reqTools = []
+  form.reqNote = ''
+  preflight.value = null
   form.command = ''
   form.args = ''
   form.url = ''
@@ -539,6 +593,13 @@ function fillFromConfig(
   form.headersText = formatKeyValues(headers, ':')
   form.envText = formatKeyValues(env, '=')
   form.cwd = typeof connParams.cwd === 'string' ? connParams.cwd : ''
+  const rr = normalizeRequirements(connParams.runtimeRequirements)
+  form.reqMode = rr.mode
+  form.reqTools = [...rr.tools]
+  form.reqNote = rr.note ?? ''
+  if (form.reqMode === 'auto' && form.reqTools.length === 0 && form.command.trim() !== '') {
+    form.reqTools = inferToolsFromCommand(form.command)
+  }
   form.customParamsJson = customParamsFrom(connParams)
   form.advancedOpen =
     form.headersText !== '' ||
@@ -548,6 +609,7 @@ function fillFromConfig(
   form.enabled = cfg.enabled
   form.autoSync = cfg.autoSync
   applyRateLimits(cfg.rateLimits)
+  schedulePreflight()
   placeholders.value = []
   presetParams.value = {}
 }
@@ -624,10 +686,131 @@ watch(
     form.envText,
     form.cwd,
     form.customParamsJson,
+    form.reqMode,
+    form.reqTools.join(','),
     JSON.stringify(placeholderValues),
   ],
-  () => invalidateTestResult(),
+  () => {
+    invalidateTestResult()
+    schedulePreflight()
+  },
 )
+
+watch(
+  () => form.command,
+  (cmd) => {
+    if (form.transport !== 'stdio' || form.reqMode !== 'auto') return
+    form.reqTools = inferToolsFromCommand(cmd)
+  },
+)
+
+async function ensureKnownTools(): Promise<void> {
+  if (knownTools.value.length > 0) return
+  try {
+    knownTools.value = await getRuntimeKnownTools()
+  } catch {
+    knownTools.value = [
+      { name: 'node', label: 'Node.js', packageId: 'node-22.14.0' },
+      { name: 'npx', label: 'npx', packageId: 'node-22.14.0' },
+      { name: 'npm', label: 'npm', packageId: 'node-22.14.0' },
+      { name: 'python', label: 'Python' },
+      { name: 'python3', label: 'Python 3' },
+      { name: 'uv', label: 'uv', packageId: 'uv-0.6.14' },
+      { name: 'uvx', label: 'uvx', packageId: 'uv-0.6.14' },
+      { name: 'docker', label: 'Docker' },
+    ]
+  }
+}
+
+function schedulePreflight(): void {
+  if (preflightTimer !== null) clearTimeout(preflightTimer)
+  if (form.transport !== 'stdio') {
+    preflight.value = null
+    return
+  }
+  preflightTimer = setTimeout(() => {
+    void runPreflight()
+  }, 280)
+}
+
+async function runPreflight(): Promise<void> {
+  if (form.transport !== 'stdio') {
+    preflight.value = null
+    return
+  }
+  await ensureKnownTools()
+  const seq = ++preflightSeq
+  preflightLoading.value = true
+  try {
+    const result = await preflightRuntime({
+      transport: 'stdio',
+      command: form.command.trim(),
+      requirements: {
+        mode: form.reqMode,
+        tools: form.reqTools,
+        ...(form.reqNote.trim() !== '' ? { note: form.reqNote.trim() } : {}),
+      },
+    })
+    if (seq === preflightSeq) preflight.value = result
+  } catch {
+    if (seq === preflightSeq) preflight.value = null
+  } finally {
+    if (seq === preflightSeq) preflightLoading.value = false
+  }
+}
+
+function toggleReqTool(name: string): void {
+  if (form.reqMode !== 'manual') return
+  const i = form.reqTools.indexOf(name)
+  if (i >= 0) form.reqTools.splice(i, 1)
+  else form.reqTools.push(name)
+  schedulePreflight()
+}
+
+function setReqMode(mode: RequirementsMode): void {
+  form.reqMode = mode
+  if (mode === 'auto') form.reqTools = inferToolsFromCommand(form.command)
+  schedulePreflight()
+}
+
+function applySuggestedTools(): void {
+  form.reqMode = 'manual'
+  form.reqTools = [...suggestedFromCommand.value]
+  schedulePreflight()
+}
+
+async function handleInstallPackage(packageId: string): Promise<void> {
+  if (!packageId || installingPackageId.value !== '') return
+  const ok = await confirm({
+    title: '安装运行时',
+    message: '将从官方源下载固定版本到数据卷（SHA256 校验）。是否继续？',
+    confirmText: '安装',
+    tone: 'warning',
+  })
+  if (!ok) return
+  installingPackageId.value = packageId
+  try {
+    const result = await installRuntimePackage(packageId)
+    toast.success(result.reused ? `${result.name} 已存在` : `${result.name} 安装完成`)
+    await runPreflight()
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : '安装失败')
+  } finally {
+    installingPackageId.value = ''
+  }
+}
+
+function itemStatusClass(available: boolean): string {
+  return available
+    ? 'bg-success-50 text-success-700 dark:bg-success-500/10 dark:text-success-400'
+    : 'bg-warning-50 text-warning-700 dark:bg-warning-500/10 dark:text-warning-400'
+}
+
+function bannerClass(tone: 'success' | 'warning' | 'error'): string {
+  if (tone === 'success') return 'border-success-200 bg-success-50/70 dark:border-success-500/20 dark:bg-success-500/10'
+  if (tone === 'error') return 'border-error-200 bg-error-50/70 dark:border-error-500/20 dark:bg-error-500/10'
+  return 'border-warning-200 bg-warning-50/70 dark:border-warning-500/20 dark:bg-warning-500/10'
+}
 
 function placeholderLabel(ph: Placeholder): string {
   return ph.label?.trim() ? ph.label : ph.name
@@ -766,6 +949,17 @@ function buildManualConnParams(): ConnParams | null {
     if (args.length > 0) params.args = args
     if (Object.keys(env).length > 0) params.env = env
     if (form.cwd.trim() !== '') params.cwd = form.cwd.trim()
+    const tools =
+      form.reqMode === 'manual'
+        ? form.reqTools
+        : form.reqTools.length > 0
+          ? form.reqTools
+          : inferToolsFromCommand(form.command)
+    params.runtimeRequirements = {
+      mode: form.reqMode,
+      tools: [...tools],
+      ...(form.reqNote.trim() !== '' ? { note: form.reqNote.trim() } : {}),
+    }
     return params
   }
 
@@ -1012,6 +1206,19 @@ function applyServerError(err: unknown, fallback = '保存失败，请稍后重�
 async function handleTestConnection(): Promise<void> {
   if (testingConnection.value || submitting.value) return
   clearTestResult()
+  if (form.transport === 'stdio') {
+    await runPreflight()
+    if (preflight.value && !preflight.value.ready) {
+      const ok = await confirm({
+        title: '依赖尚未就绪',
+        message: '当前宿主缺少部分运行时依赖，测试连接可能失败。建议先补齐依赖，仍要继续测试吗？',
+        confirmText: '仍要测试',
+        cancelText: '先去补齐',
+        tone: 'warning',
+      })
+      if (!ok) return
+    }
+  }
   const payload = buildConnectionTestPayload()
   if (payload === null) return
 
@@ -1316,6 +1523,174 @@ const errorClass = 'mt-1.5 text-xs text-error-500'
                         ${credential}；它会取认证区的 Token / API Key。
                       </p>
                       <p v-if="fieldErrors.args" :class="errorClass">{{ fieldErrors.args }}</p>
+                    </div>
+
+                    <div
+                      v-if="showRuntimeDeps"
+                      class="rounded-xl border border-gray-200 p-4 transition dark:border-gray-800"
+                    >
+                      <div class="flex flex-wrap items-start justify-between gap-2">
+                        <div>
+                          <h5 class="text-sm font-semibold text-gray-800 dark:text-white/90">
+                            运行环境依赖
+                          </h5>
+                          <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
+                            声明该本地 MCP 需要的宿主工具。可自动按命令建议，也可手动选择。
+                          </p>
+                        </div>
+                        <span
+                          v-if="preflightBanner"
+                          class="inline-flex rounded-full px-2.5 py-1 text-[11px] font-medium"
+                          :class="itemStatusClass(preflightBanner.tone === 'success')"
+                        >
+                          {{ preflightLoading ? '检测中…' : preflightBanner.label }}
+                        </span>
+                      </div>
+
+                      <div
+                        v-if="preflightBanner && preflightBanner.tone !== 'success'"
+                        class="mt-3 rounded-lg border px-3 py-2 text-xs leading-5 text-gray-700 dark:text-gray-200"
+                        :class="bannerClass(preflightBanner.tone)"
+                      >
+                        <p v-if="preflight?.commandError">{{ preflight.commandError }}</p>
+                        <p v-else>缺少依赖时仍可先保存配置；测试连接或实际启动前建议补齐。</p>
+                      </div>
+
+                      <div class="mt-3 inline-flex rounded-lg bg-gray-100 p-1 dark:bg-white/[0.04]">
+                        <button
+                          type="button"
+                          class="rounded-md px-3 py-1.5 text-xs font-medium transition"
+                          :class="
+                            form.reqMode === 'auto'
+                              ? 'bg-white text-gray-900 shadow-sm dark:bg-gray-800 dark:text-white'
+                              : 'text-gray-500 dark:text-gray-400'
+                          "
+                          @click="setReqMode('auto')"
+                        >
+                          按命令自动
+                        </button>
+                        <button
+                          type="button"
+                          class="rounded-md px-3 py-1.5 text-xs font-medium transition"
+                          :class="
+                            form.reqMode === 'manual'
+                              ? 'bg-white text-gray-900 shadow-sm dark:bg-gray-800 dark:text-white'
+                              : 'text-gray-500 dark:text-gray-400'
+                          "
+                          @click="setReqMode('manual')"
+                        >
+                          我自己选择
+                        </button>
+                      </div>
+
+                      <div class="mt-3 flex flex-wrap gap-2">
+                        <button
+                          v-for="tool in knownTools"
+                          :key="tool.name"
+                          type="button"
+                          class="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition"
+                          :class="
+                            form.reqTools.includes(tool.name)
+                              ? 'border-brand-300 bg-brand-50 text-brand-700 dark:border-brand-500/40 dark:bg-brand-500/10 dark:text-brand-300'
+                              : 'border-gray-200 text-gray-500 dark:border-gray-700 dark:text-gray-400'
+                          "
+                          :disabled="form.reqMode === 'auto'"
+                          @click="toggleReqTool(tool.name)"
+                        >
+                          {{ tool.label }}
+                          <span
+                            v-if="preflight?.items?.find((i) => i.name === tool.name)"
+                            class="h-1.5 w-1.5 rounded-full"
+                            :class="
+                              preflight.items.find((i) => i.name === tool.name)?.available
+                                ? 'bg-success-500'
+                                : 'bg-warning-500'
+                            "
+                          />
+                        </button>
+                      </div>
+
+                      <div
+                        v-if="form.reqMode === 'auto' && suggestedFromCommand.length === 0"
+                        class="mt-2 text-xs text-gray-500 dark:text-gray-400"
+                      >
+                        无法从命令判断运行时（例如自定义二进制）。请切换到「我自己选择」勾选实际依赖。
+                        <button
+                          type="button"
+                          class="ml-1 font-medium text-brand-600 hover:underline dark:text-brand-400"
+                          @click="setReqMode('manual')"
+                        >
+                          手动选择
+                        </button>
+                      </div>
+
+                      <div
+                        v-if="form.reqMode === 'manual' && suggestedFromCommand.length > 0"
+                        class="mt-2"
+                      >
+                        <button
+                          type="button"
+                          class="text-xs font-medium text-brand-600 hover:underline dark:text-brand-400"
+                          @click="applySuggestedTools"
+                        >
+                          使用命令建议（{{ suggestedFromCommand.join('、') }}）
+                        </button>
+                      </div>
+
+                      <div
+                        v-if="preflight?.items?.length"
+                        class="mt-3 space-y-1.5 rounded-lg bg-gray-50 p-3 dark:bg-white/[0.03]"
+                      >
+                        <div
+                          v-for="item in preflight.items"
+                          :key="item.name"
+                          class="flex flex-wrap items-center justify-between gap-2 text-xs"
+                        >
+                          <span class="font-mono text-gray-700 dark:text-gray-200">
+                            {{ item.label }}
+                            <span class="text-gray-400">({{ item.name }})</span>
+                          </span>
+                          <span class="inline-flex items-center gap-2">
+                            <span
+                              class="rounded-full px-2 py-0.5 font-medium"
+                              :class="itemStatusClass(item.available)"
+                            >
+                              {{ item.available ? '可用' : '缺失' }}
+                            </span>
+                            <button
+                              v-if="!item.available && item.fixable && item.packageId"
+                              type="button"
+                              class="font-medium text-brand-600 hover:underline disabled:opacity-50 dark:text-brand-400"
+                              :disabled="installingPackageId !== ''"
+                              @click="handleInstallPackage(item.packageId!)"
+                            >
+                              {{
+                                installingPackageId === item.packageId ? '安装中…' : '一键安装'
+                              }}
+                            </button>
+                          </span>
+                        </div>
+                      </div>
+
+                      <div class="mt-3 flex flex-wrap gap-2">
+                        <router-link
+                          to="/runtime"
+                          class="text-xs font-medium text-brand-600 hover:underline dark:text-brand-400"
+                        >
+                          打开运行环境
+                        </router-link>
+                        <button
+                          type="button"
+                          class="text-xs font-medium text-gray-500 hover:text-gray-700 dark:text-gray-400"
+                          :disabled="preflightLoading"
+                          @click="runPreflight"
+                        >
+                          重新检测
+                        </button>
+                      </div>
+                      <p v-if="fieldErrors.runtimeRequirements" :class="errorClass">
+                        {{ fieldErrors.runtimeRequirements }}
+                      </p>
                     </div>
                   </div>
                 </template>

@@ -104,3 +104,63 @@ export async function uninstallRuntimePackage(packageId: string): Promise<{ unin
   })
   return res.data
 }
+
+export interface RuntimeRequirementsPayload {
+  mode: 'auto' | 'manual'
+  tools: string[]
+  note?: string
+}
+
+export interface RuntimeKnownTool {
+  name: string
+  label: string
+  description?: string
+  packageId?: string
+}
+
+export interface RuntimePreflightItem {
+  name: string
+  label: string
+  required: boolean
+  available: boolean
+  path?: string
+  fixable: boolean
+  packageId?: string
+  message?: string
+}
+
+export interface RuntimePreflightAction {
+  type: 'install' | 'open_runtime' | 'open_settings' | string
+  packageId?: string
+  label: string
+}
+
+export interface RuntimePreflightResult {
+  ready: boolean
+  transport: string
+  command?: string
+  requirements: RuntimeRequirementsPayload
+  suggestedTools?: string[]
+  items: RuntimePreflightItem[]
+  stdioEnabled: boolean
+  commandAllowed: boolean
+  commandError?: string
+  runtimeDir?: string
+  actions?: RuntimePreflightAction[]
+  cached?: boolean
+}
+
+export async function getRuntimeKnownTools(): Promise<RuntimeKnownTool[]> {
+  const res = await request.get<RuntimeKnownTool[]>('/runtime/tools')
+  return res.data
+}
+
+export async function preflightRuntime(payload: {
+  transport: string
+  command?: string
+  requirements?: RuntimeRequirementsPayload
+  templateRuntimes?: string[]
+}): Promise<RuntimePreflightResult> {
+  const res = await request.post<RuntimePreflightResult>('/runtime/preflight', payload)
+  return res.data
+}

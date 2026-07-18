@@ -1,0 +1,486 @@
+package runtime
+
+import (
+	"fmt"
+	"strings"
+	"sync"
+	"time"
+)
+
+// 连接参数中的依赖声明键（stdio 专用，存于 connParams）。
+const ParamRuntimeRequirements = "runtimeRequirements"
+
+// RequirementsMode 为依赖声明模式。
+type RequirementsMode string
+
+const (
+	// RequirementsAuto 按 command 自动推断（保存的 tools 可作缓存，评估时以推断为准）。
+	RequirementsAuto RequirementsMode = "auto"
+	// RequirementsManual 以用户勾选 tools 为准。
+	RequirementsManual RequirementsMode = "manual"
+)
+
+// KnownTool 为可选/可探测的宿主工具元数据。
+type KnownTool struct {
+	Name        string `json:"name"`
+	Label       string `json:"label"`
+	Description string `json:"description"`
+	// PackageID 非空表示可通过预置安装补齐。
+	PackageID string `json:"packageId,omitempty"`
+}
+
+// RuntimeRequirements 为上游声明的运行时依赖。
+type RuntimeRequirements struct {
+	Mode  RequirementsMode `json:"mode"`
+	Tools []string         `json:"tools"`
+	Note  string           `json:"note,omitempty"`
+}
+
+// PreflightItem 为单个工具的检查结果。
+type PreflightItem struct {
+	Name      string `json:"name"`
+	Label     string `json:"label"`
+	Required  bool   `json:"required"`
+	Available bool   `json:"available"`
+	Path      string `json:"path,omitempty"`
+	Fixable   bool   `json:"fixable"`
+	PackageID string `json:"packageId,omitempty"`
+	Message   string `json:"message,omitempty"`
+}
+
+// PreflightAction 为可行动补齐建议。
+type PreflightAction struct {
+	Type      string `json:"type"` // install | open_runtime | open_settings
+	PackageID string `json:"packageId,omitempty"`
+	Label     string `json:"label"`
+}
+
+// PreflightRequest 为依赖预检入参。
+type PreflightRequest struct {
+	Transport    string               `json:"transport"`
+	Command      string               `json:"command"`
+	Requirements *RuntimeRequirements `json:"requirements,omitempty"`
+	// TemplateRuntimes 可选，来自模板 RuntimeTag（node/docker/uvx/python/local）。
+	TemplateRuntimes []string `json:"templateRuntimes,omitempty"`
+}
+
+// PreflightResult 为依赖预检结果。
+type PreflightResult struct {
+	Ready          bool                `json:"ready"`
+	Transport      string              `json:"transport"`
+	Command        string              `json:"command,omitempty"`
+	Requirements   RuntimeRequirements `json:"requirements"`
+	SuggestedTools []string            `json:"suggestedTools,omitempty"`
+	Items          []PreflightItem     `json:"items"`
+	StdioEnabled   bool                `json:"stdioEnabled"`
+	CommandAllowed bool                `json:"commandAllowed"`
+	CommandError   string              `json:"commandError,omitempty"`
+	RuntimeDir     string              `json:"runtimeDir,omitempty"`
+	Actions        []PreflightAction   `json:"actions,omitempty"`
+	Cached         bool                `json:"cached,omitempty"`
+}
+
+// KnownTools 返回可声明/可探测的工具字典（稳定顺序）。
+func KnownTools() []KnownTool {
+	return []KnownTool{
+		{Name: "node", Label: "Node.js", Description: "Node 运行时", PackageID: "node-22.14.0"},
+		{Name: "npx", Label: "npx", Description: "Node 包执行器", PackageID: "node-22.14.0"},
+		{Name: "npm", Label: "npm", Description: "Node 包管理器", PackageID: "node-22.14.0"},
+		{Name: "python", Label: "Python", Description: "Python 解释器"},
+		{Name: "python3", Label: "Python 3", Description: "Python 3 解释器"},
+		{Name: "uv", Label: "uv", Description: "Astral uv", PackageID: "uv-0.6.14"},
+		{Name: "uvx", Label: "uvx", Description: "uv 工具运行器", PackageID: "uv-0.6.14"},
+		{Name: "docker", Label: "Docker", Description: "容器运行时（需宿主机自行安装）"},
+	}
+}
+
+func knownToolMap() map[string]KnownTool {
+	m := make(map[string]KnownTool, 16)
+	for _, t := range KnownTools() {
+		m[t.Name] = t
+	}
+	return m
+}
+
+// IsKnownTool 判断是否为合法依赖工具名。
+func IsKnownTool(name string) bool {
+	_, ok := knownToolMap()[CommandBaseName(name)]
+	if ok {
+		return true
+	}
+	// CommandBaseName 对无扩展名逻辑名即小写 trim
+	_, ok = knownToolMap()[strings.ToLower(strings.TrimSpace(name))]
+	return ok
+}
+
+// InferToolsFromCommand 根据 command 基名推断建议工具。
+func InferToolsFromCommand(command string) []string {
+	base := CommandBaseName(command)
+	switch base {
+	case "npx":
+		return []string{"node", "npx"}
+	case "npm":
+		return []string{"node", "npm"}
+	case "node":
+		return []string{"node"}
+	case "python":
+		return []string{"python"}
+	case "python3":
+		return []string{"python3"}
+	case "uv":
+		return []string{"uv"}
+	case "uvx":
+		return []string{"uv", "uvx"}
+	case "docker":
+		return []string{"docker"}
+	default:
+		return nil
+	}
+}
+
+// InferToolsFromTemplateRuntimes 将模板 RuntimeTag 映射为工具名。
+func InferToolsFromTemplateRuntimes(tags []string) []string {
+	out := make([]string, 0, 4)
+	seen := map[string]struct{}{}
+	add := func(names ...string) {
+		for _, n := range names {
+			if _, ok := seen[n]; ok {
+				continue
+			}
+			seen[n] = struct{}{}
+			out = append(out, n)
+		}
+	}
+	for _, raw := range tags {
+		switch strings.ToLower(strings.TrimSpace(raw)) {
+		case "node":
+			add("node", "npx")
+		case "python":
+			add("python3", "python")
+		case "uvx", "uv":
+			add("uv", "uvx")
+		case "docker":
+			add("docker")
+		case "remote", "local", "":
+			// skip
+		}
+	}
+	return out
+}
+
+// NormalizeRequirements 清洗 mode/tools/note。
+func NormalizeRequirements(req RuntimeRequirements) RuntimeRequirements {
+	mode := RequirementsMode(strings.ToLower(strings.TrimSpace(string(req.Mode))))
+	if mode != RequirementsManual {
+		mode = RequirementsAuto
+	}
+	req.Mode = mode
+	req.Note = strings.TrimSpace(req.Note)
+	if len(req.Note) > 200 {
+		req.Note = req.Note[:200]
+	}
+	req.Tools = normalizeToolList(req.Tools)
+	return req
+}
+
+func normalizeToolList(tools []string) []string {
+	known := knownToolMap()
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(tools))
+	for _, t := range tools {
+		name := strings.ToLower(strings.TrimSpace(t))
+		name = CommandBaseName(name)
+		if name == "" {
+			continue
+		}
+		if _, ok := known[name]; !ok {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		out = append(out, name)
+	}
+	return out
+}
+
+// ValidateRequirements 校验依赖声明结构（不探测宿主）。
+// raw 为 connParams 中的值；nil/缺省合法。
+func ValidateRequirements(raw any) (RuntimeRequirements, error) {
+	if raw == nil {
+		return RuntimeRequirements{Mode: RequirementsAuto, Tools: []string{}}, nil
+	}
+	req, err := ParseRequirements(raw)
+	if err != nil {
+		return RuntimeRequirements{}, err
+	}
+	req = NormalizeRequirements(req)
+	if len(req.Tools) > 16 {
+		return RuntimeRequirements{}, fmt.Errorf("依赖工具最多 16 项")
+	}
+	// 再确认无未知项被静默丢弃：若用户传入未知名则报错
+	if m, ok := raw.(map[string]any); ok {
+		if toolsRaw, exists := m["tools"]; exists && toolsRaw != nil {
+			var original []string
+			switch v := toolsRaw.(type) {
+			case []string:
+				original = v
+			case []any:
+				for _, item := range v {
+					if s, ok := item.(string); ok {
+						original = append(original, s)
+					} else {
+						return RuntimeRequirements{}, fmt.Errorf("runtimeRequirements.tools 必须为字符串数组")
+					}
+				}
+			default:
+				return RuntimeRequirements{}, fmt.Errorf("runtimeRequirements.tools 必须为字符串数组")
+			}
+			for _, t := range original {
+				name := strings.ToLower(strings.TrimSpace(t))
+				if name == "" {
+					return RuntimeRequirements{}, fmt.Errorf("依赖工具名不能为空")
+				}
+				if !IsKnownTool(name) {
+					return RuntimeRequirements{}, fmt.Errorf("未知依赖工具 %q（仅支持运行环境探测清单中的工具）", name)
+				}
+			}
+		}
+	}
+	return req, nil
+}
+
+// ParseRequirements 从 JSON 对象解析依赖声明。
+func ParseRequirements(raw any) (RuntimeRequirements, error) {
+	switch v := raw.(type) {
+	case RuntimeRequirements:
+		return v, nil
+	case map[string]any:
+		req := RuntimeRequirements{Mode: RequirementsAuto}
+		if m, ok := v["mode"].(string); ok {
+			req.Mode = RequirementsMode(m)
+		}
+		if n, ok := v["note"].(string); ok {
+			req.Note = n
+		}
+		if toolsRaw, ok := v["tools"]; ok && toolsRaw != nil {
+			switch tv := toolsRaw.(type) {
+			case []string:
+				req.Tools = append([]string{}, tv...)
+			case []any:
+				for _, item := range tv {
+					s, ok := item.(string)
+					if !ok {
+						return RuntimeRequirements{}, fmt.Errorf("runtimeRequirements.tools 必须为字符串数组")
+					}
+					req.Tools = append(req.Tools, s)
+				}
+			default:
+				return RuntimeRequirements{}, fmt.Errorf("runtimeRequirements.tools 必须为字符串数组")
+			}
+		}
+		return req, nil
+	default:
+		return RuntimeRequirements{}, fmt.Errorf("runtimeRequirements 必须为对象")
+	}
+}
+
+// ResolveEffectiveTools 合并自动推断与用户声明，得到 effective 探测列表。
+func ResolveEffectiveTools(command string, req RuntimeRequirements, templateRuntimes []string) (effective, suggested []string) {
+	req = NormalizeRequirements(req)
+	suggested = mergeTools(InferToolsFromCommand(command), InferToolsFromTemplateRuntimes(templateRuntimes))
+	if req.Mode == RequirementsManual {
+		if len(req.Tools) == 0 {
+			return nil, suggested
+		}
+		return append([]string{}, req.Tools...), suggested
+	}
+	// auto：优先推断；若用户曾保存 tools 且推断为空，则回退 tools（绝对路径脚本场景）
+	if len(suggested) > 0 {
+		return append([]string{}, suggested...), suggested
+	}
+	return append([]string{}, req.Tools...), suggested
+}
+
+func mergeTools(sets ...[]string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0)
+	for _, set := range sets {
+		for _, t := range normalizeToolList(set) {
+			if _, ok := seen[t]; ok {
+				continue
+			}
+			seen[t] = struct{}{}
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// EvaluatePreflight 基于策略与 LookPath 评估依赖就绪状态。
+func EvaluatePreflight(req PreflightRequest, policy Policy, runtimeDir string, lookPath LookPathFunc) PreflightResult {
+	policy = NormalizePolicy(policy)
+	transport := strings.TrimSpace(req.Transport)
+	command := strings.TrimSpace(req.Command)
+
+	result := PreflightResult{
+		Transport:      transport,
+		Command:        command,
+		StdioEnabled:   policy.StdioEnabled,
+		CommandAllowed: true,
+		RuntimeDir:     runtimeDir,
+		Requirements:   RuntimeRequirements{Mode: RequirementsAuto, Tools: []string{}},
+		Items:          []PreflightItem{},
+		Actions:        []PreflightAction{},
+	}
+
+	if !strings.EqualFold(transport, "stdio") {
+		result.Ready = true
+		return result
+	}
+
+	userReq := RuntimeRequirements{Mode: RequirementsAuto}
+	if req.Requirements != nil {
+		userReq = NormalizeRequirements(*req.Requirements)
+	}
+	result.Requirements = userReq
+
+	if err := ValidateCommand(command, policy); err != nil {
+		result.CommandAllowed = false
+		result.CommandError = err.Error()
+	}
+
+	effective, suggested := ResolveEffectiveTools(command, userReq, req.TemplateRuntimes)
+	result.SuggestedTools = suggested
+	result.Requirements.Tools = effective
+
+	if lookPath == nil {
+		lookPath = func(file string) (string, error) {
+			return LookPathWithPrefixes(file, PathPrefixes(runtimeDir), nil)
+		}
+	}
+
+	known := knownToolMap()
+	missingFixable := map[string]string{} // packageId -> label
+	allAvailable := true
+	for _, name := range effective {
+		meta := known[name]
+		item := PreflightItem{
+			Name:      name,
+			Label:     meta.Label,
+			Required:  true,
+			Fixable:   meta.PackageID != "",
+			PackageID: meta.PackageID,
+		}
+		if item.Label == "" {
+			item.Label = name
+		}
+		path, err := lookPath(name)
+		if err == nil && path != "" {
+			item.Available = true
+			item.Path = path
+		} else {
+			allAvailable = false
+			item.Available = false
+			item.Message = "未在运行时目录或 PATH 中找到"
+			if item.Fixable {
+				missingFixable[item.PackageID] = meta.Label
+			}
+		}
+		result.Items = append(result.Items, item)
+	}
+
+	result.Ready = result.CommandAllowed && result.StdioEnabled && allAvailable
+
+	if !result.StdioEnabled {
+		result.Actions = append(result.Actions, PreflightAction{
+			Type:  "open_settings",
+			Label: "在系统设置中启用本地 stdio",
+		})
+	}
+	for pkgID, label := range missingFixable {
+		result.Actions = append(result.Actions, PreflightAction{
+			Type:      "install",
+			PackageID: pkgID,
+			Label:     "安装 " + label + " 运行时",
+		})
+	}
+	if !allAvailable {
+		result.Actions = append(result.Actions, PreflightAction{
+			Type:  "open_runtime",
+			Label: "打开运行环境查看探测结果",
+		})
+	}
+	return result
+}
+
+// --- Service 级 preflight 缓存（短 TTL，减轻 LookPath 压力）---
+
+type preflightCacheEntry struct {
+	at     time.Time
+	result PreflightResult
+}
+
+const preflightCacheTTL = 15 * time.Second
+
+var (
+	preflightCacheMu sync.Mutex
+	preflightCache   = map[string]preflightCacheEntry{}
+)
+
+func preflightCacheKey(req PreflightRequest, runtimeDir string, policy Policy) string {
+	tools := ""
+	if req.Requirements != nil {
+		tools = strings.Join(req.Requirements.Tools, ",")
+		tools = string(req.Requirements.Mode) + "|" + tools
+	}
+	return strings.Join([]string{
+		req.Transport,
+		req.Command,
+		tools,
+		strings.Join(req.TemplateRuntimes, ","),
+		runtimeDir,
+		fmt.Sprintf("%v", policy.StdioEnabled),
+		strings.Join(policy.CommandAllowlist, ","),
+	}, "#")
+}
+
+// Preflight 执行依赖预检（可缓存）。
+func (s *Service) Preflight(req PreflightRequest) PreflightResult {
+	if s == nil {
+		return EvaluatePreflight(req, DefaultPolicy(), "", nil)
+	}
+	policy := s.Policy()
+	runtimeDir := s.RuntimeDir()
+	key := preflightCacheKey(req, runtimeDir, policy)
+	preflightCacheMu.Lock()
+	if ent, ok := preflightCache[key]; ok && time.Since(ent.at) < preflightCacheTTL {
+		res := ent.result
+		res.Cached = true
+		preflightCacheMu.Unlock()
+		return res
+	}
+	preflightCacheMu.Unlock()
+
+	prefixes := PathPrefixes(runtimeDir)
+	res := EvaluatePreflight(req, policy, runtimeDir, func(file string) (string, error) {
+		return LookPathWithPrefixes(file, prefixes, nil)
+	})
+
+	preflightCacheMu.Lock()
+	// 简单防膨胀
+	if len(preflightCache) > 256 {
+		preflightCache = map[string]preflightCacheEntry{}
+	}
+	preflightCache[key] = preflightCacheEntry{at: time.Now(), result: res}
+	preflightCacheMu.Unlock()
+	return res
+}
+
+// InvalidatePreflightCache 安装/卸载后清除缓存。
+func InvalidatePreflightCache() {
+	preflightCacheMu.Lock()
+	preflightCache = map[string]preflightCacheEntry{}
+	preflightCacheMu.Unlock()
+}

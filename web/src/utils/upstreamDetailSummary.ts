@@ -48,6 +48,10 @@ export function buildUpstreamDetailSummary(
       { label: endpoint.label, value: endpoint.value },
       { label: '工作目录', value: stringValue(upstream.config.connParams.cwd) },
       { label: '命令参数', value: argsValue(upstream.config.connParams.args) },
+      {
+        label: '环境依赖',
+        value: runtimeRequirementsLabel(upstream.config.connParams.runtimeRequirements),
+      },
       { label: '请求头', value: recordCount(upstream.config.connParams.headers, '个请求头') },
       { label: '环境变量', value: recordCount(upstream.config.connParams.env, '个变量') },
       { label: '访问凭证', value: upstream.config.credential ? '已配置' : '未配置' },
@@ -153,6 +157,18 @@ function recordCount(value: unknown, suffix: string): string {
   if (value === null || value === undefined || typeof value !== 'object' || Array.isArray(value)) return ''
   const count = Object.keys(value).length
   return count > 0 ? `${count} ${suffix}` : ''
+}
+
+function runtimeRequirementsLabel(value: unknown): string {
+  if (value == null || typeof value !== 'object') return ''
+  const obj = value as { mode?: string; tools?: unknown; note?: string }
+  const tools = Array.isArray(obj.tools)
+    ? obj.tools.filter((t): t is string => typeof t === 'string' && t.trim() !== '')
+    : []
+  if (tools.length === 0 && !obj.note) return ''
+  const mode = obj.mode === 'manual' ? '手动' : '自动'
+  const toolPart = tools.length > 0 ? tools.join('、') : '未指定工具'
+  return obj.note ? `${mode}：${toolPart}（${obj.note}）` : `${mode}：${toolPart}`
 }
 
 function argsValue(value: unknown): string {

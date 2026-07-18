@@ -19,6 +19,16 @@ import { useBreakpoint } from '@/composables/useBreakpoint'
 import { useConfirm } from '@/composables/useConfirm'
 import { useToast } from '@/composables/useToast'
 import {
+  installRuntimePackage,
+  preflightRuntime,
+  type RuntimePreflightResult,
+} from '@/api/runtime'
+import {
+  normalizeRequirements,
+  preflightReadyLabel,
+  preflightTone,
+} from '@/utils/runtimeRequirements'
+import {
   listUpstreams,
   setUpstreamEnabled,
   deleteUpstream,
@@ -254,6 +264,83 @@ const detailSummary = computed(() =>
   detailUpstream.value === null
     ? null
     : buildUpstreamDetailSummary(detailUpstream.value, toolCounts.value[detailUpstream.value.id]),
+)
+
+const detailPreflight = ref<RuntimePreflightResult | null>(null)
+const detailPreflightLoading = ref(false)
+const detailInstallingPackageId = ref('')
+let detailPreflightSeq = 0
+
+const detailIsStdio = computed(() => detailUpstream.value?.config.transport === 'stdio')
+
+const detailPreflightBanner = computed(() => {
+  if (!detailIsStdio.value || detailPreflight.value === null) return null
+  const p = detailPreflight.value
+  return {
+    tone: preflightTone(p.ready, p.stdioEnabled, p.commandAllowed),
+    label: preflightReadyLabel(p.ready, p.stdioEnabled, p.commandAllowed),
+  }
+})
+
+async function loadDetailPreflight(): Promise<void> {
+  const u = detailUpstream.value
+  if (u === null || u.config.transport !== 'stdio') {
+    detailPreflight.value = null
+    return
+  }
+  const seq = ++detailPreflightSeq
+  detailPreflightLoading.value = true
+  try {
+    const rr = normalizeRequirements(u.config.connParams.runtimeRequirements)
+    const result = await preflightRuntime({
+      transport: 'stdio',
+      command: typeof u.config.connParams.command === 'string' ? u.config.connParams.command : '',
+      requirements: {
+        mode: rr.mode,
+        tools: rr.tools,
+        ...(rr.note ? { note: rr.note } : {}),
+      },
+    })
+    if (seq === detailPreflightSeq) detailPreflight.value = result
+  } catch {
+    if (seq === detailPreflightSeq) detailPreflight.value = null
+  } finally {
+    if (seq === detailPreflightSeq) detailPreflightLoading.value = false
+  }
+}
+
+async function installFromDetail(packageId: string): Promise<void> {
+  if (!packageId || detailInstallingPackageId.value !== '') return
+  const ok = await confirm({
+    title: '安装运行时',
+    message: '将从官方源下载固定版本到数据卷（SHA256 校验）。是否继续？',
+    confirmText: '安装',
+    tone: 'warning',
+  })
+  if (!ok) return
+  detailInstallingPackageId.value = packageId
+  try {
+    const result = await installRuntimePackage(packageId)
+    toast.success(result.reused ? `${result.name} 已存在` : `${result.name} 安装完成`)
+    await loadDetailPreflight()
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : '安装失败')
+  } finally {
+    detailInstallingPackageId.value = ''
+  }
+}
+
+function depChipClass(available: boolean): string {
+  return available
+    ? 'bg-success-50 text-success-700 dark:bg-success-500/10 dark:text-success-400'
+    : 'bg-warning-50 text-warning-700 dark:bg-warning-500/10 dark:text-warning-400'
+}
+
+watch(
+  () => detailUpstream.value?.id,
+  () => {
+    void loadDetailPreflight()
+  },
 )
 
 /** 传输类型显示名。 */
@@ -1587,9 +1674,104 @@ function goPage(p: number): void {
               </section>
             </div>
 
+            <section
+              v-if="detailIsStdio"
+              class="mt-4 rounded-xl border border-gray-200 p-4 dark:border-gray-800"
+            >
+              <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h4 class="text-sm font-semibold text-gray-800 dark:text-white/90">
+                    本地运行环境
+                  </h4>
+                  <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    该上游声明的宿主工具依赖与当前探测结果。
+                  </p>
+                </div>
+                <span
+                  v-if="detailPreflightBanner"
+                  class="rounded-full px-2.5 py-1 text-xs font-medium"
+                  :class="depChipClass(detailPreflightBanner.tone === 'success')"
+                >
+                  {{ detailPreflightLoading ? '检测中…' : detailPreflightBanner.label }}
+                </span>
+              </div>
+
+              <div
+                v-if="detailPreflight?.items?.length"
+                class="space-y-2"
+              >
+                <div
+                  v-for="item in detailPreflight.items"
+                  :key="item.name"
+                  class="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-gray-50 px-3 py-2 text-xs dark:bg-white/[0.03]"
+                >
+                  <div class="min-w-0">
+                    <p class="font-medium text-gray-800 dark:text-white/90">
+                      {{ item.label }}
+                      <span class="font-mono text-gray-400">({{ item.name }})</span>
+                    </p>
+                    <p
+                      v-if="item.path"
+                      class="mt-0.5 break-all text-[11px] text-gray-400"
+                    >
+                      {{ item.path }}
+                    </p>
+                    <p
+                      v-else-if="item.message"
+                      class="mt-0.5 text-[11px] text-gray-400"
+                    >
+                      {{ item.message }}
+                    </p>
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <span
+                      class="rounded-full px-2 py-0.5 font-medium"
+                      :class="depChipClass(item.available)"
+                    >
+                      {{ item.available ? '可用' : '缺失' }}
+                    </span>
+                    <button
+                      v-if="!item.available && item.fixable && item.packageId"
+                      type="button"
+                      class="font-medium text-brand-600 hover:underline disabled:opacity-50 dark:text-brand-400"
+                      :disabled="detailInstallingPackageId !== ''"
+                      @click="installFromDetail(item.packageId!)"
+                    >
+                      {{
+                        detailInstallingPackageId === item.packageId ? '安装中…' : '一键安装'
+                      }}
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <p
+                v-else-if="!detailPreflightLoading"
+                class="text-xs text-gray-500 dark:text-gray-400"
+              >
+                未声明依赖时将按启动命令自动推断。可在编辑中手动选择。
+              </p>
+
+              <div class="mt-3 flex flex-wrap gap-3">
+                <router-link
+                  to="/runtime"
+                  class="text-xs font-medium text-brand-600 hover:underline dark:text-brand-400"
+                >
+                  打开运行环境
+                </router-link>
+                <button
+                  type="button"
+                  class="text-xs font-medium text-gray-500 hover:text-gray-700 dark:text-gray-400"
+                  :disabled="detailPreflightLoading"
+                  @click="loadDetailPreflight"
+                >
+                  重新检测
+                </button>
+              </div>
+            </section>
+
             <section class="mt-4 rounded-xl border border-gray-200 p-4 dark:border-gray-800">
               <div class="mb-3 flex items-center justify-between gap-3">
-                <h4 class="text-sm font-semibold text-gray-800 dark:text-white/90">运行摘要</h4>
+                <h4 class="text-sm font-semibold text-gray-800 dark:text-white/90">连接摘要</h4>
                 <span
                   class="rounded-full px-2.5 py-1 text-xs"
                   :class="detailUpstream.config.enabled

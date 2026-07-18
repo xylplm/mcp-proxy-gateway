@@ -20,6 +20,8 @@ const (
 	ParamEnv = "env"
 	// ParamCWD 为 stdio 传输的工作目录，可选，需为非空字符串。
 	ParamCWD = "cwd"
+	// ParamRuntimeRequirements 为 stdio 本地运行时依赖声明，可选对象。
+	ParamRuntimeRequirements = runtime.ParamRuntimeRequirements
 	// ParamURL 为 SSE / Streamable-HTTP / WebSocket 传输的服务地址，必填。
 	ParamURL = "url"
 	// ParamHeaders 为 SSE / Streamable-HTTP / WebSocket 传输的请求头映射，可选。
@@ -115,6 +117,17 @@ func validateStdioParams(params map[string]any, fields map[string]string) {
 
 	validateOptionalStringMapParam(params, ParamEnv, fields)
 	validateOptionalStringParam(params, ParamCWD, fields)
+	validateRuntimeRequirements(params, fields)
+}
+
+func validateRuntimeRequirements(params map[string]any, fields map[string]string) {
+	raw, ok := params[ParamRuntimeRequirements]
+	if !ok || raw == nil {
+		return
+	}
+	if _, err := runtime.ValidateRequirements(raw); err != nil {
+		fields[fieldKey(ParamRuntimeRequirements)] = err.Error()
+	}
 }
 
 // validateURLParam 校验名为 url 的必填连接参数为合法 URL，且其协议位于 allowedSchemes 之内。

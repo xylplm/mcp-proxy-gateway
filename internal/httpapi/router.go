@@ -384,6 +384,8 @@ type Router struct {
 type RuntimeEnvironmentService interface {
 	Summary() rtenv.Summary
 	Catalog() []rtenv.CatalogPackage
+	KnownToolCatalog() []rtenv.KnownTool
+	Preflight(req rtenv.PreflightRequest) rtenv.PreflightResult
 	PreviewInstall(packageID string) (rtenv.CatalogPackage, error)
 	InstallPackage(ctx context.Context, packageID string) (rtenv.InstallResult, error)
 	UninstallPackage(packageID string) error

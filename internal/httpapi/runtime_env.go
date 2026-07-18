@@ -16,10 +16,19 @@ type runtimeInstallRequest struct {
 	PackageID string `json:"packageId"`
 }
 
+type runtimePreflightRequest struct {
+	Transport        string                     `json:"transport"`
+	Command          string                     `json:"command"`
+	Requirements     *rtenv.RuntimeRequirements `json:"requirements"`
+	TemplateRuntimes []string                   `json:"templateRuntimes"`
+}
+
 func (r *Router) registerRuntimeRoutes(g *gin.RouterGroup) {
 	rt := g.Group("/runtime")
 	rt.GET("/summary", r.runtimeSummary)
 	rt.GET("/catalog", r.runtimeCatalog)
+	rt.GET("/tools", r.runtimeTools)
+	rt.POST("/preflight", r.runtimePreflight)
 	rt.POST("/install/preview", r.runtimeInstallPreview)
 	rt.POST("/install", r.runtimeInstall)
 	rt.POST("/uninstall", r.runtimeUninstall)
@@ -39,6 +48,32 @@ func (r *Router) runtimeCatalog(c *gin.Context) {
 		return
 	}
 	respondOK(c, r.runtimeEnv.Catalog())
+}
+
+func (r *Router) runtimeTools(c *gin.Context) {
+	if r.runtimeEnv == nil {
+		respondServiceUnavailable(c, "运行环境服务未就绪")
+		return
+	}
+	respondOK(c, r.runtimeEnv.KnownToolCatalog())
+}
+
+func (r *Router) runtimePreflight(c *gin.Context) {
+	if r.runtimeEnv == nil {
+		respondServiceUnavailable(c, "运行环境服务未就绪")
+		return
+	}
+	var req runtimePreflightRequest
+	if !bindJSON(c, &req) {
+		return
+	}
+	result := r.runtimeEnv.Preflight(rtenv.PreflightRequest{
+		Transport:        strings.TrimSpace(req.Transport),
+		Command:          strings.TrimSpace(req.Command),
+		Requirements:     req.Requirements,
+		TemplateRuntimes: req.TemplateRuntimes,
+	})
+	respondOK(c, result)
 }
 
 func (r *Router) runtimeInstallPreview(c *gin.Context) {
@@ -83,12 +118,10 @@ func (r *Router) runtimeInstall(c *gin.Context) {
 		}))
 		return
 	}
-	// 安装可能较久：使用独立超时，不绑死请求体默认时间。
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Minute)
 	defer cancel()
 	result, err := r.runtimeEnv.InstallPackage(ctx, pkgID)
 	if err != nil {
-		// 区分校验类与通用错误
 		msg := err.Error()
 		if strings.Contains(msg, "未知") || strings.Contains(msg, "不支持") || strings.Contains(msg, "校验和") {
 			respondError(c, domain.NewValidationError(msg, map[string]string{"packageId": msg}))
@@ -125,12 +158,3 @@ func (r *Router) runtimeUninstall(c *gin.Context) {
 	r.recordUpdate(c, audit.ResourceSetting, "runtime:uninstall:"+pkgID)
 	respondOK(c, gin.H{"uninstalled": true, "packageId": pkgID})
 }
-
-// 编译期确认 Service 满足扩展接口（在 router 中定义）。
-var _ interface {
-	Summary() rtenv.Summary
-	Catalog() []rtenv.CatalogPackage
-	PreviewInstall(packageID string) (rtenv.CatalogPackage, error)
-	InstallPackage(ctx context.Context, packageID string) (rtenv.InstallResult, error)
-	UninstallPackage(packageID string) error
-} = (*rtenv.Service)(nil)

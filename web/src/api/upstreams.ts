@@ -55,11 +55,20 @@ export const CONN_STATE_LABELS: Record<ConnState, string> = {
  * - sse/streamable-http/websocket：url（必填）。
  * 允许其它任意键以兼容模板预设参数。
  */
+/** stdio 本地运行时依赖声明（与后端 runtimeRequirements 对齐）。 */
+export interface RuntimeRequirements {
+  mode: 'auto' | 'manual'
+  tools: string[]
+  note?: string
+}
+
 export interface ConnParams {
   command?: string
   args?: string[]
   env?: Record<string, string>
   cwd?: string
+  /** stdio 依赖声明：自动推断或用户手选工具。 */
+  runtimeRequirements?: RuntimeRequirements
   url?: string
   headers?: Record<string, string>
   baseUrl?: string

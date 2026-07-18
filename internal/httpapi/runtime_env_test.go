@@ -22,6 +22,12 @@ func (f *fakeRuntimeEnv) Catalog() []rtenv.CatalogPackage {
 	}
 	return nil
 }
+func (f *fakeRuntimeEnv) KnownToolCatalog() []rtenv.KnownTool { return rtenv.KnownTools() }
+func (f *fakeRuntimeEnv) Preflight(req rtenv.PreflightRequest) rtenv.PreflightResult {
+	return rtenv.EvaluatePreflight(req, rtenv.DefaultPolicy(), "/data/runtime", func(string) (string, error) {
+		return "/usr/bin/x", nil
+	})
+}
 func (f *fakeRuntimeEnv) PreviewInstall(packageID string) (rtenv.CatalogPackage, error) {
 	if packageID == "bad" {
 		return rtenv.CatalogPackage{}, fmt.Errorf("未知预置包")
@@ -94,12 +100,20 @@ func TestRuntimeInstallPreviewAndInstall(t *testing.T) {
 	}
 }
 
-func TestRuntimeCatalog(t *testing.T) {
+func TestRuntimeCatalogAndToolsAndPreflight(t *testing.T) {
 	e := newTestEngine(Deps{RuntimeEnv: &fakeRuntimeEnv{catalog: []rtenv.CatalogPackage{
 		{PackageSpec: rtenv.PackageSpec{ID: "node-22.14.0", Name: "Node.js"}, Supported: true},
 	}}})
 	w := doJSON(e, http.MethodGet, "/api/admin/runtime/catalog", "")
 	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	w = doJSON(e, http.MethodGet, "/api/admin/runtime/tools", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("tools status=%d body=%s", w.Code, w.Body.String())
+	}
+	w = doJSON(e, http.MethodPost, "/api/admin/runtime/preflight", `{"transport":"stdio","command":"npx"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("preflight status=%d body=%s", w.Code, w.Body.String())
 	}
 }

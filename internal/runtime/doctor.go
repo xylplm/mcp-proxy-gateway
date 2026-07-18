@@ -265,7 +265,11 @@ func (s *Service) InstallPackage(ctx context.Context, packageID string) (Install
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return s.installer().Install(ctx, packageID)
+	res, err := s.installer().Install(ctx, packageID)
+	if err == nil {
+		InvalidatePreflightCache()
+	}
+	return res, err
 }
 
 // UninstallPackage 卸载预置包（进程内串行）。
@@ -273,7 +277,16 @@ func (s *Service) UninstallPackage(packageID string) error {
 	if s == nil {
 		return fmtUnavailable("运行环境服务未就绪")
 	}
-	return s.installer().Uninstall(packageID)
+	err := s.installer().Uninstall(packageID)
+	if err == nil {
+		InvalidatePreflightCache()
+	}
+	return err
+}
+
+// KnownToolCatalog 返回可声明依赖工具字典。
+func (s *Service) KnownToolCatalog() []KnownTool {
+	return KnownTools()
 }
 
 // ValidateStdioCommand 供 transport 校验调用。
