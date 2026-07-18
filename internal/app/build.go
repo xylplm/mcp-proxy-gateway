@@ -20,6 +20,7 @@ import (
 	"github.com/myGithub/mcp-proxy-gateway/internal/manager"
 	"github.com/myGithub/mcp-proxy-gateway/internal/mcpapi"
 	rtenv "github.com/myGithub/mcp-proxy-gateway/internal/runtime"
+	"github.com/myGithub/mcp-proxy-gateway/internal/scripts"
 	"github.com/myGithub/mcp-proxy-gateway/internal/security"
 	"github.com/myGithub/mcp-proxy-gateway/internal/stats"
 	"github.com/myGithub/mcp-proxy-gateway/internal/store"
@@ -52,11 +53,27 @@ func (a *App) build(envCfg config.EnvConfig) error {
 		if rt.ProcessHardening != nil {
 			hardening = *rt.ProcessHardening
 		}
+		pathOnly := true
+		if rt.StrictPathOnlyRuntime != nil {
+			pathOnly = *rt.StrictPathOnlyRuntime
+		}
+		policyOnly := true
+		if rt.StrictAllowPolicyOnly != nil {
+			policyOnly = *rt.StrictAllowPolicyOnly
+		}
 		return rtenv.Policy{
 			StdioEnabled:              rt.StdioEnabled,
 			CommandAllowlist:          append([]string{}, rt.CommandAllowlist...),
 			ExtraSensitiveEnvPrefixes: append([]string{}, rt.ExtraSensitiveEnvPrefixes...),
 			ProcessHardening:          hardening,
+			DefaultStdioSecurityMode:  rtenv.StdioSecurityMode(rt.DefaultStdioSecurityMode),
+			StrictCommandAllowlist:    append([]string{}, rt.StrictCommandAllowlist...),
+			StrictPackageAllowlist:    append([]string{}, rt.StrictPackageAllowlist...),
+			GlobalFileRoots:           append([]string{}, rt.GlobalFileRoots...),
+			BrowseExtraRoots:          append([]string{}, rt.BrowseExtraRoots...),
+			StrictPathOnlyRuntime:     pathOnly,
+			StrictNetworkDefault:      rtenv.NetworkAccessMode(rt.StrictNetworkDefault),
+			StrictAllowPolicyOnly:     policyOnly,
 		}
 	}
 	transport.SetPolicyProvider(policyFromCfg)
@@ -73,6 +90,8 @@ func (a *App) build(envCfg config.EnvConfig) error {
 		func() string { return a.cfg.Env().DataDir },
 		runtimeDirFn,
 	)
+	scriptSvc := scripts.NewService(envCfg.DataDir)
+	transport.SetScriptService(scriptSvc)
 	factory := transport.NewFactory()
 	dialer := newSessionDialer(factory)
 	a.dialer = dialer
@@ -239,6 +258,7 @@ func (a *App) build(envCfg config.EnvConfig) error {
 		SystemLogs:      a.systemLogs,
 		Templates:       templateMarket,
 		RuntimeEnv:      runtimeSvc,
+		Scripts:         scriptSvc,
 	})
 
 	// --- 入站路由分面装配 ---

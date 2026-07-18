@@ -103,6 +103,8 @@ func (r *Router) importUpstreams(c *gin.Context) {
 		return
 	}
 
+	r.scriptRefMu.Lock()
+	defer r.scriptRefMu.Unlock()
 	result := upstreamImportResult{
 		Created: make([]upstreamImportResultItem, 0, len(items)),
 		Failed:  make([]upstreamImportResultItem, 0),

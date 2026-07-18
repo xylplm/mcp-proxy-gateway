@@ -474,7 +474,7 @@ func TestListUpstreamToolSummariesIncludesChangeSummary(t *testing.T) {
 			Added:         2,
 			Removed:       1,
 			SchemaChanged: 3,
-			SyncedAt:       changeAt,
+			SyncedAt:      changeAt,
 		},
 		changeOK: true,
 	}

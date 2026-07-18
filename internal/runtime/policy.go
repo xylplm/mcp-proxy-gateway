@@ -24,6 +24,23 @@ type Policy struct {
 	// ProcessHardening 为 true 时对 stdio 子进程应用平台可用的进程隔离（Linux: 进程组/父亡杀子等）。
 	// 默认 true；不影响远程传输。卷内 runtime PATH 优先解析始终开启（非策略开关）。
 	ProcessHardening bool
+	// DefaultStdioSecurityMode 为上游未声明 securityProfile.mode 时的默认档位。
+	DefaultStdioSecurityMode StdioSecurityMode
+	// StrictCommandAllowlist 为严格档与全局 allowlist 的交集候选；空则使用 DefaultStrictCommandAllowlist。
+	StrictCommandAllowlist []string
+	// StrictPackageAllowlist 为严格档允许 npx/uvx 执行的包/工具名（支持 @scope/*）；空则使用 DefaultStrictPackageAllowlist。
+	StrictPackageAllowlist []string
+	// GlobalFileRoots 为严格/声明文件策略时的全局默认允许根。
+	GlobalFileRoots []string
+	// BrowseExtraRoots 为管理台路径选择器额外可浏览根（不参与 stdio 文件策略校验）。
+	BrowseExtraRoots []string
+	// StrictPathOnlyRuntime 为 true 时严格档仅从 runtime 卷前缀解析命令（不回落系统 PATH）。
+	StrictPathOnlyRuntime bool
+	// StrictNetworkDefault 为严格档未声明网络策略时的默认（deny 或 allowlist）。
+	StrictNetworkDefault NetworkAccessMode
+	// StrictAllowPolicyOnly 为 true 时，即使无内核隔离能力也允许严格档仅策略运行（默认 false 在有强制隔离需求时可配）。
+	// Phase A 无真隔离时该标志不影响连接（策略-only 为唯一路径）；预留给 Phase C。
+	StrictAllowPolicyOnly bool
 }
 
 // DefaultCommandAllowlist 与模板市场常用 stdio 命令对齐。
@@ -62,16 +79,36 @@ func NormalizePolicy(p Policy) Policy {
 	if p.CommandAllowlist != nil {
 		p.CommandAllowlist = normalizeNameList(p.CommandAllowlist)
 	}
+	if p.StrictCommandAllowlist != nil {
+		p.StrictCommandAllowlist = normalizeNameList(p.StrictCommandAllowlist)
+	}
+	if p.StrictPackageAllowlist != nil {
+		p.StrictPackageAllowlist = normalizePackageAllowlist(p.StrictPackageAllowlist)
+	}
 	p.ExtraSensitiveEnvPrefixes = normalizePrefixList(p.ExtraSensitiveEnvPrefixes)
+	p.GlobalFileRoots = normalizePathList(p.GlobalFileRoots)
+	p.BrowseExtraRoots = normalizePathList(p.BrowseExtraRoots)
+	p.DefaultStdioSecurityMode = NormalizeSecurityMode(string(p.DefaultStdioSecurityMode), SecurityModeStandard)
+	switch p.StrictNetworkDefault {
+	case NetworkAccessDeny, NetworkAccessAllowlist:
+	default:
+		p.StrictNetworkDefault = NetworkAccessAllowlist
+	}
 	return p
 }
 
 // DefaultPolicy 返回与网关出厂配置一致的策略（stdio 启用 + 默认白名单 + 进程加固）。
 func DefaultPolicy() Policy {
 	return NormalizePolicy(Policy{
-		StdioEnabled:     true,
-		CommandAllowlist: DefaultCommandAllowlist(),
-		ProcessHardening: true,
+		StdioEnabled:             true,
+		CommandAllowlist:         DefaultCommandAllowlist(),
+		ProcessHardening:         true,
+		DefaultStdioSecurityMode: SecurityModeStandard,
+		StrictCommandAllowlist:   DefaultStrictCommandAllowlist(),
+		StrictPackageAllowlist:   DefaultStrictPackageAllowlist(),
+		StrictPathOnlyRuntime:    true,
+		StrictNetworkDefault:     NetworkAccessAllowlist,
+		StrictAllowPolicyOnly:    true, // Phase A：仅策略运行；有 bwrap 后再收紧默认
 	})
 }
 

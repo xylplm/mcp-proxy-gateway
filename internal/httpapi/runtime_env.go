@@ -2,6 +2,8 @@ package httpapi
 
 import (
 	"context"
+	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -12,6 +14,9 @@ import (
 	rtenv "github.com/myGithub/mcp-proxy-gateway/internal/runtime"
 )
 
+// 编译期确认 *rtenv.Service 满足运行环境窄接口（含路径浏览）。
+var _ RuntimeEnvironmentService = (*rtenv.Service)(nil)
+
 type runtimeInstallRequest struct {
 	PackageID string `json:"packageId"`
 }
@@ -19,7 +24,10 @@ type runtimeInstallRequest struct {
 type runtimePreflightRequest struct {
 	Transport        string                     `json:"transport"`
 	Command          string                     `json:"command"`
+	Args             []string                   `json:"args"`
+	Cwd              string                     `json:"cwd"`
 	Requirements     *rtenv.RuntimeRequirements `json:"requirements"`
+	SecurityProfile  *rtenv.SecurityProfile     `json:"securityProfile"`
 	TemplateRuntimes []string                   `json:"templateRuntimes"`
 }
 
@@ -28,6 +36,7 @@ func (r *Router) registerRuntimeRoutes(g *gin.RouterGroup) {
 	rt.GET("/summary", r.runtimeSummary)
 	rt.GET("/catalog", r.runtimeCatalog)
 	rt.GET("/tools", r.runtimeTools)
+	rt.POST("/directory/inspect", r.runtimeDirectoryInspect)
 	rt.POST("/preflight", r.runtimePreflight)
 	rt.POST("/install/preview", r.runtimeInstallPreview)
 	rt.POST("/install", r.runtimeInstall)
@@ -58,22 +67,95 @@ func (r *Router) runtimeTools(c *gin.Context) {
 	respondOK(c, r.runtimeEnv.KnownToolCatalog())
 }
 
+func (r *Router) runtimeDirectoryInspect(c *gin.Context) {
+	if r.runtimeEnv == nil {
+		respondServiceUnavailable(c, "运行环境服务未就绪")
+		return
+	}
+	var body struct {
+		Path string `json:"path"`
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 16*1024)
+	if !bindJSON(c, &body) {
+		return
+	}
+	path := strings.TrimSpace(body.Path)
+	if path == "" {
+		respondError(c, domain.NewValidationError("path 不能为空", map[string]string{"path": "必填"}))
+		return
+	}
+	// 先通过受控 fsbrowse 根校验，避免 inspect 任意主机目录。
+	stat, err := r.runtimeEnv.BrowseStat(path, nil)
+	if err != nil || !stat.Allowed || !stat.Exists || stat.Type != "dir" {
+		respondError(c, domain.NewError(domain.CodeForbidden, "目录不在允许浏览范围内或不可访问"))
+		return
+	}
+	result, err := rtenv.InspectDirectoryLaunch(stat.Path, r.runtimeEnv.Policy())
+	if err != nil {
+		respondError(c, domain.NewValidationError(err.Error(), map[string]string{"path": err.Error()}))
+		return
+	}
+	respondOK(c, result)
+}
+
 func (r *Router) runtimePreflight(c *gin.Context) {
 	if r.runtimeEnv == nil {
 		respondServiceUnavailable(c, "运行环境服务未就绪")
 		return
 	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 128*1024)
 	var req runtimePreflightRequest
 	if !bindJSON(c, &req) {
+		return
+	}
+	if err := validateRuntimePreflightRequest(req); err != nil {
+		respondError(c, domain.NewValidationError("运行环境预检参数非法", map[string]string{"preflight": err.Error()}))
 		return
 	}
 	result := r.runtimeEnv.Preflight(rtenv.PreflightRequest{
 		Transport:        strings.TrimSpace(req.Transport),
 		Command:          strings.TrimSpace(req.Command),
+		Args:             req.Args,
+		Cwd:              strings.TrimSpace(req.Cwd),
 		Requirements:     req.Requirements,
+		SecurityProfile:  req.SecurityProfile,
 		TemplateRuntimes: req.TemplateRuntimes,
 	})
 	respondOK(c, result)
+}
+
+func validateRuntimePreflightRequest(req runtimePreflightRequest) error {
+	transport := strings.ToLower(strings.TrimSpace(req.Transport))
+	if transport != "stdio" && transport != "sse" && transport != "streamable-http" && transport != "websocket" && transport != "openapi" {
+		return fmt.Errorf("transport 非法")
+	}
+	if len(req.Command) > 2048 || len(req.Cwd) > 4096 {
+		return fmt.Errorf("command 或 cwd 过长")
+	}
+	if len(req.Args) > 128 || len(req.TemplateRuntimes) > 32 {
+		return fmt.Errorf("args 或 templateRuntimes 项数过多")
+	}
+	for i, arg := range req.Args {
+		if len(arg) > 2048 || strings.ContainsRune(arg, 0) {
+			return fmt.Errorf("args[%d] 非法", i)
+		}
+	}
+	for i, tag := range req.TemplateRuntimes {
+		if len(tag) > 64 || strings.ContainsRune(tag, 0) {
+			return fmt.Errorf("templateRuntimes[%d] 非法", i)
+		}
+	}
+	if req.Requirements != nil {
+		if _, err := rtenv.ValidateRequirements(*req.Requirements); err != nil {
+			return err
+		}
+	}
+	if req.SecurityProfile != nil {
+		if _, err := rtenv.ValidateSecurityProfile(*req.SecurityProfile); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *Router) runtimeInstallPreview(c *gin.Context) {

@@ -68,6 +68,53 @@ func TestBuildChildEnvUserOverridesAndExplicitSecretsAllowed(t *testing.T) {
 	}
 }
 
+func TestBuildChildEnvStrictModeMinimalInherit(t *testing.T) {
+	t.Parallel()
+	parent := []string{
+		"PATH=/usr/bin",
+		"HOME=/home/mpg",
+		"RANDOM_APP_FLAG=1",
+		"LD_PRELOAD=/tmp/x.so",
+	}
+	user := map[string]string{
+		"LD_PRELOAD":   "/evil.so",
+		"NODE_OPTIONS": "--require ./x",
+		"MCP_TOKEN":    "ok",
+	}
+	out := BuildChildEnvWithOptions(parent, user, DefaultPolicy(), ChildEnvOptions{
+		Mode:       SecurityModeStrict,
+		RuntimeDir: "/data/runtime",
+	}, "/data/runtime/bin")
+	env := map[string]string{}
+	for _, e := range out {
+		k, v, ok := splitEnvEntry(e)
+		if ok {
+			env[k] = v
+		}
+	}
+	if env["HOME"] != "/home/mpg" {
+		t.Fatalf("HOME should inherit: %v", env["HOME"])
+	}
+	if _, ok := env["RANDOM_APP_FLAG"]; ok {
+		t.Fatalf("strict must not inherit random parent env: %v", out)
+	}
+	if _, ok := env["LD_PRELOAD"]; ok {
+		t.Fatalf("dangerous user env must be dropped: %v", out)
+	}
+	if _, ok := env["NODE_OPTIONS"]; ok {
+		t.Fatalf("NODE_OPTIONS must be dropped: %v", out)
+	}
+	if env["MCP_TOKEN"] != "ok" {
+		t.Fatalf("benign user env must remain: %v", env["MCP_TOKEN"])
+	}
+	if env["MPG_STDIO_SECURITY_MODE"] != "strict" {
+		t.Fatalf("mode signal missing: %v", env["MPG_STDIO_SECURITY_MODE"])
+	}
+	if !strings.Contains(env["PATH"], "/data/runtime/bin") {
+		t.Fatalf("runtime path prefix missing: %q", env["PATH"])
+	}
+}
+
 func TestBuildChildEnvExtraPrefix(t *testing.T) {
 	t.Parallel()
 	parent := []string{"PATH=/bin", "CORP_INTERNAL_KEY=1", "OK=1"}

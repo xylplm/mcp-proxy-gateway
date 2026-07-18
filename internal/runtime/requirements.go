@@ -1,6 +1,8 @@
 package runtime
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"sort"
 	"strings"
@@ -60,7 +62,11 @@ type PreflightAction struct {
 type PreflightRequest struct {
 	Transport    string               `json:"transport"`
 	Command      string               `json:"command"`
+	Args         []string             `json:"args,omitempty"`
+	Cwd          string               `json:"cwd,omitempty"`
 	Requirements *RuntimeRequirements `json:"requirements,omitempty"`
+	// SecurityProfile 可选，stdio 本地安全档位与子策略。
+	SecurityProfile *SecurityProfile `json:"securityProfile,omitempty"`
 	// TemplateRuntimes 可选，来自模板 RuntimeTag（node/docker/uvx/python/local）。
 	TemplateRuntimes []string `json:"templateRuntimes,omitempty"`
 }
@@ -79,6 +85,14 @@ type PreflightResult struct {
 	RuntimeDir     string              `json:"runtimeDir,omitempty"`
 	Actions        []PreflightAction   `json:"actions,omitempty"`
 	Cached         bool                `json:"cached,omitempty"`
+	// 安全档位扩展字段
+	SecurityMode  StdioSecurityMode  `json:"securityMode,omitempty"`
+	RiskLevel     string             `json:"riskLevel,omitempty"`
+	SecurityOK    bool               `json:"securityOk"`
+	SecurityError string             `json:"securityError,omitempty"`
+	Effective     *EffectiveSecurity `json:"effectiveSecurity,omitempty"`
+	FileAccessOK  bool               `json:"fileAccessOk"`
+	NetworkPolicy NetworkPolicy      `json:"networkPolicy,omitempty"`
 }
 
 // KnownTools 返回可声明/可探测的工具字典（稳定顺序）。
@@ -216,20 +230,21 @@ func ValidateRequirements(raw any) (RuntimeRequirements, error) {
 	if err != nil {
 		return RuntimeRequirements{}, err
 	}
-	req = NormalizeRequirements(req)
+	rawMode := strings.ToLower(strings.TrimSpace(string(req.Mode)))
+	if rawMode != "" && rawMode != string(RequirementsAuto) && rawMode != string(RequirementsManual) {
+		return RuntimeRequirements{}, fmt.Errorf("runtimeRequirements.mode 仅支持 auto 或 manual")
+	}
+	if len(req.Note) > 200 {
+		return RuntimeRequirements{}, fmt.Errorf("依赖备注最多 200 字符")
+	}
 	if len(req.Tools) > 16 {
 		return RuntimeRequirements{}, fmt.Errorf("依赖工具最多 16 项")
 	}
-	// 再确认无未知项被静默丢弃：若用户传入未知名则报错
-	switch m := raw.(type) {
-	case map[string]any:
-		if err := validateRawToolsField(m["tools"]); err != nil {
-			return RuntimeRequirements{}, err
-		}
-	case RuntimeRequirements:
-		// 已规范化；未知项在 normalize 中丢弃，类型路径不再重复校验。
+	// 再确认无未知项被静默丢弃：若用户传入未知名则报错。
+	if err := validateRawToolsField(req.Tools); err != nil {
+		return RuntimeRequirements{}, err
 	}
-	return req, nil
+	return NormalizeRequirements(req), nil
 }
 
 func validateRawToolsField(toolsRaw any) error {
@@ -341,6 +356,8 @@ func EvaluatePreflight(req PreflightRequest, policy Policy, runtimeDir string, l
 		Command:        command,
 		StdioEnabled:   policy.StdioEnabled,
 		CommandAllowed: true,
+		SecurityOK:     true,
+		FileAccessOK:   true,
 		RuntimeDir:     runtimeDir,
 		Requirements:   RuntimeRequirements{Mode: RequirementsAuto, Tools: []string{}},
 		Items:          []PreflightItem{},
@@ -358,9 +375,40 @@ func EvaluatePreflight(req PreflightRequest, policy Policy, runtimeDir string, l
 	}
 	result.Requirements = userReq
 
-	if err := ValidateCommand(command, policy); err != nil {
+	var profile SecurityProfile
+	if req.SecurityProfile != nil {
+		profile = NormalizeSecurityProfile(*req.SecurityProfile)
+	}
+	eff := ResolveEffectiveSecurity(policy, profile, req.Cwd)
+	result.SecurityMode = eff.Mode
+	result.RiskLevel = eff.RiskLevel
+	result.Effective = &eff
+	result.NetworkPolicy = eff.Network
+
+	if err := ValidateCommandForSecurity(command, policy, eff); err != nil {
 		result.CommandAllowed = false
 		result.CommandError = err.Error()
+	}
+	if err := ValidateIsolationRequirement(policy, eff); err != nil {
+		result.SecurityOK = false
+		result.SecurityError = err.Error()
+	}
+
+	if err := ValidateEffectiveSecurityWithCommand(eff, req.Cwd, command, req.Args); err != nil {
+		result.SecurityOK = false
+		result.SecurityError = err.Error()
+		// 区分文件类错误便于 UI
+		if strings.Contains(err.Error(), "工作目录") || strings.Contains(err.Error(), "文件允许") {
+			result.FileAccessOK = false
+		}
+	}
+
+	// 严格档：依赖声明门禁——manual 且 tools 为空时不 ready（提示用户勾选）
+	if eff.Mode == SecurityModeStrict && userReq.Mode == RequirementsManual && len(userReq.Tools) == 0 {
+		if result.SecurityOK {
+			result.SecurityOK = false
+			result.SecurityError = "严格安全模式请声明所需宿主依赖工具"
+		}
 	}
 
 	effective, suggested := ResolveEffectiveTools(command, userReq, req.TemplateRuntimes)
@@ -368,8 +416,16 @@ func EvaluatePreflight(req PreflightRequest, policy Policy, runtimeDir string, l
 	result.Requirements.Tools = effective
 
 	if lookPath == nil {
-		lookPath = func(file string) (string, error) {
-			return LookPathWithPrefixes(file, PathPrefixes(runtimeDir), nil)
+		prefixes := PathPrefixes(runtimeDir)
+		if eff.Mode == SecurityModeStrict && (eff.StrictPathOnly || policy.StrictPathOnlyRuntime) {
+			// 与真实启动复用相同的严格解析，包含真实路径/符号链接边界校验。
+			lookPath = func(file string) (string, error) {
+				return ResolveCommandStrictRuntime(file, prefixes)
+			}
+		} else {
+			lookPath = func(file string) (string, error) {
+				return LookPathWithPrefixes(file, prefixes, nil)
+			}
 		}
 	}
 
@@ -396,6 +452,9 @@ func EvaluatePreflight(req PreflightRequest, policy Policy, runtimeDir string, l
 			allAvailable = false
 			item.Available = false
 			item.Message = "未在运行时目录或 PATH 中找到"
+			if eff.Mode == SecurityModeStrict && (eff.StrictPathOnly || policy.StrictPathOnlyRuntime) {
+				item.Message = "未在运行时卷目录中找到（严格模式不使用系统 PATH）"
+			}
 			if item.Fixable {
 				missingFixable[item.PackageID] = meta.Label
 			}
@@ -403,12 +462,19 @@ func EvaluatePreflight(req PreflightRequest, policy Policy, runtimeDir string, l
 		result.Items = append(result.Items, item)
 	}
 
-	result.Ready = result.CommandAllowed && result.StdioEnabled && allAvailable
+	// 严格档缺依赖视为未就绪；标准/放行同样要求 effective 工具可用（保持原语义）
+	result.Ready = result.CommandAllowed && result.StdioEnabled && allAvailable && result.SecurityOK
 
 	if !result.StdioEnabled {
 		result.Actions = append(result.Actions, PreflightAction{
 			Type:  "open_settings",
 			Label: "在系统设置中启用本地 stdio",
+		})
+	}
+	if !result.SecurityOK {
+		result.Actions = append(result.Actions, PreflightAction{
+			Type:  "open_settings",
+			Label: "检查本地运行安全档位与文件/网络策略",
 		})
 	}
 	if len(missingFixable) > 0 {
@@ -454,15 +520,40 @@ func preflightCacheKey(req PreflightRequest, runtimeDir string, policy Policy) s
 		tools = strings.Join(req.Requirements.Tools, ",")
 		tools = string(req.Requirements.Mode) + "|" + tools
 	}
-	return strings.Join([]string{
+	sec := ""
+	if req.SecurityProfile != nil {
+		p := NormalizeSecurityProfile(*req.SecurityProfile)
+		sec = strings.Join([]string{
+			string(p.Mode),
+			string(p.FileAccess.Mode),
+			strings.Join(p.FileAccess.Paths, ","),
+			string(p.Network.Mode),
+			strings.Join(p.Network.Hosts, ","),
+			string(p.DependencyPolicy),
+			strings.Join(p.PackageAllowlist, ","),
+			fmt.Sprintf("%v", p.AllowSelfInstall),
+		}, "|")
+	}
+	raw := strings.Join([]string{
 		req.Transport,
 		req.Command,
+		strings.Join(req.Args, " "),
+		req.Cwd,
 		tools,
+		sec,
 		strings.Join(req.TemplateRuntimes, ","),
 		runtimeDir,
 		fmt.Sprintf("%v", policy.StdioEnabled),
+		string(policy.DefaultStdioSecurityMode),
 		strings.Join(policy.CommandAllowlist, ","),
+		strings.Join(policy.StrictCommandAllowlist, ","),
+		strings.Join(policy.StrictPackageAllowlist, ","),
+		strings.Join(policy.GlobalFileRoots, ","),
+		fmt.Sprintf("%v", policy.StrictPathOnlyRuntime),
+		fmt.Sprintf("%v", policy.StrictAllowPolicyOnly),
 	}, "#")
+	sum := sha256.Sum256([]byte(raw))
+	return hex.EncodeToString(sum[:])
 }
 
 // Preflight 执行依赖预检（可缓存）。
@@ -482,10 +573,8 @@ func (s *Service) Preflight(req PreflightRequest) PreflightResult {
 	}
 	preflightCacheMu.Unlock()
 
-	prefixes := PathPrefixes(runtimeDir)
-	res := EvaluatePreflight(req, policy, runtimeDir, func(file string) (string, error) {
-		return LookPathWithPrefixes(file, prefixes, nil)
-	})
+	// EvaluatePreflight 根据生效安全档位选择与真实启动一致的解析器。
+	res := EvaluatePreflight(req, policy, runtimeDir, nil)
 
 	preflightCacheMu.Lock()
 	// 简单防膨胀

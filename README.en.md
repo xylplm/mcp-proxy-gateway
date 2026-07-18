@@ -184,15 +184,23 @@ Images are published to Docker Hub: [`xylplm/mcp-proxy-gateway`](https://hub.doc
 
 | Tag | Description |
 | --- | --- |
-| `latest` | Latest release |
-| `1.0.YYYYMMDDHHmm` | Immutable Beijing-time date version for rollback and traceability |
+| `latest` / `1.0.YYYYMMDDHHmm` | **Slim (default)** — no Node/Python; install via admin Runtime or volume |
+| `full` / `1.0.YYYYMMDDHHmm-full` | **Full** — Node.js + npm + Python3 built-in for local stdio MCPs |
 
 ```bash
+# Slim (default)
 docker pull xylplm/mcp-proxy-gateway:latest
 docker pull xylplm/mcp-proxy-gateway:1.0.202606071302
+
+# Full (Node.js + Python3)
+docker pull xylplm/mcp-proxy-gateway:full
+docker pull xylplm/mcp-proxy-gateway:1.0.202606071302-full
 ```
 
-> `stdio` upstreams launch subprocesses inside the gateway runtime. The default image stays minimal (no Node / Python / uv). Prefer: (1) controlled preset install from the admin **Runtime** page (fixed official Node/uv builds with SHA256 checks); (2) place tools under **`$MPG_DATA_DIR/runtime`** (`MPG_RUNTIME_DIR` override); or (3) optional `Dockerfile.stdio` / a custom image. See [docs/runtime.md](docs/runtime.md). Remote SSE, Streamable HTTP, WebSocket and OpenAPI upstreams do not have this constraint.
+> `stdio` upstreams start local subprocesses beside the gateway:
+> - **Default `:latest` (slim)** has no Node / Python / uv. Use the admin **Runtime** controlled install, or drop tools into `$MPG_DATA_DIR/runtime`.
+> - **`:full`** ships Node.js (npm/npx) and Python3 for ready-to-use local MCPs; you can still install uv via the admin catalog.
+> See [docs/runtime.md](docs/runtime.md). Remote SSE, Streamable HTTP, WebSocket and OpenAPI do not need local toolchains.
 
 ## Service Endpoints
 
@@ -348,7 +356,8 @@ mcp-proxy-gateway/
 │   ├── transport/          # Upstream transport adapters
 │   └── xiaozhi/            # XiaoZhi AI integration
 ├── web/                    # Vue 3 admin console
-├── Dockerfile              # Alpine runtime image for CI-built binaries
+├── Dockerfile              # Slim Alpine image (default :latest)
+├── Dockerfile.full         # Full image (:full, Node + Python)
 └── .github/workflows/      # Release pipeline
 ```
 
@@ -360,7 +369,8 @@ The release workflow lives in `.github/workflows/release.yml` and is triggered m
 - `version`: generate `1.0.<YYYYMMDDHHmm>` in Beijing time.
 - `build-frontend`: write the frontend version, run `npm run build`, upload `web/dist`.
 - `build-backend`: build static `linux/amd64` and `linux/arm64` binaries with embedded frontend assets.
-- `docker`: package the binaries with the Alpine Dockerfile and push a multi-arch image.
+- `docker`: slim multi-arch image (`:latest` / `:<version>`).
+- `docker-full`: full multi-arch image (`:full` / `:<version>-full` with Node/Python).
 - `release`: create the `v<version>` Git tag and GitHub Release.
 
 Required repository secrets:

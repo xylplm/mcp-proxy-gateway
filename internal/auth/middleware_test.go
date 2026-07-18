@@ -10,7 +10,6 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/config"
-	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
 )
 
 func init() {
@@ -52,14 +51,19 @@ func newTestService(t *testing.T, sessionTimeoutS int, clock func() time.Time) *
 	return svc
 }
 
-// decodeAPIError 将响应体解析为 domain.APIError 以断言统一错误模型。
-func decodeAPIError(t *testing.T, body []byte) domain.APIError {
+type authErrorEnvelope struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+	Data    any    `json:"data"`
+}
+
+func decodeAuthError(t *testing.T, body []byte) authErrorEnvelope {
 	t.Helper()
-	var apiErr domain.APIError
-	if err := json.Unmarshal(body, &apiErr); err != nil {
-		t.Fatalf("响应体应为 APIError JSON，解析失败：%v，原始：%s", err, string(body))
+	var envelope authErrorEnvelope
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		t.Fatalf("响应体应为统一信封，解析失败：%v，原始：%s", err, string(body))
 	}
-	return apiErr
+	return envelope
 }
 
 // TestRequireAdminAllowsValidToken 验证携带有效令牌的请求被放行且 Claims 注入上下文（Req 1.6）。
@@ -102,9 +106,9 @@ func TestRequireAdminRejectsMissingHeader(t *testing.T) {
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("缺失令牌应返回 401，实际 %d", rec.Code)
 	}
-	apiErr := decodeAPIError(t, rec.Body.Bytes())
-	if apiErr.Code != domain.CodeUnauthorized {
-		t.Errorf("期望错误码 %q，实际 %q", domain.CodeUnauthorized, apiErr.Code)
+	envelope := decodeAuthError(t, rec.Body.Bytes())
+	if envelope.Code != 40100 || envelope.Data != nil {
+		t.Errorf("期望数字错误码 40100 且 data=null，实际 %+v", envelope)
 	}
 }
 
@@ -139,9 +143,9 @@ func TestRequireAdminRejectsMalformedHeader(t *testing.T) {
 			if rec.Code != http.StatusUnauthorized {
 				t.Fatalf("格式不符应返回 401，实际 %d", rec.Code)
 			}
-			apiErr := decodeAPIError(t, rec.Body.Bytes())
-			if apiErr.Code != domain.CodeUnauthorized {
-				t.Errorf("期望错误码 %q，实际 %q", domain.CodeUnauthorized, apiErr.Code)
+			envelope := decodeAuthError(t, rec.Body.Bytes())
+			if envelope.Code != 40100 || envelope.Data != nil {
+				t.Errorf("期望数字错误码 40100 且 data=null，实际 %+v", envelope)
 			}
 		})
 	}
@@ -188,9 +192,9 @@ func TestRequireAdminRejectsInvalidSignature(t *testing.T) {
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("签名不符应返回 401，实际 %d", rec.Code)
 	}
-	apiErr := decodeAPIError(t, rec.Body.Bytes())
-	if apiErr.Code != domain.CodeUnauthorized {
-		t.Errorf("期望错误码 %q，实际 %q", domain.CodeUnauthorized, apiErr.Code)
+	envelope := decodeAuthError(t, rec.Body.Bytes())
+	if envelope.Code != 40100 || envelope.Data != nil {
+		t.Errorf("期望数字错误码 40100 且 data=null，实际 %+v", envelope)
 	}
 }
 
@@ -216,9 +220,9 @@ func TestRequireAdminRejectsExpiredToken(t *testing.T) {
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("过期令牌应返回 401，实际 %d", rec.Code)
 	}
-	apiErr := decodeAPIError(t, rec.Body.Bytes())
-	if apiErr.Code != domain.CodeUnauthorized {
-		t.Errorf("期望错误码 %q，实际 %q", domain.CodeUnauthorized, apiErr.Code)
+	envelope := decodeAuthError(t, rec.Body.Bytes())
+	if envelope.Code != 40100 || envelope.Data != nil {
+		t.Errorf("期望数字错误码 40100 且 data=null，实际 %+v", envelope)
 	}
 }
 

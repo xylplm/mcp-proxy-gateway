@@ -27,7 +27,11 @@ if [ ! -f "${README_FILE}" ]; then
 MCP Proxy Gateway — 本地运行时目录
 
 将 Node / Python / uv 等可执行文件放入本目录后，stdio 上游即可被探测与启动。
-默认镜像不含这些工具；本目录位于数据卷内，容器更新不会丢失。
+本目录位于数据卷内，容器更新不会丢失。
+
+镜像说明：
+  默认 slim（:latest）不含系统 Node/Python，请用管理台预置安装或本目录放入工具。
+  完整版 full（:full）已内置 Node/npm 与 Python3，仍可用本目录覆盖或补充 uv 等。
 
 推荐布局：
   bin/           直接放置 node、npx、uv、uvx 等（优先加入 PATH）

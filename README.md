@@ -184,19 +184,23 @@ docker run -d --name mcp-proxy-gateway \
 
 | 标签 | 说明 |
 | --- | --- |
-| `latest` | 最新发布版本 |
-| `1.0.YYYYMMDDHHmm` | 不可变日期版本号，按北京时间生成，便于回滚与追溯 |
+| `latest` / `1.0.YYYYMMDDHHmm` | **精简（默认）**：无 Node/Python；可用管理台预置安装或数据卷放入工具 |
+| `full` / `1.0.YYYYMMDDHHmm-full` | **完整**：内置 Node.js + npm + Python3，本地 stdio 开箱即用 |
 
 ```bash
+# 精简版（默认，体积小；远程 MCP / 自行装运行时）
 docker pull xylplm/mcp-proxy-gateway:latest
 docker pull xylplm/mcp-proxy-gateway:1.0.202606071302
+
+# 完整版（内置 Node.js + Python3，本地 stdio 开箱即用）
+docker pull xylplm/mcp-proxy-gateway:full
+docker pull xylplm/mcp-proxy-gateway:1.0.202606071302-full
 ```
 
-> `stdio` 上游需要在网关运行环境中启动子进程。默认镜像刻意保持极简（不含 Node / Python / uv）。推荐：
-> 1）管理台「运行环境」使用**受控预置安装**（仅官方 Node / uv 固定版本，SHA256 校验）；或
-> 2）将工具放入数据卷 **`$MPG_DATA_DIR/runtime`**（`MPG_RUNTIME_DIR` 可覆盖）；或
-> 3）使用可选 `Dockerfile.stdio` / 自定义镜像。
-> 详见 [docs/runtime.md](docs/runtime.md)。远程 SSE、Streamable HTTP、WebSocket 与 OpenAPI 上游不受此限制。
+> `stdio` 上游会在网关进程旁启动本地子进程：
+> - **默认 `:latest` 精简镜像**不含 Node / Python / uv。可在管理台「运行环境」**预置安装**，或放入数据卷 `$MPG_DATA_DIR/runtime`。
+> - **`:full` 完整镜像**已内置 Node.js（含 npm/npx）与 Python3，适合模板与本地 MCP 拿来即用；仍可用预置安装补充 uv 等。
+> 详见 [docs/runtime.md](docs/runtime.md)。远程 SSE、Streamable HTTP、WebSocket 与 OpenAPI 上游不依赖本地工具。
 
 ## 服务入口
 
@@ -352,7 +356,8 @@ mcp-proxy-gateway/
 │   ├── transport/          # 上游传输适配
 │   └── xiaozhi/            # 小智 AI 接入
 ├── web/                    # Vue 3 管理台
-├── Dockerfile              # Alpine 运行镜像，复制 CI 预编译二进制
+├── Dockerfile              # 精简 Alpine 镜像（默认 :latest）
+├── Dockerfile.full         # 完整镜像（:full，内置 Node/Python）
 └── .github/workflows/      # 发布流水线
 ```
 
@@ -364,7 +369,8 @@ mcp-proxy-gateway/
 - `version`：按北京时间生成 `1.0.<YYYYMMDDHHmm>` 版本号。
 - `build-frontend`：写入前端版本号，执行 `npm run build`，上传 `web/dist`。
 - `build-backend`：矩阵编译 `linux/amd64` 与 `linux/arm64` 静态二进制，并内嵌前端产物。
-- `docker`：使用极简 Alpine Dockerfile 构建并推送多架构镜像。
+- `docker`：精简多架构镜像（`:latest` / `:<version>`）。
+- `docker-full`：完整多架构镜像（`:full` / `:<version>-full`，内置 Node/Python）。
 - `release`：创建 `v<version>` Git tag 与 GitHub Release。
 
 仓库需要配置以下 Secrets：

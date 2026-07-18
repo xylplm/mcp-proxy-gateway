@@ -3,13 +3,16 @@ package transport
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
 	"github.com/myGithub/mcp-proxy-gateway/internal/runtime"
+	"github.com/myGithub/mcp-proxy-gateway/internal/scripts"
 )
 
 // 本文件（任务 8.3）实现 stdio 传输会话：以子进程方式启动上游 MCP，
@@ -49,54 +52,135 @@ func (s *stdioSession) Connect(ctx context.Context) error {
 		// 子进程生命周期应等同于会话生命周期，由 CommandTransport 在 Close 时关闭 stdin 优雅终止
 		//（必要时 SIGTERM/SIGKILL）。
 		policy := currentPolicy()
-		if err := runtime.ValidateCommand(s.params.command, policy); err != nil {
-			return nil, err
-		}
-		pathPrefixes := currentPathPrefixes()
-		command := s.params.command
-		if resolved, err := runtime.ResolveCommandWithPrefixes(command, pathPrefixes); err == nil {
-			command = resolved
-			// 解析后的绝对路径再按基名校验，防止 PATH 劫持绕过 allowlist。
-			if err := runtime.ValidateCommand(command, policy); err != nil {
+		profile := runtime.SecurityProfile{}
+		if raw, ok := s.cfg.ConnParams[ParamSecurityProfile]; ok && raw != nil {
+			// fail-closed：与保存路径一致，非法/损坏 profile 不得静默回落默认档。
+			p, err := runtime.ValidateSecurityProfile(raw)
+			if err != nil {
 				return nil, err
 			}
-		} else {
-			// LookPath 失败：返回可读错误（仍让 exec 失败路径一致地进入连接错误分类）。
+			profile = p
+		}
+		cwd := s.params.cwd
+		if cwd != "" {
+			cwd = resolveCredentialPlaceholders(cwd, s.credential)
+		}
+		args := resolveStringSliceCredentials(s.params.args, s.credential)
+		command := s.params.command
+		scriptRisk := scripts.RiskLevel("")
+		var scriptBinding scripts.LaunchBinding
+		if managedCommand, managedArgs, managedCWD, risk, binding, isScript, err := resolveManagedScript(s.cfg.ConnParams); isScript {
+			if err != nil {
+				return nil, err
+			}
+			command = managedCommand
+			args = managedArgs
+			cwd = managedCWD
+			scriptRisk = risk
+			scriptBinding = binding
+		} else if dirCommand, dirArgs, dirCWD, isDirectory, err := resolveDirectoryLaunch(s.cfg.ConnParams, policy, profile.FileAccess.Paths); isDirectory {
+			if err != nil {
+				return nil, err
+			}
+			command = dirCommand
+			args = dirArgs
+			cwd = dirCWD
+		}
+		eff := runtime.ResolveEffectiveSecurity(policy, profile, cwd)
+		if err := runtime.ValidateIsolationRequirement(policy, eff); err != nil {
+			return nil, err
+		}
+		if scriptRisk == scripts.RiskCritical && eff.Mode != runtime.SecurityModeUnrestricted {
+			return nil, fmt.Errorf("极高风险脚本必须使用完全放行档位并明确确认风险")
+		}
+		if err := runtime.ValidateCommandForSecurity(command, policy, eff); err != nil {
+			return nil, err
+		}
+		if err := runtime.ValidateEffectiveSecurityWithCommand(eff, cwd, command, args); err != nil {
 			return nil, err
 		}
 
-		userEnv := resolveStringMapCredentials(s.params.env, s.credential)
-		cmd := exec.Command(command, resolveStringSliceCredentials(s.params.args, s.credential)...)
-		if s.params.cwd != "" {
-			cmd.Dir = resolveCredentialPlaceholders(s.params.cwd, s.credential)
+		pathPrefixes := currentPathPrefixes()
+		// 严格档仅 runtime 卷解析：不回落系统 PATH。
+		var resolveErr error
+		if eff.Mode == runtime.SecurityModeStrict && eff.StrictPathOnly {
+			command, resolveErr = runtime.ResolveCommandStrictRuntime(command, pathPrefixes)
+		} else {
+			command, resolveErr = runtime.ResolveCommandWithPrefixes(command, pathPrefixes)
 		}
-		// 始终显式设置 Env：剥离敏感父进程变量，并前置卷内 runtime PATH。
-		cmd.Env = runtime.BuildChildEnv(os.Environ(), userEnv, policy, pathPrefixes...)
-		// 进程级加固（Linux: 进程组 + Pdeathsig；其他平台 no-op）。
-		runtime.ApplySandbox(cmd, runtime.SandboxOptions{Enabled: policy.ProcessHardening})
-		transport := &mcp.CommandTransport{Command: cmd}
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		// 解析后的绝对路径再按基名校验，防止 PATH 劫持绕过 allowlist。
+		if err := runtime.ValidateCommandForSecurity(command, policy, eff); err != nil {
+			return nil, err
+		}
+
+		var verifiedScript *verifiedScriptLaunch
+		if scriptBinding.ScriptID != "" {
+			prepared, prepErr := prepareVerifiedScript(scriptBinding.EntryPath, scriptBinding.ContentSHA256)
+			if prepErr != nil {
+				return nil, prepErr
+			}
+			verifiedScript = prepared
+			args = []string{verifiedScript.Path}
+		}
+
+		userEnv := resolveStringMapCredentials(s.params.env, s.credential)
+		cmd := exec.Command(command, args...)
+		if verifiedScript != nil {
+			cmd.ExtraFiles = verifiedScript.ExtraFiles
+		}
+		if cwd != "" {
+			cmd.Dir = cwd
+		}
+		// 始终显式设置 Env：剥离敏感父进程变量，并按档位收紧/前置卷内 runtime PATH。
+		cmd.Env = runtime.BuildChildEnvWithOptions(os.Environ(), userEnv, policy, runtime.ChildEnvOptions{
+			Mode:         eff.Mode,
+			RuntimeDir:   currentRuntimeDir(),
+			FileRoots:    eff.FileAccess.Paths,
+			NetworkMode:  eff.Network.Mode,
+			NetworkHosts: eff.Network.Hosts,
+		}, pathPrefixes...)
+		// 进程级加固（Linux: 进程组 + Pdeathsig；其他平台 no-op）。严格档强制启用。
+		hardening := eff.ProcessHardening
+		runtime.ApplySandbox(cmd, runtime.SandboxOptions{
+			Enabled:      hardening,
+			SecurityMode: eff.Mode,
+			FileRoots:    eff.FileAccess.Paths,
+			NetworkMode:  eff.Network.Mode,
+		})
+		transport := &mcp.CommandTransport{
+			Command:           cmd,
+			TerminateDuration: time.Second,
+		}
 		conn, err := connectWithTimeout(dialCtx, transport)
 		if err != nil {
-			// 连接失败时尽力清理可能已启动的子进程树。
-			if policy.ProcessHardening {
+			// 仅发送进程组终止信号；SDK 的异步超时清理唯一负责 cmd.Wait。
+			if hardening {
 				runtime.TerminateProcessTree(cmd)
+			}
+			if verifiedScript != nil {
+				verifiedScript.close()
 			}
 			return nil, err
 		}
-		// 包装 close：SDK 关闭后按进程组清理孙进程，避免 npx/uvx 残留。
+		// 包装 close：SDK 关闭后按进程组清理孙进程，并释放脚本 FD/快照。
 		return &stdioClientConn{
-			inner:     conn,
-			cmd:       cmd,
-			hardening: policy.ProcessHardening,
+			inner:          conn,
+			cmd:            cmd,
+			hardening:      hardening,
+			verifiedScript: verifiedScript,
 		}, nil
 	})
 }
 
 // stdioClientConn 装饰 mcpClientConn，在 close 时清理进程树。
 type stdioClientConn struct {
-	inner     mcpClientConn
-	cmd       *exec.Cmd
-	hardening bool
+	inner          mcpClientConn
+	cmd            *exec.Cmd
+	hardening      bool
+	verifiedScript *verifiedScriptLaunch
 }
 
 func (c *stdioClientConn) listTools(ctx context.Context) ([]domain.ToolDef, error) {
@@ -114,6 +198,9 @@ func (c *stdioClientConn) close() error {
 	}
 	if c.hardening {
 		runtime.TerminateProcessTree(c.cmd)
+	}
+	if c.verifiedScript != nil {
+		c.verifiedScript.close()
 	}
 	return err
 }

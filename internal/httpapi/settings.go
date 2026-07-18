@@ -1,11 +1,14 @@
 package httpapi
 
 import (
+	"net/http"
+
 	"github.com/gin-gonic/gin"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/audit"
 	"github.com/myGithub/mcp-proxy-gateway/internal/config"
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
+	rtenv "github.com/myGithub/mcp-proxy-gateway/internal/runtime"
 )
 
 // 本文件实现系统设置读写端点（Req 7.3、18.4、17.5）：
@@ -65,6 +68,7 @@ func (r *Router) updateSettings(c *gin.Context) {
 		return
 	}
 	restartRequested := c.Query("restart") == "true"
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 2*1024*1024)
 	var req config.YAMLConfig
 	if !bindJSON(c, &req) {
 		return
@@ -88,10 +92,20 @@ func (r *Router) updateSettings(c *gin.Context) {
 	}
 	if r.settingsRuntime != nil {
 		if err := r.settingsRuntime.ApplySettings(req); err != nil {
+			// 保存与运行态应用必须呈现一致结果；失败时尽力恢复旧快照和旧运行态。
+			rollbackSaveErr := r.settings.Save(current)
+			rollbackApplyErr := r.settingsRuntime.ApplySettings(current)
+			rtenv.InvalidatePreflightCache()
+			if rollbackSaveErr != nil || rollbackApplyErr != nil {
+				respondError(c, domain.NewError(domain.CodeInternal, "系统设置应用失败且回滚未完整完成，请检查服务日志"))
+				return
+			}
 			respondError(c, err)
 			return
 		}
 	}
+	// 运行策略（stdio 档位/白名单等）热更新后丢弃预检缓存，避免 15s 内展示旧结论。
+	rtenv.InvalidatePreflightCache()
 
 	saved := r.settings.Config()
 	r.recordUpdate(c, audit.ResourceSetting, "settings")

@@ -1,6 +1,10 @@
 package config
 
-import "github.com/myGithub/mcp-proxy-gateway/internal/domain"
+import (
+	"strings"
+
+	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
+)
 
 // YAMLConfig 表示存放在 data 目录下 YAML 文件中的常规配置（Req 18.2、23.1）。
 //
@@ -48,6 +52,22 @@ type RuntimeConfig struct {
 	// ProcessHardening 为 true 时对 stdio 子进程应用平台可用的进程隔离（默认 true）。
 	// 使用指针以区分「缺省」与显式 false；Normalize 时缺省回填 true。
 	ProcessHardening *bool `yaml:"process_hardening" json:"process_hardening"`
+	// DefaultStdioSecurityMode 为上游未声明档位时的默认：standard | strict | unrestricted。
+	DefaultStdioSecurityMode string `yaml:"default_stdio_security_mode" json:"default_stdio_security_mode"`
+	// StrictCommandAllowlist 为严格档命令子集（与 CommandAllowlist 取交集）；空则内置默认。
+	StrictCommandAllowlist []string `yaml:"strict_command_allowlist" json:"strict_command_allowlist"`
+	// StrictPackageAllowlist 为严格档允许 npx/uvx 执行的包/工具名；支持 @scope/*；空则内置默认。
+	StrictPackageAllowlist []string `yaml:"strict_package_allowlist" json:"strict_package_allowlist"`
+	// GlobalFileRoots 为文件允许路径的全局默认根。
+	GlobalFileRoots []string `yaml:"global_file_roots" json:"global_file_roots"`
+	// BrowseExtraRoots 为管理台路径选择器额外可浏览根（仅扩大浏览范围，不改变 stdio 安全策略）。
+	BrowseExtraRoots []string `yaml:"browse_extra_roots" json:"browse_extra_roots"`
+	// StrictPathOnlyRuntime 严格档是否仅从 runtime 卷解析命令。
+	StrictPathOnlyRuntime *bool `yaml:"strict_path_only_runtime" json:"strict_path_only_runtime"`
+	// StrictNetworkDefault 严格档默认网络策略：allowlist | deny。
+	StrictNetworkDefault string `yaml:"strict_network_default" json:"strict_network_default"`
+	// StrictAllowPolicyOnly 无内核隔离时是否允许严格档仅策略运行。
+	StrictAllowPolicyOnly *bool `yaml:"strict_allow_policy_only" json:"strict_allow_policy_only"`
 }
 
 // ServerConfig 为 HTTP 服务监听配置。
@@ -240,6 +260,8 @@ func defaultSecurityConfig() SecurityConfig {
 
 func defaultRuntimeConfig() RuntimeConfig {
 	hardening := true
+	pathOnly := true
+	policyOnly := true
 	return RuntimeConfig{
 		StdioEnabled: true,
 		// 与模板市场常用命令对齐；空列表在 Normalize 时也会回填。
@@ -248,6 +270,23 @@ func defaultRuntimeConfig() RuntimeConfig {
 		},
 		ExtraSensitiveEnvPrefixes: []string{},
 		ProcessHardening:          &hardening,
+		DefaultStdioSecurityMode:  "standard",
+		StrictCommandAllowlist: []string{
+			"node", "npx", "python", "python3", "uv", "uvx",
+		},
+		// 与内置模板常用 npx 包对齐；支持 @scope/*。
+		StrictPackageAllowlist: []string{
+			"@modelcontextprotocol/*",
+			"@playwright/mcp",
+			"@notionhq/notion-mcp-server",
+			"firecrawl-mcp",
+			"exa-mcp-server",
+		},
+		GlobalFileRoots:       []string{},
+		BrowseExtraRoots:      []string{},
+		StrictPathOnlyRuntime: &pathOnly,
+		StrictNetworkDefault:  "allowlist",
+		StrictAllowPolicyOnly: &policyOnly,
 	}
 }
 
@@ -367,6 +406,42 @@ func NormalizeYAMLConfig(cfg YAMLConfig) YAMLConfig {
 	if cfg.Runtime.ProcessHardening == nil {
 		v := true
 		cfg.Runtime.ProcessHardening = &v
+	}
+	switch strings.ToLower(strings.TrimSpace(cfg.Runtime.DefaultStdioSecurityMode)) {
+	case "standard", "strict", "unrestricted":
+		cfg.Runtime.DefaultStdioSecurityMode = strings.ToLower(strings.TrimSpace(cfg.Runtime.DefaultStdioSecurityMode))
+	default:
+		cfg.Runtime.DefaultStdioSecurityMode = defRuntime.DefaultStdioSecurityMode
+	}
+	if cfg.Runtime.StrictCommandAllowlist == nil {
+		cfg.Runtime.StrictCommandAllowlist = append([]string{}, defRuntime.StrictCommandAllowlist...)
+	} else if len(cfg.Runtime.StrictCommandAllowlist) == 0 {
+		cfg.Runtime.StrictCommandAllowlist = append([]string{}, defRuntime.StrictCommandAllowlist...)
+	}
+	if cfg.Runtime.StrictPackageAllowlist == nil {
+		cfg.Runtime.StrictPackageAllowlist = append([]string{}, defRuntime.StrictPackageAllowlist...)
+	} else if len(cfg.Runtime.StrictPackageAllowlist) == 0 {
+		cfg.Runtime.StrictPackageAllowlist = append([]string{}, defRuntime.StrictPackageAllowlist...)
+	}
+	if cfg.Runtime.GlobalFileRoots == nil {
+		cfg.Runtime.GlobalFileRoots = []string{}
+	}
+	if cfg.Runtime.BrowseExtraRoots == nil {
+		cfg.Runtime.BrowseExtraRoots = []string{}
+	}
+	if cfg.Runtime.StrictPathOnlyRuntime == nil {
+		v := true
+		cfg.Runtime.StrictPathOnlyRuntime = &v
+	}
+	switch strings.ToLower(strings.TrimSpace(cfg.Runtime.StrictNetworkDefault)) {
+	case "deny", "allowlist":
+		cfg.Runtime.StrictNetworkDefault = strings.ToLower(strings.TrimSpace(cfg.Runtime.StrictNetworkDefault))
+	default:
+		cfg.Runtime.StrictNetworkDefault = defRuntime.StrictNetworkDefault
+	}
+	if cfg.Runtime.StrictAllowPolicyOnly == nil {
+		v := true
+		cfg.Runtime.StrictAllowPolicyOnly = &v
 	}
 	return cfg
 }

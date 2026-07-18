@@ -15,12 +15,25 @@ import {
   getRuntimeKnownTools,
   installRuntimePackage,
   preflightRuntime,
+  inspectRuntimeDirectory,
+  type DirectoryLaunchEntry,
   type RuntimeKnownTool,
   type RuntimePreflightResult,
 } from '@/api/runtime'
 import { emptyRateLimits, type UpstreamRateLimits } from '@/api/rateLimits'
 import type { PrefillForm, Placeholder } from '@/api/templates'
 import { ApiError } from '@/api/request'
+import {
+  buildScriptLaunch,
+  listScripts,
+  type ScriptItem,
+  type ScriptLaunchBinding,
+} from '@/api/scripts'
+import {
+  languageLabel as scriptLanguageLabel,
+  riskBadgeClass as scriptRiskBadgeClass,
+  riskLabel as scriptRiskLabel,
+} from '@/utils/scripts'
 import {
   CheckIcon,
   ChevronDownIcon,
@@ -35,12 +48,25 @@ import { normalizeTags } from '@/utils/upstreamTags'
 import {
   inferToolsFromCommand,
   normalizeRequirements,
-  preflightReadyLabel,
-  preflightTone,
   type RequirementsMode,
 } from '@/utils/runtimeRequirements'
+import {
+  STDIO_SECURITY_MODES,
+  buildSecurityProfilePayload,
+  normalizeSecurityMode,
+  normalizeSecurityProfile,
+  preflightReadyLabelEx,
+  preflightToneEx,
+  securityModeBadgeClass,
+  securityModeCardClass,
+  securityRiskLabel,
+  type NetworkAccessMode,
+  type StdioSecurityMode,
+} from '@/utils/stdioSecurity'
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
+import PathField from '@/components/common/PathField.vue'
+import { splitPathLines } from '@/utils/pathPicker'
 
 const props = defineProps<{
   open: boolean
@@ -61,6 +87,7 @@ const emit = defineEmits<{
 
 type RemoteAuthMode = 'none' | 'bearer' | 'api-key' | 'custom'
 type StdioAuthMode = 'none' | 'env' | 'custom'
+type StdioLaunchMode = 'command' | 'script' | 'directory'
 type OpenAPIAuthMode =
   | 'none'
   | 'bearer'
@@ -129,9 +156,7 @@ const openAPIAuthOptions: ReadonlyArray<{ value: OpenAPIAuthMode; label: string;
 
 const isEdit = computed(() => props.upstream !== null)
 const fromClone = computed(() => !isEdit.value && props.cloneSource != null)
-const fromTemplate = computed(
-  () => props.prefill !== null && !isEdit.value && !fromClone.value,
-)
+const fromTemplate = computed(() => props.prefill !== null && !isEdit.value && !fromClone.value)
 const currentTransport = computed(() => transportHelp[form.transport])
 const isRemoteTransport = computed(() => form.transport !== 'stdio')
 const isOpenAPITransport = computed(() => form.transport === 'openapi')
@@ -159,6 +184,11 @@ const form = reactive<{
   tagDraft: string
   tags: string[]
   transport: TransportType
+  launchMode: StdioLaunchMode
+  scriptId: string
+  scriptVersion: string
+  directoryRoot: string
+  directoryEntryId: string
   command: string
   args: string
   url: string
@@ -191,11 +221,24 @@ const form = reactive<{
   reqMode: RequirementsMode
   reqTools: string[]
   reqNote: string
+  securityMode: StdioSecurityMode
+  filePathsText: string
+  networkMode: NetworkAccessMode
+  networkHostsText: string
+  packageAllowlistText: string
+  allowSelfInstall: boolean
+  securityNote: string
+  unrestrictedAck: boolean
 }>({
   name: '',
   tagDraft: '',
   tags: [],
   transport: 'stdio',
+  launchMode: 'command',
+  scriptId: '',
+  scriptVersion: '',
+  directoryRoot: '',
+  directoryEntryId: '',
   command: '',
   args: '',
   url: '',
@@ -228,6 +271,14 @@ const form = reactive<{
   reqMode: 'auto',
   reqTools: [],
   reqNote: '',
+  securityMode: 'standard',
+  filePathsText: '',
+  networkMode: 'inherit',
+  networkHostsText: '',
+  packageAllowlistText: '',
+  allowSelfInstall: true,
+  securityNote: '',
+  unrestrictedAck: false,
 })
 
 const toast = useToast()
@@ -243,6 +294,16 @@ const fieldErrors = reactive<Record<string, string>>({})
 const formError = ref('')
 const testDiagnostic = computed(() => upstreamTestDiagnostic(testResult.value, form.transport))
 const knownTools = ref<RuntimeKnownTool[]>([])
+const managedScripts = ref<ScriptItem[]>([])
+const scriptsLoading = ref(false)
+const scriptBindingLoading = ref(false)
+const scriptBindingCache = ref<ScriptLaunchBinding | null>(null)
+let scriptBindingSeq = 0
+let scriptsListSeq = 0
+const directoryInspectLoading = ref(false)
+let directoryInspectSeq = 0
+const directoryEntries = ref<DirectoryLaunchEntry[]>([])
+const directoryWarnings = ref<string[]>([])
 const preflight = ref<RuntimePreflightResult | null>(null)
 const preflightLoading = ref(false)
 const installingPackageId = ref('')
@@ -250,24 +311,36 @@ let preflightTimer: ReturnType<typeof setTimeout> | null = null
 let preflightSeq = 0
 
 const showRuntimeDeps = computed(() => form.transport === 'stdio')
+const securityModes = STDIO_SECURITY_MODES
 const preflightBanner = computed(() => {
   if (form.transport !== 'stdio') return null
   if (preflight.value === null) return null
-  const tone = preflightTone(
-    preflight.value.ready,
-    preflight.value.stdioEnabled,
-    preflight.value.commandAllowed,
-  )
+  const p = preflight.value
+  const tone = preflightToneEx(p.ready, p.stdioEnabled, p.commandAllowed, p.securityOk, p.riskLevel)
   return {
     tone,
-    label: preflightReadyLabel(
-      preflight.value.ready,
-      preflight.value.stdioEnabled,
-      preflight.value.commandAllowed,
+    label: preflightReadyLabelEx(
+      p.ready,
+      p.stdioEnabled,
+      p.commandAllowed,
+      p.securityOk,
+      p.securityError,
     ),
+    risk: securityRiskLabel(p.riskLevel),
+    mode: p.securityMode || form.securityMode,
   }
 })
 const suggestedFromCommand = computed(() => inferToolsFromCommand(stdioCommandForPreflight()))
+const isUnrestrictedMode = computed(() => form.securityMode === 'unrestricted')
+const isStrictMode = computed(() => form.securityMode === 'strict')
+
+/** 路径选择器额外上下文：当前 cwd 与文件允许路径，便于在表单相关目录内浏览。 */
+const pathPickerContextRoots = computed(() => {
+  const roots = [...splitPathLines(form.filePathsText)]
+  const cwd = form.cwd.trim()
+  if (cwd !== '') roots.unshift(cwd)
+  return roots
+})
 
 const normalizedTagOptions = computed(() => normalizeTags(props.tagOptions ?? []))
 const formTags = computed(() => normalizeTags([...form.tags, ...parseTags(form.tagDraft)]))
@@ -335,9 +408,25 @@ function removeTag(tag: string): void {
 }
 
 function resetManualFields(): void {
+  form.launchMode = 'command'
+  form.scriptId = ''
+  form.scriptVersion = ''
+  scriptBindingCache.value = null
+  form.directoryRoot = ''
+  form.directoryEntryId = ''
+  directoryEntries.value = []
+  directoryWarnings.value = []
   form.reqMode = 'auto'
   form.reqTools = []
   form.reqNote = ''
+  form.securityMode = 'standard'
+  form.filePathsText = ''
+  form.networkMode = 'inherit'
+  form.networkHostsText = ''
+  form.packageAllowlistText = ''
+  form.allowSelfInstall = true
+  form.securityNote = ''
+  form.unrestrictedAck = false
   preflight.value = null
   form.command = ''
   form.args = ''
@@ -495,6 +584,9 @@ function customParamsFrom(params: ConnParams): string {
   for (const [key, value] of Object.entries(params)) {
     if (
       ![
+        'launchMode',
+        'scriptRef',
+        'directoryRef',
         'command',
         'args',
         'url',
@@ -508,6 +600,7 @@ function customParamsFrom(params: ConnParams): string {
         'authName',
         'authValue',
         'runtimeRequirements',
+        'securityProfile',
       ].includes(key)
     )
       custom[key] = value
@@ -527,6 +620,48 @@ function buildRuntimeRequirementsPayload(): NonNullable<ConnParams['runtimeRequi
     tools: [...tools],
     ...(form.reqNote.trim() !== '' ? { note: form.reqNote.trim() } : {}),
   }
+}
+
+function buildSecurityProfileForSave(): NonNullable<ConnParams['securityProfile']> {
+  // 完全放行：勾选确认后若备注为空，自动写入短备注，满足后端 note 门禁；
+  // 表单仍要求用户勾选；优先使用用户填写的 note。
+  let note = form.securityNote
+  if (form.securityMode === 'unrestricted' && form.unrestrictedAck && note.trim() === '') {
+    note = '管理员已确认完全放行风险'
+  }
+  return buildSecurityProfilePayload({
+    mode: form.securityMode,
+    filePathsText: form.filePathsText,
+    networkMode: form.networkMode,
+    networkHostsText: form.networkHostsText,
+    packageAllowlistText: form.packageAllowlistText,
+    allowSelfInstall: form.securityMode === 'strict' ? form.allowSelfInstall : null,
+    note,
+  })
+}
+
+function selectScriptLaunchMode(): void {
+  form.launchMode = 'script'
+  void ensureManagedScripts()
+}
+
+function setSecurityMode(mode: StdioSecurityMode): void {
+  form.securityMode = mode
+  if (mode === 'strict') {
+    form.allowSelfInstall = false
+    if (form.networkMode === 'inherit' || form.networkMode === 'unrestricted') {
+      form.networkMode = 'allowlist'
+    }
+  } else if (mode === 'unrestricted') {
+    form.networkMode = 'unrestricted'
+    form.allowSelfInstall = true
+    form.unrestrictedAck = false
+  } else {
+    form.networkMode = 'inherit'
+    form.allowSelfInstall = true
+    form.unrestrictedAck = false
+  }
+  schedulePreflight()
 }
 
 /** 模板模式 form.command 可能为空，预检/推断改用预设 command。 */
@@ -565,8 +700,12 @@ function parseCustomParams(): ConnParams | null {
       return null
     }
     const obj = { ...(value as ConnParams) }
-    // 依赖声明只由表单「运行环境依赖」写入，禁止从高级 JSON 夹带/覆盖。
+    // 依赖/安全档位只由表单写入，禁止从高级 JSON 夹带/覆盖。
+    delete obj.launchMode
+    delete obj.scriptRef
+    delete obj.directoryRef
     delete obj.runtimeRequirements
+    delete obj.securityProfile
     return obj
   } catch (err) {
     fieldErrors.customParamsJson =
@@ -604,17 +743,35 @@ function fillFromConfig(
   form.tagDraft = ''
   form.transport = cfg.transport
   resetManualFields()
+  form.launchMode =
+    connParams.launchMode === 'script' && connParams.scriptRef
+      ? 'script'
+      : connParams.launchMode === 'directory' && connParams.directoryRef
+        ? 'directory'
+        : 'command'
+  form.scriptId =
+    connParams.scriptRef && typeof connParams.scriptRef.scriptId === 'string'
+      ? connParams.scriptRef.scriptId
+      : ''
+  form.scriptVersion =
+    connParams.scriptRef && typeof connParams.scriptRef.version === 'string'
+      ? connParams.scriptRef.version
+      : ''
+  const directoryRef =
+    connParams.directoryRef && typeof connParams.directoryRef === 'object'
+      ? (connParams.directoryRef as { root?: unknown; entryId?: unknown })
+      : null
+  form.directoryRoot = typeof directoryRef?.root === 'string' ? directoryRef.root : ''
+  form.directoryEntryId = typeof directoryRef?.entryId === 'string' ? directoryRef.entryId : ''
   form.command = typeof connParams.command === 'string' ? connParams.command : ''
   form.args = Array.isArray(connParams.args) ? connParams.args.join('\n') : ''
   form.url = typeof connParams.url === 'string' ? connParams.url : ''
   form.openAPIBaseUrl = typeof connParams.baseUrl === 'string' ? connParams.baseUrl : ''
   form.openAPIDocUrl = typeof connParams.docUrl === 'string' ? connParams.docUrl : ''
-  form.openAPIDocContent =
-    typeof connParams.docContent === 'string' ? connParams.docContent : ''
+  form.openAPIDocContent = typeof connParams.docContent === 'string' ? connParams.docContent : ''
   form.openAPIDocMode = form.openAPIDocContent.trim() !== '' ? 'content' : 'url'
   form.openAPIAuthMode = normalizeOpenAPIAuthMode(connParams.authType)
-  form.openAPIAuthName =
-    typeof connParams.authName === 'string' ? connParams.authName : 'X-API-Key'
+  form.openAPIAuthName = typeof connParams.authName === 'string' ? connParams.authName : 'X-API-Key'
   form.credential = cfg.credential ?? ''
   applyDetectedAuth(headers, env)
   form.headersText = formatKeyValues(headers, ':')
@@ -627,6 +784,16 @@ function fillFromConfig(
   if (form.reqMode === 'auto' && form.reqTools.length === 0 && form.command.trim() !== '') {
     form.reqTools = inferToolsFromCommand(form.command)
   }
+  const sp = normalizeSecurityProfile(connParams.securityProfile)
+  form.securityMode = normalizeSecurityMode(sp.mode || 'standard')
+  form.filePathsText = (sp.fileAccess?.paths ?? []).join('\n')
+  form.networkMode = (sp.network?.mode as NetworkAccessMode) || 'inherit'
+  form.networkHostsText = (sp.network?.hosts ?? []).join('\n')
+  form.packageAllowlistText = (sp.packageAllowlist ?? []).join('\n')
+  form.allowSelfInstall =
+    typeof sp.allowSelfInstall === 'boolean' ? sp.allowSelfInstall : form.securityMode !== 'strict'
+  form.securityNote = sp.note ?? ''
+  form.unrestrictedAck = form.securityMode === 'unrestricted'
   form.customParamsJson = customParamsFrom(connParams)
   form.advancedOpen =
     form.headersText !== '' ||
@@ -649,6 +816,9 @@ function resetForm(): void {
   // 优先级：编辑 > 复制 > 模板 > 空白创建
   if (props.upstream !== null) {
     fillFromConfig(props.upstream.config)
+    if (form.transport === 'stdio') {
+      void hydrateStdioLaunchBindings()
+    }
     return
   }
 
@@ -668,6 +838,10 @@ function resetForm(): void {
       },
       { forceName: clone.name },
     )
+    // 复制脚本/目录上游时同样需要重新解析绑定，否则 scriptBindingCache 为空会拦截保存。
+    if (form.transport === 'stdio') {
+      void hydrateStdioLaunchBindings()
+    }
     return
   }
 
@@ -686,6 +860,7 @@ function resetForm(): void {
   if (form.transport === 'stdio') {
     form.reqMode = 'auto'
     form.reqTools = inferToolsFromCommand(stdioCommandForPreflight())
+    void ensureManagedScripts()
     schedulePreflight()
   }
 }
@@ -700,7 +875,11 @@ watch(
     // 关闭抽屉：取消挂起的预检，避免卸载前仍写状态。
     clearPreflightTimer()
     preflightSeq += 1
+    scriptBindingSeq += 1
+    directoryInspectSeq += 1
     preflightLoading.value = false
+    scriptBindingLoading.value = false
+    directoryInspectLoading.value = false
     preflight.value = null
   },
   { immediate: true },
@@ -709,6 +888,11 @@ watch(
 watch(
   () => [
     form.transport,
+    form.launchMode,
+    form.scriptId,
+    form.scriptVersion,
+    form.directoryRoot,
+    form.directoryEntryId,
     form.command,
     form.args,
     form.url,
@@ -729,6 +913,13 @@ watch(
     form.customParamsJson,
     form.reqMode,
     form.reqTools.join(','),
+    form.securityMode,
+    form.filePathsText,
+    form.networkMode,
+    form.networkHostsText,
+    form.packageAllowlistText,
+    form.allowSelfInstall,
+    form.securityNote,
     JSON.stringify(placeholderValues),
   ],
   () => {
@@ -744,6 +935,114 @@ watch(
     form.reqTools = inferToolsFromCommand(stdioCommandForPreflight())
   },
 )
+
+async function ensureManagedScripts(force = false): Promise<void> {
+  if (!force && managedScripts.value.length > 0) return
+  if (!force && scriptsLoading.value) return
+  const seq = ++scriptsListSeq
+  scriptsLoading.value = true
+  try {
+    const list = await listScripts()
+    if (seq !== scriptsListSeq) return
+    managedScripts.value = list
+  } catch {
+    if (seq !== scriptsListSeq) return
+    // 强制刷新失败时保留旧列表，避免复制/编辑时已有选项被清空。
+    if (!(force && managedScripts.value.length > 0)) {
+      managedScripts.value = []
+    }
+  } finally {
+    if (seq === scriptsListSeq) scriptsLoading.value = false
+  }
+}
+
+async function hydrateStdioLaunchBindings(): Promise<void> {
+  await ensureManagedScripts(true)
+  if (!props.open || form.transport !== 'stdio') return
+  if (form.launchMode === 'script' && form.scriptId) {
+    await applyManagedScript(form.scriptId, form.scriptVersion)
+    return
+  }
+  if (form.launchMode === 'directory' && form.directoryRoot) {
+    await inspectDirectory()
+  }
+}
+
+async function applyManagedScript(scriptId: string, version = ''): Promise<void> {
+  const id = scriptId.trim()
+  form.scriptId = id
+  if (id === '') {
+    form.scriptVersion = ''
+    scriptBindingCache.value = null
+    return
+  }
+  const seq = ++scriptBindingSeq
+  scriptBindingLoading.value = true
+  try {
+    const binding = await buildScriptLaunch(id, version || undefined)
+    if (seq !== scriptBindingSeq || !props.open || form.scriptId !== id) return
+    scriptBindingCache.value = binding
+    form.launchMode = 'script'
+    form.scriptVersion = binding.scriptRef.version
+    form.command = binding.command
+    form.args = binding.args.join('\n')
+    form.cwd = binding.cwd
+    form.reqMode = 'auto'
+    form.reqTools = inferToolsFromCommand(binding.command)
+    if (form.securityMode === 'strict' && form.filePathsText.trim() === '') {
+      form.filePathsText = binding.cwd
+    }
+    schedulePreflight()
+  } catch (err) {
+    if (seq === scriptBindingSeq && props.open) {
+      formError.value = err instanceof Error ? err.message : '加载脚本启动配置失败'
+    }
+  } finally {
+    if (seq === scriptBindingSeq) scriptBindingLoading.value = false
+  }
+}
+
+async function inspectDirectory(preferredEntryID = form.directoryEntryId): Promise<void> {
+  const root = form.directoryRoot.trim()
+  if (root === '') return
+  const seq = ++directoryInspectSeq
+  directoryInspectLoading.value = true
+  directoryEntries.value = []
+  directoryWarnings.value = []
+  form.directoryEntryId = ''
+  try {
+    const result = await inspectRuntimeDirectory(root)
+    if (seq !== directoryInspectSeq || !props.open || form.directoryRoot.trim() !== root) return
+    form.directoryRoot = result.root
+    directoryEntries.value = result.entries ?? []
+    directoryWarnings.value = result.warnings ?? []
+    const preferred = directoryEntries.value.find((item) => item.id === preferredEntryID)
+    if (preferred) {
+      applyDirectoryEntry(preferred)
+    } else if (directoryEntries.value.length === 1) {
+      applyDirectoryEntry(directoryEntries.value[0])
+    }
+  } catch (err) {
+    if (seq === directoryInspectSeq && props.open) {
+      formError.value = err instanceof Error ? err.message : '目录入口探测失败'
+    }
+  } finally {
+    if (seq === directoryInspectSeq) directoryInspectLoading.value = false
+  }
+}
+
+function applyDirectoryEntry(entry: DirectoryLaunchEntry): void {
+  form.launchMode = 'directory'
+  form.directoryEntryId = entry.id
+  form.command = entry.command
+  form.args = (entry.args ?? []).join('\n')
+  form.cwd = entry.cwd || form.directoryRoot
+  form.reqMode = 'auto'
+  form.reqTools = inferToolsFromCommand(entry.command)
+  if (entry.recommendedMode === 'strict') form.securityMode = 'strict'
+  if (form.filePathsText.trim() === '') form.filePathsText = form.directoryRoot
+  schedulePreflight()
+}
 
 async function ensureKnownTools(): Promise<void> {
   if (knownTools.value.length > 0) return
@@ -793,14 +1092,18 @@ async function runPreflight(): Promise<void> {
   const seq = ++preflightSeq
   preflightLoading.value = true
   try {
+    const args = parseArgs(form.args)
     const result = await preflightRuntime({
       transport: 'stdio',
       command: stdioCommandForPreflight(),
+      args,
+      cwd: form.cwd.trim() || undefined,
       requirements: {
         mode: form.reqMode,
         tools: form.reqTools,
         ...(form.reqNote.trim() !== '' ? { note: form.reqNote.trim() } : {}),
       },
+      securityProfile: buildSecurityProfileForSave(),
     })
     if (seq === preflightSeq && props.open) preflight.value = result
   } catch {
@@ -858,14 +1161,18 @@ function itemStatusClass(available: boolean): string {
 }
 
 function bannerClass(tone: 'success' | 'warning' | 'error'): string {
-  if (tone === 'success') return 'border-success-200 bg-success-50/70 dark:border-success-500/20 dark:bg-success-500/10'
-  if (tone === 'error') return 'border-error-200 bg-error-50/70 dark:border-error-500/20 dark:bg-error-500/10'
+  if (tone === 'success')
+    return 'border-success-200 bg-success-50/70 dark:border-success-500/20 dark:bg-success-500/10'
+  if (tone === 'error')
+    return 'border-error-200 bg-error-50/70 dark:border-error-500/20 dark:bg-error-500/10'
   return 'border-warning-200 bg-warning-50/70 dark:border-warning-500/20 dark:bg-warning-500/10'
 }
 
 onUnmounted(() => {
   clearPreflightTimer()
   preflightSeq += 1
+  scriptBindingSeq += 1
+  directoryInspectSeq += 1
 })
 
 function placeholderLabel(ph: Placeholder): string {
@@ -1000,12 +1307,55 @@ function buildManualConnParams(): ConnParams | null {
       env[key] = credentialPlaceholder
     }
 
+    if (form.securityMode === 'unrestricted' && !form.unrestrictedAck) {
+      fieldErrors.securityProfile = '完全放行前请勾选风险确认'
+      return null
+    }
+    if (form.securityMode === 'strict' && form.cwd.trim() === '') {
+      fieldErrors.cwd = '严格安全模式必须填写工作目录'
+      return null
+    }
+    if (form.securityMode === 'strict' && form.filePathsText.trim() === '') {
+      fieldErrors.filePathsText = '严格安全模式至少填写一条文件允许路径'
+      return null
+    }
+
     const params: ConnParams = { ...custom, command: form.command.trim() }
+    if (form.launchMode === 'script') {
+      const selected = managedScripts.value.find((item) => item.id === form.scriptId)
+      const binding = scriptBindingCache.value
+      if (!selected || !binding) {
+        fieldErrors.scriptId = '脚本绑定不可用，请重新选择脚本'
+        return null
+      }
+      if (
+        binding.scriptRef.scriptId !== selected.id ||
+        binding.scriptRef.version !== (form.scriptVersion || selected.currentVersion)
+      ) {
+        fieldErrors.scriptId = '脚本绑定已变化，请重新选择脚本'
+        return null
+      }
+      params.launchMode = 'script'
+      params.scriptRef = {
+        scriptId: binding.scriptRef.scriptId,
+        version: binding.scriptRef.version,
+        contentSha256: binding.scriptRef.contentSha256,
+      }
+    } else if (form.launchMode === 'directory') {
+      params.launchMode = 'directory'
+      params.directoryRef = {
+        root: form.directoryRoot.trim(),
+        entryId: form.directoryEntryId.trim(),
+      }
+    } else {
+      params.launchMode = 'command'
+    }
     const args = parseArgs(form.args)
     if (args.length > 0) params.args = args
     if (Object.keys(env).length > 0) params.env = env
     if (form.cwd.trim() !== '') params.cwd = form.cwd.trim()
     params.runtimeRequirements = buildRuntimeRequirementsPayload()
+    params.securityProfile = buildSecurityProfileForSave()
     return params
   }
 
@@ -1086,6 +1436,20 @@ function validateManualBasics(): boolean {
     return ok
   }
   if (form.transport === 'stdio') {
+    if (form.launchMode === 'script' && form.scriptId.trim() === '') {
+      fieldErrors.scriptId = '请选择受管脚本'
+      ok = false
+    }
+    if (form.launchMode === 'directory') {
+      if (form.directoryRoot.trim() === '') {
+        fieldErrors.directoryRoot = '请选择项目目录'
+        ok = false
+      }
+      if (form.directoryEntryId.trim() === '') {
+        fieldErrors.directoryEntryId = '请先探测并选择启动入口'
+        ok = false
+      }
+    }
     if (form.command.trim() === '') {
       fieldErrors.command = '请输入启动命令'
       ok = false
@@ -1159,9 +1523,23 @@ function buildConnectionDraft(): { connParams: ConnParams; credential: string } 
     const built = buildTemplateConnParams(resolved)
     connParams = built.connParams
     credential = built.credential
-    // 模板创建也写入依赖声明，便于详情预检与一键补齐。
+    // 模板创建也写入依赖声明与安全档位，便于详情预检与一键补齐。
     if (form.transport === 'stdio') {
+      if (form.securityMode === 'unrestricted' && !form.unrestrictedAck) {
+        fieldErrors.securityProfile = '完全放行前请勾选风险确认'
+        return null
+      }
+      if (form.securityMode === 'strict' && form.cwd.trim() === '') {
+        fieldErrors.cwd = '严格安全模式必须填写工作目录'
+        return null
+      }
+      if (form.securityMode === 'strict' && form.filePathsText.trim() === '') {
+        fieldErrors.filePathsText = '严格安全模式至少填写一条文件允许路径'
+        return null
+      }
       connParams.runtimeRequirements = buildRuntimeRequirementsPayload()
+      connParams.securityProfile = buildSecurityProfileForSave()
+      if (form.cwd.trim() !== '') connParams.cwd = form.cwd.trim()
     }
   } else {
     ok = validateManualBasics() && ok
@@ -1220,6 +1598,9 @@ function buildConnectionTestPayload(): UpstreamConfigRequest | null {
 function mapServerField(field: string): string {
   const local = field.startsWith('connParams.') ? field.slice('connParams.'.length) : field
   const map: Record<string, string> = {
+    launchMode: 'launchMode',
+    scriptRef: 'scriptId',
+    directoryRef: 'directoryRoot',
     command: 'command',
     args: 'args',
     url: 'url',
@@ -1233,6 +1614,7 @@ function mapServerField(field: string): string {
     cwd: 'cwd',
     headers: 'headersText',
     runtimeRequirements: 'runtimeRequirements',
+    securityProfile: 'securityProfile',
     rateLimits: 'rateLimits',
     'rateLimits.timezone': 'rateLimitTimezone',
     'rateLimits.perSecond': 'perSecond',
@@ -1375,7 +1757,7 @@ const errorClass = 'mt-1.5 text-xs text-error-500'
           <div class="space-y-6">
             <div
               v-if="fromClone"
-              class="border-brand-200 bg-brand-50/80 dark:border-brand-500/20 dark:bg-brand-500/10 flex gap-3 rounded-xl border border-l-4 border-l-brand-500 px-4 py-3"
+              class="border-brand-200 bg-brand-50/80 dark:border-brand-500/20 dark:bg-brand-500/10 border-l-brand-500 flex gap-3 rounded-xl border border-l-4 px-4 py-3"
             >
               <InfoCircleIcon
                 class="text-brand-500 dark:text-brand-300 mt-0.5 h-4 w-4 shrink-0"
@@ -1534,7 +1916,136 @@ const errorClass = 'mt-1.5 text-xs text-error-500'
               </details>
             </section>
 
-            <!-- 模板 stdio：依赖卡片与手动模式共用，保存时写入 runtimeRequirements -->
+            <!-- 模板 stdio：安全档位 + 依赖卡片；保存时写入 securityProfile / runtimeRequirements -->
+            <section
+              v-if="fromTemplate && form.transport === 'stdio'"
+              class="space-y-3 rounded-xl border p-4"
+              :class="securityModeCardClass(form.securityMode)"
+            >
+              <div class="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <h4 class="text-sm font-semibold text-gray-800 dark:text-white/90">
+                    本地运行安全档位
+                  </h4>
+                  <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
+                    模板创建同样受档位约束。完全放行需勾选确认并填写备注。
+                  </p>
+                </div>
+                <span
+                  class="inline-flex rounded-full px-2.5 py-1 text-[11px] font-semibold"
+                  :class="securityModeBadgeClass(form.securityMode)"
+                >
+                  {{ securityModes.find((m) => m.value === form.securityMode)?.label }}
+                </span>
+              </div>
+              <div
+                class="grid gap-2 sm:grid-cols-3"
+                role="radiogroup"
+                aria-label="本地运行安全档位"
+              >
+                <button
+                  v-for="m in securityModes"
+                  :key="`tpl-sec-${m.value}`"
+                  type="button"
+                  role="radio"
+                  :aria-checked="form.securityMode === m.value"
+                  class="rounded-lg border px-3 py-2 text-left text-xs transition"
+                  :class="
+                    form.securityMode === m.value
+                      ? m.value === 'unrestricted'
+                        ? 'border-error-500 bg-error-600 text-white'
+                        : m.value === 'strict'
+                          ? 'border-success-400 bg-success-50 text-success-900 dark:bg-success-500/15 dark:text-success-200'
+                          : 'border-brand-300 text-brand-900 bg-white shadow-sm dark:bg-gray-900'
+                      : 'border-gray-200 text-gray-600 dark:border-gray-700 dark:text-gray-300'
+                  "
+                  @click="setSecurityMode(m.value)"
+                >
+                  <div class="font-semibold">{{ m.label }}</div>
+                </button>
+              </div>
+              <div
+                v-if="isUnrestrictedMode"
+                class="border-error-400/80 bg-error-600 rounded-xl border px-3 py-2.5 text-xs text-white shadow-sm"
+              >
+                <button
+                  type="button"
+                  role="checkbox"
+                  class="group flex w-full items-start gap-2.5 rounded-lg text-left transition"
+                  :aria-checked="form.unrestrictedAck"
+                  @click="form.unrestrictedAck = !form.unrestrictedAck"
+                >
+                  <span
+                    class="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md border transition duration-150"
+                    :class="
+                      form.unrestrictedAck
+                        ? 'text-error-600 border-white bg-white shadow-sm'
+                        : 'border-white/50 bg-white/10 text-transparent group-hover:border-white/80 group-hover:bg-white/15'
+                    "
+                    aria-hidden="true"
+                  >
+                    <svg class="h-3.5 w-3.5" viewBox="0 0 16 16" fill="none">
+                      <path
+                        d="M3.5 8.2 6.4 11l6.1-6.5"
+                        stroke="currentColor"
+                        stroke-width="2"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                      />
+                    </svg>
+                  </span>
+                  <span class="min-w-0 leading-5">
+                    <span class="block font-medium">我已了解完全放行风险</span>
+                    <span class="mt-0.5 block text-[11px] leading-4 text-white/80">
+                      勾选后表示接受与网关同权限运行本地 MCP 的风险
+                    </span>
+                  </span>
+                </button>
+                <input
+                  v-model="form.securityNote"
+                  type="text"
+                  class="border-error-300/50 mt-2.5 w-full rounded-lg border bg-white/10 px-2.5 py-2 text-xs text-white placeholder:text-white/60 focus:border-white/80 focus:outline-none"
+                  placeholder="确认备注（推荐填写原因；未填将写入默认确认语）"
+                  maxlength="300"
+                />
+              </div>
+              <div v-if="isStrictMode" class="space-y-2">
+                <label for="tpl-cwd" :class="labelClass"
+                  >工作目录<span class="text-error-500">*</span></label
+                >
+                <PathField
+                  input-id="tpl-cwd"
+                  v-model="form.cwd"
+                  mode="directory"
+                  title="选择工作目录（网关主机）"
+                  placeholder="/data/workspaces/demo"
+                  :input-class="inputClass"
+                  :context-roots="pathPickerContextRoots"
+                />
+                <label for="tpl-files" :class="labelClass"
+                  >文件允许路径<span class="text-error-500">*</span></label
+                >
+                <PathField
+                  input-id="tpl-files"
+                  v-model="form.filePathsText"
+                  mode="directory"
+                  multiple
+                  :rows="2"
+                  title="添加文件允许路径（网关主机）"
+                  placeholder="每行一个绝对路径"
+                  :input-class="textareaClass"
+                  :context-roots="pathPickerContextRoots"
+                />
+                <p v-if="fieldErrors.cwd" :class="errorClass">{{ fieldErrors.cwd }}</p>
+                <p v-if="fieldErrors.filePathsText" :class="errorClass">
+                  {{ fieldErrors.filePathsText }}
+                </p>
+              </div>
+              <p v-if="fieldErrors.securityProfile" :class="errorClass">
+                {{ fieldErrors.securityProfile }}
+              </p>
+            </section>
+
             <section
               v-if="fromTemplate && form.transport === 'stdio'"
               class="space-y-3 rounded-xl border border-gray-200 p-4 dark:border-gray-800"
@@ -1619,7 +2130,7 @@ const errorClass = 'mt-1.5 text-xs text-error-500'
                     <button
                       v-if="!item.available && item.fixable && item.packageId"
                       type="button"
-                      class="font-medium text-brand-600 hover:underline disabled:opacity-50 dark:text-brand-400"
+                      class="text-brand-600 dark:text-brand-400 font-medium hover:underline disabled:opacity-50"
                       :disabled="installingPackageId !== ''"
                       @click="handleInstallPackage(item.packageId!)"
                     >
@@ -1630,7 +2141,7 @@ const errorClass = 'mt-1.5 text-xs text-error-500'
               </div>
               <router-link
                 to="/runtime"
-                class="text-xs font-medium text-brand-600 hover:underline dark:text-brand-400"
+                class="text-brand-600 dark:text-brand-400 text-xs font-medium hover:underline"
               >
                 打开运行环境
               </router-link>
@@ -1648,6 +2159,227 @@ const errorClass = 'mt-1.5 text-xs text-error-500'
                 <template v-if="form.transport === 'stdio'">
                   <div class="space-y-4">
                     <div>
+                      <span :class="labelClass">本地启动方式</span>
+                      <div class="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                        <button
+                          type="button"
+                          class="rounded-xl border p-3 text-left transition"
+                          :class="
+                            form.launchMode === 'command'
+                              ? 'border-brand-300 bg-brand-50/70 ring-brand-100 dark:border-brand-500/40 dark:bg-brand-500/10 ring-1'
+                              : 'hover:border-brand-200 dark:hover:border-brand-500/30 border-gray-200 dark:border-gray-800'
+                          "
+                          @click="form.launchMode = 'command'"
+                        >
+                          <span class="block text-sm font-semibold text-gray-800 dark:text-white/90"
+                            >命令启动</span
+                          >
+                          <span
+                            class="mt-1 block text-xs leading-5 text-gray-500 dark:text-gray-400"
+                            >手动填写白名单命令、参数与工作目录。</span
+                          >
+                        </button>
+                        <button
+                          type="button"
+                          class="rounded-xl border p-3 text-left transition"
+                          :class="
+                            form.launchMode === 'script'
+                              ? 'border-success-300 bg-success-50/70 ring-success-100 dark:border-success-500/40 dark:bg-success-500/10 ring-1'
+                              : 'hover:border-success-200 dark:hover:border-success-500/30 border-gray-200 dark:border-gray-800'
+                          "
+                          @click="selectScriptLaunchMode"
+                        >
+                          <span class="block text-sm font-semibold text-gray-800 dark:text-white/90"
+                            >脚本中心启动</span
+                          >
+                          <span
+                            class="mt-1 block text-xs leading-5 text-gray-500 dark:text-gray-400"
+                            >选择受管脚本，自动填入解释器、版本路径与工作目录。</span
+                          >
+                        </button>
+                        <button
+                          type="button"
+                          class="rounded-xl border p-3 text-left transition"
+                          :class="
+                            form.launchMode === 'directory'
+                              ? 'border-warning-300 bg-warning-50/70 ring-warning-100 dark:border-warning-500/40 dark:bg-warning-500/10 ring-1'
+                              : 'hover:border-warning-200 dark:hover:border-warning-500/30 border-gray-200 dark:border-gray-800'
+                          "
+                          @click="form.launchMode = 'directory'"
+                        >
+                          <span class="block text-sm font-semibold text-gray-800 dark:text-white/90"
+                            >本地目录启动</span
+                          >
+                          <span
+                            class="mt-1 block text-xs leading-5 text-gray-500 dark:text-gray-400"
+                            >选择项目目录，只读识别清单或常见入口后生成启动配置。</span
+                          >
+                        </button>
+                      </div>
+                    </div>
+
+                    <div
+                      v-if="form.launchMode === 'script'"
+                      class="border-success-200 bg-success-50/40 dark:border-success-500/20 dark:bg-success-500/5 rounded-xl border p-4"
+                    >
+                      <div class="flex flex-wrap items-start justify-between gap-2">
+                        <div>
+                          <label for="up-script" :class="labelClass"
+                            >受管脚本<span class="text-error-500">*</span></label
+                          >
+                          <p class="-mt-1 text-xs text-gray-500 dark:text-gray-400">
+                            脚本来自「脚本中心」，保存为不可变版本并经过静态风险分析。
+                          </p>
+                        </div>
+                        <router-link
+                          to="/scripts"
+                          class="text-brand-600 dark:text-brand-400 text-xs font-medium hover:underline"
+                          >打开脚本中心</router-link
+                        >
+                      </div>
+                      <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
+                        <select
+                          id="up-script"
+                          :value="form.scriptId"
+                          :class="[inputClass, 'sm:flex-1']"
+                          :disabled="scriptsLoading || scriptBindingLoading"
+                          @change="applyManagedScript(($event.target as HTMLSelectElement).value)"
+                        >
+                          <option value="">
+                            {{ scriptsLoading ? '加载脚本中…' : '请选择脚本' }}
+                          </option>
+                          <option
+                            v-for="script in managedScripts"
+                            :key="script.id"
+                            :value="script.id"
+                          >
+                            {{ script.name }} · {{ scriptLanguageLabel(script.language) }} ·
+                            {{ script.currentVersion }} ·
+                            {{ scriptRiskLabel(script.risk.level) }}风险
+                          </option>
+                        </select>
+                        <button
+                          type="button"
+                          class="h-11 shrink-0 rounded-lg border border-gray-300 px-3 text-sm font-medium text-gray-600 transition hover:bg-gray-50 disabled:opacity-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-white/5"
+                          :disabled="scriptsLoading || scriptBindingLoading"
+                          @click="ensureManagedScripts(true)"
+                        >
+                          {{ scriptsLoading ? '刷新中…' : '刷新列表' }}
+                        </button>
+                      </div>
+                      <div
+                        v-if="form.scriptId"
+                        class="mt-3 rounded-lg bg-white/80 p-3 dark:bg-gray-900/50"
+                      >
+                        <template v-if="managedScripts.find((s) => s.id === form.scriptId)">
+                          <div class="flex flex-wrap items-center gap-2 text-xs">
+                            <span class="font-medium text-gray-700 dark:text-gray-200">{{
+                              managedScripts.find((s) => s.id === form.scriptId)?.name
+                            }}</span>
+                            <span
+                              class="rounded-full px-2 py-0.5 font-semibold"
+                              :class="
+                                scriptRiskBadgeClass(
+                                  managedScripts.find((s) => s.id === form.scriptId)?.risk.level ??
+                                    'low',
+                                )
+                              "
+                            >
+                              {{
+                                scriptRiskLabel(
+                                  managedScripts.find((s) => s.id === form.scriptId)?.risk.level ??
+                                    'low',
+                                )
+                              }}风险 ·
+                              {{
+                                managedScripts.find((s) => s.id === form.scriptId)?.risk.score ?? 0
+                              }}
+                            </span>
+                            <span class="text-gray-400">版本 {{ form.scriptVersion }}</span>
+                          </div>
+                          <p
+                            class="mt-2 truncate font-mono text-[11px] text-gray-500 dark:text-gray-400"
+                          >
+                            {{ managedScripts.find((s) => s.id === form.scriptId)?.entryPath }}
+                          </p>
+                        </template>
+                      </div>
+                      <p v-if="fieldErrors.scriptId" :class="errorClass">
+                        {{ fieldErrors.scriptId }}
+                      </p>
+                    </div>
+
+                    <div
+                      v-if="form.launchMode === 'directory'"
+                      class="border-warning-200 bg-warning-50/40 dark:border-warning-500/20 dark:bg-warning-500/5 rounded-xl border p-4"
+                    >
+                      <label for="up-directory-root" :class="labelClass"
+                        >项目目录<span class="text-error-500">*</span></label
+                      >
+                      <div class="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+                        <PathField
+                          input-id="up-directory-root"
+                          v-model="form.directoryRoot"
+                          mode="directory"
+                          title="选择本地 MCP 项目目录（网关主机）"
+                          placeholder="/data/workspaces/my-mcp"
+                          :input-class="inputClass"
+                          :context-roots="pathPickerContextRoots"
+                        />
+                        <button
+                          type="button"
+                          class="bg-warning-500 hover:bg-warning-600 rounded-lg px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+                          :disabled="!form.directoryRoot.trim() || directoryInspectLoading"
+                          @click="inspectDirectory()"
+                        >
+                          {{ directoryInspectLoading ? '识别中…' : '识别入口' }}
+                        </button>
+                      </div>
+                      <p :class="helpClass">
+                        优先读取 mpg.launch.json；没有清单时识别
+                        main.py、server.py、index.js、dist/index.js。只读扫描，不执行代码。
+                      </p>
+                      <p v-if="fieldErrors.directoryRoot" :class="errorClass">
+                        {{ fieldErrors.directoryRoot }}
+                      </p>
+                      <div v-if="directoryEntries.length > 0" class="mt-3 space-y-2">
+                        <button
+                          v-for="entry in directoryEntries"
+                          :key="entry.id"
+                          type="button"
+                          class="flex w-full items-start justify-between gap-3 rounded-lg border p-3 text-left transition"
+                          :class="
+                            form.directoryEntryId === entry.id
+                              ? 'border-warning-400 ring-warning-200 dark:ring-warning-500/30 bg-white ring-1 dark:bg-gray-900'
+                              : 'border-warning-200 hover:border-warning-300 dark:border-warning-500/20 bg-white/60 dark:bg-white/5'
+                          "
+                          @click="applyDirectoryEntry(entry)"
+                        >
+                          <span class="min-w-0"
+                            ><span
+                              class="block text-sm font-medium text-gray-800 dark:text-white/90"
+                              >{{ entry.label || entry.id }}</span
+                            ><span class="mt-1 block truncate font-mono text-[11px] text-gray-500"
+                              >{{ entry.command }} {{ entry.args.join(' ') }}</span
+                            ></span
+                          >
+                          <span class="shrink-0 text-[10px] text-gray-400">{{
+                            entry.recommendedMode || 'strict'
+                          }}</span>
+                        </button>
+                      </div>
+                      <p
+                        v-if="directoryWarnings.length > 0"
+                        class="text-warning-700 dark:text-warning-300 mt-2 text-xs"
+                      >
+                        {{ directoryWarnings.join('；') }}
+                      </p>
+                      <p v-if="fieldErrors.directoryEntryId" :class="errorClass">
+                        {{ fieldErrors.directoryEntryId }}
+                      </p>
+                    </div>
+
+                    <div>
                       <label for="up-command" :class="labelClass"
                         >启动命令<span class="text-error-500">*</span></label
                       >
@@ -1655,9 +2387,18 @@ const errorClass = 'mt-1.5 text-xs text-error-500'
                         id="up-command"
                         v-model="form.command"
                         type="text"
-                        :class="inputClass"
+                        :readonly="form.launchMode !== 'command'"
+                        :class="[
+                          inputClass,
+                          form.launchMode !== 'command'
+                            ? 'bg-gray-50 text-gray-500 dark:bg-white/5'
+                            : '',
+                        ]"
                         :placeholder="currentTransport.placeholder"
                       />
+                      <p v-if="form.launchMode !== 'command'" :class="helpClass">
+                        由所选脚本或目录入口自动生成；执行仍经过 stdio 命令白名单校验。
+                      </p>
                       <p v-if="fieldErrors.command" :class="errorClass">
                         {{ fieldErrors.command }}
                       </p>
@@ -1668,14 +2409,235 @@ const errorClass = 'mt-1.5 text-xs text-error-500'
                         id="up-args"
                         v-model="form.args"
                         rows="4"
-                        :class="textareaClass"
+                        :readonly="form.launchMode !== 'command'"
+                        :class="[
+                          textareaClass,
+                          form.launchMode !== 'command'
+                            ? 'bg-gray-50 text-gray-500 dark:bg-white/5'
+                            : '',
+                        ]"
                         placeholder="-y&#10;@modelcontextprotocol/server-filesystem&#10;D:\\data"
                       ></textarea>
                       <p :class="helpClass">
-                        每行一个参数。需要在参数中放凭证时，选择自定义注入并写入
-                        ${credential}；它会取认证区的 Token / API Key。
+                        <template v-if="form.launchMode === 'script'"
+                          >首个参数固定为受管脚本版本路径，避免运行内容漂移。</template
+                        >
+                        <template v-else-if="form.launchMode === 'directory'"
+                          >由只读目录探测生成绝对入口路径，不通过 shell。</template
+                        >
+                        <template v-else
+                          >每行一个参数。需要在参数中放凭证时，选择自定义注入并写入
+                          ${credential}。</template
+                        >
                       </p>
                       <p v-if="fieldErrors.args" :class="errorClass">{{ fieldErrors.args }}</p>
+                    </div>
+
+                    <div
+                      v-if="showRuntimeDeps"
+                      class="rounded-xl border p-4 transition"
+                      :class="securityModeCardClass(form.securityMode)"
+                    >
+                      <div class="flex flex-wrap items-start justify-between gap-2">
+                        <div>
+                          <h5 class="text-sm font-semibold text-gray-900 dark:text-white/90">
+                            本地运行安全档位
+                          </h5>
+                          <p class="mt-1 text-xs leading-5 text-gray-600 dark:text-gray-400">
+                            标准兼容常用
+                            MCP；严格收敛命令/文件/自装包；完全放行与网关同权限。均为策略约束，不是内核沙箱。
+                          </p>
+                        </div>
+                        <span
+                          class="inline-flex rounded-full px-2.5 py-1 text-[11px] font-semibold"
+                          :class="securityModeBadgeClass(form.securityMode)"
+                        >
+                          {{
+                            securityModes.find((m) => m.value === form.securityMode)?.label ||
+                            form.securityMode
+                          }}
+                        </span>
+                      </div>
+
+                      <div
+                        class="mt-3 grid gap-2 sm:grid-cols-3"
+                        role="radiogroup"
+                        aria-label="本地运行安全档位"
+                      >
+                        <button
+                          v-for="m in securityModes"
+                          :key="m.value"
+                          type="button"
+                          role="radio"
+                          :aria-checked="form.securityMode === m.value"
+                          class="rounded-lg border px-3 py-2.5 text-left transition"
+                          :class="
+                            form.securityMode === m.value
+                              ? m.value === 'unrestricted'
+                                ? 'border-error-500 bg-error-600 text-white shadow-sm'
+                                : m.value === 'strict'
+                                  ? 'border-success-400 bg-success-50 text-success-900 dark:border-success-500/50 dark:bg-success-500/15 dark:text-success-200'
+                                  : 'border-brand-300 text-brand-900 dark:border-brand-500/40 dark:text-brand-100 bg-white shadow-sm dark:bg-gray-900'
+                              : 'border-gray-200 bg-white/70 text-gray-600 hover:border-gray-300 dark:border-gray-700 dark:bg-gray-900/40 dark:text-gray-300'
+                          "
+                          @click="setSecurityMode(m.value)"
+                        >
+                          <div class="text-xs font-semibold">{{ m.label }}</div>
+                          <div
+                            class="mt-1 text-[11px] leading-4 opacity-90"
+                            :class="
+                              form.securityMode === m.value && m.value === 'unrestricted'
+                                ? 'text-white/90'
+                                : 'text-gray-500 dark:text-gray-400'
+                            "
+                          >
+                            {{ m.desc }}
+                          </div>
+                        </button>
+                      </div>
+
+                      <div
+                        v-if="isUnrestrictedMode"
+                        class="border-error-400/80 bg-error-600 mt-3 rounded-xl border px-3.5 py-3 text-xs leading-5 text-white shadow-sm"
+                      >
+                        <p class="font-semibold tracking-wide">完全放行 · 极高风险</p>
+                        <p class="mt-1 text-white/90">
+                          子进程与网关同用户权限，可能读写其可见文件并发起网络请求。恶意或被篡改的本地
+                          MCP 等同于在本机执行任意代码。当前为策略约束，不是内核沙箱。
+                        </p>
+                        <button
+                          type="button"
+                          role="checkbox"
+                          class="group mt-2.5 flex w-full items-start gap-2.5 rounded-lg text-left transition"
+                          :aria-checked="form.unrestrictedAck"
+                          @click="form.unrestrictedAck = !form.unrestrictedAck"
+                        >
+                          <span
+                            class="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md border transition duration-150"
+                            :class="
+                              form.unrestrictedAck
+                                ? 'text-error-600 border-white bg-white shadow-sm'
+                                : 'border-white/50 bg-white/10 text-transparent group-hover:border-white/80 group-hover:bg-white/15'
+                            "
+                            aria-hidden="true"
+                          >
+                            <svg class="h-3.5 w-3.5" viewBox="0 0 16 16" fill="none">
+                              <path
+                                d="M3.5 8.2 6.4 11l6.1-6.5"
+                                stroke="currentColor"
+                                stroke-width="2"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                              />
+                            </svg>
+                          </span>
+                          <span class="min-w-0 leading-5">
+                            <span class="block font-medium"
+                              >我已了解风险，仍要为此上游启用完全放行</span
+                            >
+                            <span class="mt-0.5 block text-[11px] leading-4 text-white/80">
+                              勾选表示接受与网关同权限运行本地 MCP；建议填写放行原因
+                            </span>
+                          </span>
+                        </button>
+                        <input
+                          v-model="form.securityNote"
+                          type="text"
+                          class="border-error-300/60 mt-2.5 w-full rounded-lg border bg-white/10 px-2.5 py-2 text-xs text-white placeholder:text-white/60 focus:border-white/80 focus:outline-none"
+                          placeholder="可选：放行原因（写入配置备注）"
+                          maxlength="300"
+                        />
+                      </div>
+
+                      <div
+                        v-if="isStrictMode || form.filePathsText.trim() !== ''"
+                        class="mt-3 space-y-3"
+                      >
+                        <div>
+                          <label for="up-file-roots" :class="labelClass">
+                            文件允许路径
+                            <span v-if="isStrictMode" class="text-error-500">*</span>
+                          </label>
+                          <PathField
+                            input-id="up-file-roots"
+                            v-model="form.filePathsText"
+                            mode="directory"
+                            multiple
+                            :rows="3"
+                            title="添加文件允许路径（网关主机）"
+                            placeholder="每行一个绝对路径，例如：&#10;D:\\mcp-workspace&#10;/data/workspaces/demo"
+                            :input-class="textareaClass"
+                            :context-roots="pathPickerContextRoots"
+                          />
+                          <p :class="helpClass">
+                            严格模式要求工作目录位于这些路径内。可手输或点右侧文件夹浏览网关主机目录；这是声明与校验，不是内核强制隔离。
+                          </p>
+                          <p v-if="fieldErrors.filePathsText" :class="errorClass">
+                            {{ fieldErrors.filePathsText }}
+                          </p>
+                        </div>
+                        <div v-if="isStrictMode">
+                          <label for="up-pkg-allow" :class="labelClass"
+                            >追加包白名单（npx / uvx）</label
+                          >
+                          <textarea
+                            id="up-pkg-allow"
+                            v-model="form.packageAllowlistText"
+                            rows="3"
+                            :class="textareaClass"
+                            placeholder="每行一个包名，将与系统全局包白名单合并：&#10;@my-org/*&#10;my-custom-mcp"
+                          ></textarea>
+                          <p :class="helpClass">
+                            严格模式允许使用 npx/uvx，但目标包必须在全局或此处追加的白名单内。支持
+                            @scope/*。禁止本地路径与 URL。
+                          </p>
+                        </div>
+                        <div class="grid gap-3 sm:grid-cols-2">
+                          <div>
+                            <label for="up-net-mode" :class="labelClass">网络策略</label>
+                            <select id="up-net-mode" v-model="form.networkMode" :class="inputClass">
+                              <option value="inherit">跟随档位默认</option>
+                              <option value="deny">拒绝出站（策略声明）</option>
+                              <option value="allowlist">仅允许声明主机</option>
+                              <option value="unrestricted">不限制</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label
+                              class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-200"
+                            >
+                              <input
+                                v-model="form.allowSelfInstall"
+                                type="checkbox"
+                                class="text-brand-600 focus:ring-brand-500 h-4 w-4 rounded border-gray-300"
+                                :disabled="isStrictMode && !form.allowSelfInstall && false"
+                              />
+                              允许脚本自装包（npm/pip 等）
+                            </label>
+                            <p :class="helpClass">严格模式默认关闭；开启后需声明网络允许主机。</p>
+                          </div>
+                        </div>
+                        <div v-if="form.networkMode === 'allowlist'">
+                          <label for="up-net-hosts" :class="labelClass">网络允许主机</label>
+                          <textarea
+                            id="up-net-hosts"
+                            v-model="form.networkHostsText"
+                            rows="2"
+                            :class="textareaClass"
+                            placeholder="registry.npmjs.org&#10;pypi.org"
+                          ></textarea>
+                        </div>
+                      </div>
+
+                      <p v-if="fieldErrors.securityProfile" :class="errorClass">
+                        {{ fieldErrors.securityProfile }}
+                      </p>
+                      <p
+                        v-if="preflight?.securityError"
+                        class="text-error-600 dark:text-error-400 mt-2 text-xs"
+                      >
+                        {{ preflight.securityError }}
+                      </p>
                     </div>
 
                     <div
@@ -1706,6 +2668,7 @@ const errorClass = 'mt-1.5 text-xs text-error-500'
                         :class="bannerClass(preflightBanner.tone)"
                       >
                         <p v-if="preflight?.commandError">{{ preflight.commandError }}</p>
+                        <p v-else-if="preflight?.securityError">{{ preflight.securityError }}</p>
                         <p v-else>缺少依赖时仍可先保存配置；测试连接或实际启动前建议补齐。</p>
                       </div>
 
@@ -1770,7 +2733,7 @@ const errorClass = 'mt-1.5 text-xs text-error-500'
                         无法从命令判断运行时（例如自定义二进制）。请切换到「我自己选择」勾选实际依赖。
                         <button
                           type="button"
-                          class="ml-1 font-medium text-brand-600 hover:underline dark:text-brand-400"
+                          class="text-brand-600 dark:text-brand-400 ml-1 font-medium hover:underline"
                           @click="setReqMode('manual')"
                         >
                           手动选择
@@ -1783,7 +2746,7 @@ const errorClass = 'mt-1.5 text-xs text-error-500'
                       >
                         <button
                           type="button"
-                          class="text-xs font-medium text-brand-600 hover:underline dark:text-brand-400"
+                          class="text-brand-600 dark:text-brand-400 text-xs font-medium hover:underline"
                           @click="applySuggestedTools"
                         >
                           使用命令建议（{{ suggestedFromCommand.join('、') }}）
@@ -1813,13 +2776,11 @@ const errorClass = 'mt-1.5 text-xs text-error-500'
                             <button
                               v-if="!item.available && item.fixable && item.packageId"
                               type="button"
-                              class="font-medium text-brand-600 hover:underline disabled:opacity-50 dark:text-brand-400"
+                              class="text-brand-600 dark:text-brand-400 font-medium hover:underline disabled:opacity-50"
                               :disabled="installingPackageId !== ''"
                               @click="handleInstallPackage(item.packageId!)"
                             >
-                              {{
-                                installingPackageId === item.packageId ? '安装中…' : '一键安装'
-                              }}
+                              {{ installingPackageId === item.packageId ? '安装中…' : '一键安装' }}
                             </button>
                           </span>
                         </div>
@@ -1828,7 +2789,7 @@ const errorClass = 'mt-1.5 text-xs text-error-500'
                       <div class="mt-3 flex flex-wrap gap-2">
                         <router-link
                           to="/runtime"
-                          class="text-xs font-medium text-brand-600 hover:underline dark:text-brand-400"
+                          class="text-brand-600 dark:text-brand-400 text-xs font-medium hover:underline"
                         >
                           打开运行环境
                         </router-link>
@@ -2048,7 +3009,9 @@ const errorClass = 'mt-1.5 text-xs text-error-500'
                 </div>
 
                 <div
-                  v-if="form.remoteAuthMode === 'api-key' && isRemoteTransport && !isOpenAPITransport"
+                  v-if="
+                    form.remoteAuthMode === 'api-key' && isRemoteTransport && !isOpenAPITransport
+                  "
                   class="max-w-md"
                 >
                   <label for="up-api-header" :class="labelClass">请求头名称</label>
@@ -2135,14 +3098,22 @@ const errorClass = 'mt-1.5 text-xs text-error-500'
                       </p>
                     </div>
                     <div>
-                      <label for="up-cwd" :class="labelClass">工作目录</label>
-                      <input
-                        id="up-cwd"
+                      <label for="up-cwd" :class="labelClass">
+                        工作目录
+                        <span v-if="isStrictMode" class="text-error-500">*</span>
+                      </label>
+                      <PathField
+                        input-id="up-cwd"
                         v-model="form.cwd"
-                        type="text"
-                        :class="inputClass"
+                        mode="directory"
+                        title="选择工作目录（网关主机）"
                         placeholder="D:\\mcp-server"
+                        :input-class="inputClass"
+                        :context-roots="pathPickerContextRoots"
                       />
+                      <p :class="helpClass">
+                        可手输或点右侧文件夹浏览网关主机目录。严格模式下必填，且须位于上方「文件允许路径」内。
+                      </p>
                       <p v-if="fieldErrors.cwd" :class="errorClass">{{ fieldErrors.cwd }}</p>
                     </div>
                   </template>

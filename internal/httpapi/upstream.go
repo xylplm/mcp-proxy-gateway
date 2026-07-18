@@ -140,6 +140,8 @@ func (r *Router) createUpstream(c *gin.Context) {
 	if !bindJSON(c, &req) {
 		return
 	}
+	r.scriptRefMu.Lock()
+	defer r.scriptRefMu.Unlock()
 	up, err := r.upstream.Create(c.Request.Context(), req.toConfig())
 	if err != nil {
 		respondError(c, err)
@@ -161,6 +163,8 @@ func (r *Router) updateUpstream(c *gin.Context) {
 	}
 	cfg := req.toConfig()
 
+	r.scriptRefMu.Lock()
+	defer r.scriptRefMu.Unlock()
 	up, err := r.upstream.Update(c.Request.Context(), c.Param("id"), cfg)
 	if err != nil {
 		respondError(c, err)

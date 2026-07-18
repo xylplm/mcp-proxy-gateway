@@ -1,4 +1,4 @@
-//go:build !linux
+//go:build !linux && !darwin
 
 package runtime
 
@@ -14,8 +14,11 @@ func applySandboxPlatform(cmd *exec.Cmd) {
 
 func describeSandboxPlatform() SandboxCapabilities {
 	return SandboxCapabilities{
-		ProcessHardeningSupported: false,
-		Platform:                  runtime.GOOS,
-		Description:               "当前平台使用策略层加固（命令白名单、环境清理、卷路径优先）；进程级隔离在 Linux 生产容器中启用。",
+		ProcessHardeningSupported:    false,
+		FilesystemIsolationSupported: false,
+		NetworkIsolationSupported:    false,
+		IsolationBackend:             "none",
+		Platform:                     runtime.GOOS,
+		Description:                  "当前平台使用策略层加固（命令白名单、环境清理、安全档位、卷路径优先）；进程级隔离在 Linux 生产容器中启用。",
 	}
 }

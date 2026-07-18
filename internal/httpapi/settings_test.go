@@ -34,11 +34,19 @@ func (f *fakeSettings) Save(cfg config.YAMLConfig) error {
 type fakeSettingsRuntime struct {
 	server           config.ServerConfig
 	applied          config.YAMLConfig
+	applyCalls       []config.YAMLConfig
+	applyErr         error
 	restartRequested bool
 }
 
 func (f *fakeSettingsRuntime) ApplySettings(cfg config.YAMLConfig) error {
 	f.applied = cfg
+	f.applyCalls = append(f.applyCalls, cfg)
+	if f.applyErr != nil {
+		err := f.applyErr
+		f.applyErr = nil
+		return err
+	}
 	return nil
 }
 
@@ -127,6 +135,26 @@ func TestUpdateSettingsValidCron(t *testing.T) {
 	}
 	if s.saved.Sync.Cron != "0 0 * * * *" {
 		t.Errorf("期望写入 cron=0 0 * * * *，实际 %q", s.saved.Sync.Cron)
+	}
+}
+
+func TestUpdateSettingsRollsBackWhenRuntimeApplyFails(t *testing.T) {
+	old := config.DefaultYAMLConfig()
+	old.Server.LogLevel = "info"
+	s := &fakeSettings{cfg: old}
+	runtime := &fakeSettingsRuntime{applyErr: domain.NewError(domain.CodeInternal, "apply failed")}
+	e := newTestEngine(Deps{Settings: s, SettingsRuntime: runtime})
+
+	body := `{"server":{"admin_addr":":8080","log_level":"debug"},"sync":{"cron":"0 0 * * * *","timeout_s":30},"mcp_api":{"mode":"smart","smart_discovery_limit":50}}`
+	w := doJSON(e, http.MethodPut, "/api/admin/settings", body)
+	if w.Code == http.StatusOK {
+		t.Fatalf("apply failure should be reported: %s", w.Body.String())
+	}
+	if s.cfg.Server.LogLevel != old.Server.LogLevel {
+		t.Fatalf("persisted config was not rolled back: %+v", s.cfg.Server)
+	}
+	if len(runtime.applyCalls) != 2 || runtime.applyCalls[1].Server.LogLevel != old.Server.LogLevel {
+		t.Fatalf("runtime rollback was not attempted: %+v", runtime.applyCalls)
 	}
 }
 

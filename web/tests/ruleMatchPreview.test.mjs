@@ -70,5 +70,5 @@ test('formats preview effect labels for users', () => {
     cacheEnabled: true,
     cacheTtlSeconds: 30,
     riskTags: ['发送'],
-  }), '轮询，缓存 30 秒，标签 发送')
+  }), '智能均衡，缓存 30 秒，标签 发送')
 })

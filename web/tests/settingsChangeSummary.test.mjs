@@ -92,6 +92,8 @@ test('buildSettingsDraft normalizes form-only fields without mutating the source
     trustedProxyCIDRs: ['10.0.0.0/8'],
     exemptCIDRs: ['192.168.0.0/16'],
     commandAllowlist: ['node', 'uvx'],
+    globalFileRoots: ['/data/ws'],
+    browseExtraRoots: ['/opt/mcp'],
     extraSensitiveEnvPrefixes: ['CORP_'],
   })
 
@@ -99,5 +101,17 @@ test('buildSettingsDraft normalizes form-only fields without mutating the source
   assert.deepEqual(before.security.trusted_proxy_cidrs, [])
   assert.deepEqual(draft.security.trusted_proxy_cidrs, ['10.0.0.0/8'])
   assert.deepEqual(draft.runtime.command_allowlist, ['node', 'uvx'])
+  assert.deepEqual(draft.runtime.global_file_roots, ['/data/ws'])
+  assert.deepEqual(draft.runtime.browse_extra_roots, ['/opt/mcp'])
   assert.deepEqual(before.runtime.command_allowlist, ['node', 'npx'])
+})
+
+test('browse extra roots changes are runtime-only and labeled', () => {
+  const before = baseConfig()
+  const after = cloneSettingsConfig(before)
+  after.runtime.browse_extra_roots = ['/opt/mcp-data']
+  const changes = collectSettingsChanges(before, after)
+  assert.equal(changes.length, 1)
+  assert.equal(changes[0].label, '路径浏览额外根')
+  assert.equal(settingsChangesRequireRestart(changes), false)
 })

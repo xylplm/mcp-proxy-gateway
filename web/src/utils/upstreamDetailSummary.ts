@@ -22,11 +22,12 @@ export function buildUpstreamDetailSummary(
   toolSnapshot?: ToolCountSnapshot,
 ): UpstreamDetailSummary {
   const endpoint = endpointInfo(upstream)
-  const toolLabel = toolSnapshot === undefined
-    ? '工具缓存未知'
-    : toolSnapshot.synced
-      ? `${toolSnapshot.count.toLocaleString('zh-CN')} 个工具`
-      : '尚未同步'
+  const toolLabel =
+    toolSnapshot === undefined
+      ? '工具缓存未知'
+      : toolSnapshot.synced
+        ? `${toolSnapshot.count.toLocaleString('zh-CN')} 个工具`
+        : '尚未同步'
 
   return {
     endpointLabel: endpoint.label,
@@ -45,6 +46,9 @@ export function buildUpstreamDetailSummary(
     ]),
     connectionItems: compactItems([
       { label: '传输类型', value: transportLabel(upstream.config.transport) },
+      { label: '本地启动方式', value: launchModeLabel(upstream.config.connParams) },
+      { label: '受管脚本', value: scriptRefLabel(upstream.config.connParams.scriptRef) },
+      { label: '目录入口', value: directoryRefLabel(upstream.config.connParams.directoryRef) },
       { label: endpoint.label, value: endpoint.value },
       { label: '工作目录', value: stringValue(upstream.config.connParams.cwd) },
       { label: '命令参数', value: argsValue(upstream.config.connParams.args) },
@@ -52,12 +56,39 @@ export function buildUpstreamDetailSummary(
         label: '环境依赖',
         value: runtimeRequirementsLabel(upstream.config.connParams.runtimeRequirements),
       },
+      {
+        label: '本地安全档位',
+        value: securityProfileLabel(upstream.config.connParams.securityProfile),
+      },
       { label: '请求头', value: recordCount(upstream.config.connParams.headers, '个请求头') },
       { label: '环境变量', value: recordCount(upstream.config.connParams.env, '个变量') },
       { label: '访问凭证', value: upstream.config.credential ? '已配置' : '未配置' },
       { label: '限流额度', value: formatRateLimits(upstream.config.rateLimits) },
     ]),
   }
+}
+
+function launchModeLabel(params: Record<string, unknown>): string {
+  if (params.launchMode === 'script') return '脚本中心启动'
+  if (params.launchMode === 'directory') return '本地目录启动'
+  if (params.command) return '命令启动'
+  return ''
+}
+
+function scriptRefLabel(value: unknown): string {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return ''
+  const ref = value as Record<string, unknown>
+  const id = typeof ref.scriptId === 'string' ? ref.scriptId : ''
+  const version = typeof ref.version === 'string' ? ref.version : ''
+  return id ? `${id}${version ? ` · ${version}` : ''}` : ''
+}
+
+function directoryRefLabel(value: unknown): string {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return ''
+  const ref = value as Record<string, unknown>
+  const root = typeof ref.root === 'string' ? ref.root : ''
+  const entry = typeof ref.entryId === 'string' ? ref.entryId : ''
+  return root ? `${root}${entry ? ` · ${entry}` : ''}` : ''
 }
 
 function endpointInfo(upstream: Upstream): { label: string; value: string } {
@@ -154,7 +185,8 @@ function formatDateTime(value: string): string {
 }
 
 function recordCount(value: unknown, suffix: string): string {
-  if (value === null || value === undefined || typeof value !== 'object' || Array.isArray(value)) return ''
+  if (value === null || value === undefined || typeof value !== 'object' || Array.isArray(value))
+    return ''
   const count = Object.keys(value).length
   return count > 0 ? `${count} ${suffix}` : ''
 }
@@ -169,6 +201,28 @@ function runtimeRequirementsLabel(value: unknown): string {
   const mode = obj.mode === 'manual' ? '手动' : '自动'
   const toolPart = tools.length > 0 ? tools.join('、') : '未指定工具'
   return obj.note ? `${mode}：${toolPart}（${obj.note}）` : `${mode}：${toolPart}`
+}
+
+function securityProfileLabel(value: unknown): string {
+  if (value == null || typeof value !== 'object') return '标准（默认）'
+  const obj = value as {
+    mode?: string
+    fileAccess?: { paths?: unknown }
+    network?: { mode?: string }
+    note?: string
+  }
+  const mode = String(obj.mode ?? 'standard').toLowerCase()
+  const modeLabel = mode === 'strict' ? '严格安全' : mode === 'unrestricted' ? '完全放行' : '标准'
+  const paths = Array.isArray(obj.fileAccess?.paths)
+    ? obj.fileAccess.paths.filter((p): p is string => typeof p === 'string' && p.trim() !== '')
+    : []
+  const parts = [modeLabel]
+  if (paths.length > 0) parts.push(`${paths.length} 条文件路径`)
+  if (obj.network?.mode && obj.network.mode !== 'inherit') {
+    parts.push(`网络:${obj.network.mode}`)
+  }
+  if (obj.note) parts.push(obj.note)
+  return parts.join(' · ')
 }
 
 function argsValue(value: unknown): string {

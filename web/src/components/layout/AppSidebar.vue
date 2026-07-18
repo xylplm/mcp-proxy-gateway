@@ -71,9 +71,11 @@
                   >
                     <component :is="item.icon" />
                   </span>
-                  <span v-if="isExpanded || isHovered || isMobileOpen" class="menu-item-text min-w-0 flex-1 truncate whitespace-nowrap">{{
-                    item.name
-                  }}</span>
+                  <span
+                    v-if="isExpanded || isHovered || isMobileOpen"
+                    class="menu-item-text min-w-0 flex-1 truncate whitespace-nowrap"
+                    >{{ item.name }}</span
+                  >
                 </router-link>
               </li>
             </ul>
@@ -102,6 +104,7 @@ import {
   UserGroupIcon,
   SendIcon,
   BoxCubeIcon,
+  DraftIcon,
 } from '@/icons'
 import { useSidebar } from '@/composables/useSidebar'
 
@@ -177,6 +180,11 @@ const menuGroups = [
         icon: BoxCubeIcon,
         name: '运行环境',
         path: '/runtime',
+      },
+      {
+        icon: DraftIcon,
+        name: '脚本中心',
+        path: '/scripts',
       },
       {
         icon: ErrorHexaIcon,

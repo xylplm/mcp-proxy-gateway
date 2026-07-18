@@ -5,16 +5,21 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
 	"testing"
 
 	rtenv "github.com/myGithub/mcp-proxy-gateway/internal/runtime"
 )
 
 type fakeRuntimeEnv struct {
-	summary rtenv.Summary
-	catalog []rtenv.CatalogPackage
+	summary    rtenv.Summary
+	catalog    []rtenv.CatalogPackage
+	browseStat rtenv.BrowseStatResult
 }
 
+func (f *fakeRuntimeEnv) Policy() rtenv.Policy   { return rtenv.DefaultPolicy() }
 func (f *fakeRuntimeEnv) Summary() rtenv.Summary { return f.summary }
 func (f *fakeRuntimeEnv) Catalog() []rtenv.CatalogPackage {
 	if f.catalog != nil {
@@ -45,6 +50,33 @@ func (f *fakeRuntimeEnv) UninstallPackage(packageID string) error {
 		return fmt.Errorf("未知预置包")
 	}
 	return nil
+}
+func (f *fakeRuntimeEnv) BrowseRoots(contextRoots []string) rtenv.BrowseRootsResult {
+	return rtenv.BrowseRootsResult{
+		Roots: []rtenv.BrowseRoot{{
+			ID: "data", Label: "数据目录", Path: "/data", Kind: "data",
+		}},
+		Platform:      "linux",
+		PathSeparator: "/",
+	}
+}
+func (f *fakeRuntimeEnv) BrowseList(path, mode string, limit int, contextRoots []string) (rtenv.BrowseListResult, error) {
+	if path == "/denied" {
+		return rtenv.BrowseListResult{}, fmt.Errorf("路径不在允许浏览范围内")
+	}
+	if path == "/missing" {
+		return rtenv.BrowseListResult{}, fmt.Errorf("路径不存在")
+	}
+	return rtenv.BrowseListResult{
+		Path: path, Entries: []rtenv.BrowseEntry{{Name: "a", Path: path + "/a", Type: "dir", Readable: true, Enterable: true}},
+		Platform: "linux", PathSeparator: "/",
+	}, nil
+}
+func (f *fakeRuntimeEnv) BrowseStat(path string, contextRoots []string) (rtenv.BrowseStatResult, error) {
+	if f.browseStat.Path != "" {
+		return f.browseStat, nil
+	}
+	return rtenv.BrowseStatResult{Path: path, Exists: true, Type: "dir", Allowed: true, Readable: true}, nil
 }
 
 func TestRuntimeSummaryOK(t *testing.T) {
@@ -77,6 +109,20 @@ func TestRuntimeSummaryUnavailable(t *testing.T) {
 	w := doJSON(e, http.MethodGet, "/api/admin/runtime/summary", "")
 	if w.Code == http.StatusOK {
 		t.Fatalf("expected non-OK, body=%s", w.Body.String())
+	}
+}
+
+func TestRuntimeDirectoryInspect(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.py"), []byte("print(1)"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	env := &fakeRuntimeEnv{}
+	env.browseStat = rtenv.BrowseStatResult{Path: dir, Exists: true, Type: "dir", Allowed: true, Readable: true}
+	e := newTestEngine(Deps{RuntimeEnv: env})
+	w := doJSON(e, http.MethodPost, "/api/admin/runtime/directory/inspect", `{"path":`+strconv.Quote(dir)+`}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
 }
 

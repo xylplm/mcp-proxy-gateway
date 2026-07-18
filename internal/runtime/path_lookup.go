@@ -39,6 +39,9 @@ func LookPathWithPrefixes(file string, prefixes []string, lookPath LookPathFunc)
 	return lookPath(raw)
 }
 
+// ErrNotInRuntimePath 表示严格模式下命令不在 runtime 卷路径内。
+var ErrNotInRuntimePath = fmt.Errorf("严格安全模式仅允许运行时卷内的可执行文件")
+
 // ResolveCommandWithPrefixes 在 prefixes + PATH 上解析 command，错误文案与 ResolveCommand 一致。
 func ResolveCommandWithPrefixes(command string, prefixes []string) (string, error) {
 	raw := strings.TrimSpace(command)
@@ -59,9 +62,100 @@ func ResolveCommandWithPrefixes(command string, prefixes []string) (string, erro
 	return resolved, nil
 }
 
+// ResolveCommandStrictRuntime 仅在 runtime 前缀目录中解析 command（严格档）。
+// 绝对路径须落在某一 prefix 根下；逻辑名只在 prefix 内查找，不回落系统 PATH。
+func ResolveCommandStrictRuntime(command string, prefixes []string) (string, error) {
+	raw := strings.TrimSpace(command)
+	if raw == "" {
+		return "", fmt.Errorf("连接参数 \"command\" 不能为空")
+	}
+	allowedRoots := strictRuntimeRoots(prefixes)
+	if len(allowedRoots) == 0 {
+		return "", fmt.Errorf("%w：未配置可用的运行时目录", ErrNotInRuntimePath)
+	}
+	if hasPathSep(raw) || filepath.IsAbs(raw) {
+		if resolved, ok := resolveExecutableWithinRoots(raw, allowedRoots); ok {
+			return resolved, nil
+		}
+		return "", fmt.Errorf("%w：%s", ErrNotInRuntimePath, raw)
+	}
+	for _, dir := range prefixes {
+		if p, ok := findExecutableInDir(dir, raw); ok {
+			if resolved, allowed := resolveExecutableWithinRoots(p, allowedRoots); allowed {
+				return resolved, nil
+			}
+		}
+	}
+	base := CommandBaseName(raw)
+	if base == "" {
+		base = raw
+	}
+	return "", fmt.Errorf(
+		"严格模式下未在运行时目录找到 %q，请使用「运行环境」预置安装或将工具放入 runtime/bin",
+		base,
+	)
+}
+
 // ResolveCommand 将 command 解析为可执行路径（仅系统 PATH，兼容旧调用）。
 func ResolveCommand(command string) (string, error) {
 	return ResolveCommandWithPrefixes(command, nil)
+}
+
+func strictRuntimeRoots(prefixes []string) []string {
+	roots := make([]string, 0, len(prefixes))
+	seen := map[string]struct{}{}
+	for _, dir := range prefixes {
+		clean := cleanPathDecl(dir)
+		if clean == "" {
+			continue
+		}
+		parent := filepath.Dir(clean)
+		runtimeRoot := parent
+		switch strings.ToLower(filepath.Base(parent)) {
+		case RuntimeSubdirNode, RuntimeSubdirPython, RuntimeSubdirUV:
+			runtimeRoot = filepath.Dir(parent)
+		}
+		rootResolved, err := filepath.EvalSymlinks(runtimeRoot)
+		if err != nil {
+			continue
+		}
+		prefixResolved, err := filepath.EvalSymlinks(clean)
+		if err != nil || !pathInRoot(prefixResolved, rootResolved) {
+			continue
+		}
+		rootResolved = filepath.Clean(rootResolved)
+		key := rootResolved
+		if runtime.GOOS == "windows" {
+			key = strings.ToLower(key)
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		roots = append(roots, rootResolved)
+	}
+	return roots
+}
+
+func resolveExecutableWithinRoots(path string, roots []string) (string, bool) {
+	clean := cleanPathDecl(path)
+	if clean == "" {
+		return "", false
+	}
+	resolved, err := filepath.EvalSymlinks(clean)
+	if err != nil {
+		return "", false
+	}
+	st, err := os.Stat(resolved)
+	if err != nil || st.IsDir() {
+		return "", false
+	}
+	for _, root := range roots {
+		if pathInRoot(resolved, root) {
+			return resolved, true
+		}
+	}
+	return "", false
 }
 
 func hasPathSep(s string) bool {

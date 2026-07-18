@@ -91,6 +91,8 @@ func (r *Router) importBackup(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
+	r.scriptRefMu.Lock()
+	defer r.scriptRefMu.Unlock()
 	if err := r.backup.Import(c.Request.Context(), []byte(req.Content)); err != nil {
 		respondError(c, err)
 		return

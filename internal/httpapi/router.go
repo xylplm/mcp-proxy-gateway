@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -378,10 +379,15 @@ type Router struct {
 	templates TemplateService
 	// runtimeEnv 为本地运行时能力探测与策略摘要。
 	runtimeEnv RuntimeEnvironmentService
+	// scripts 为脚本中心受管脚本服务。
+	scripts ScriptService
+	// scriptRefMu 串行化脚本删除与可能写入 scriptRef 的低频管理操作，避免悬空引用。
+	scriptRefMu sync.Mutex
 }
 
 // RuntimeEnvironmentService 为管理台「运行环境」页的窄接口。
 type RuntimeEnvironmentService interface {
+	Policy() rtenv.Policy
 	Summary() rtenv.Summary
 	Catalog() []rtenv.CatalogPackage
 	KnownToolCatalog() []rtenv.KnownTool
@@ -389,6 +395,10 @@ type RuntimeEnvironmentService interface {
 	PreviewInstall(packageID string) (rtenv.CatalogPackage, error)
 	InstallPackage(ctx context.Context, packageID string) (rtenv.InstallResult, error)
 	UninstallPackage(packageID string) error
+	// 路径浏览：供管理台 PathPicker 选择网关主机目录/文件（受允许根约束）。
+	BrowseRoots(contextRoots []string) rtenv.BrowseRootsResult
+	BrowseList(path, mode string, limit int, contextRoots []string) (rtenv.BrowseListResult, error)
+	BrowseStat(path string, contextRoots []string) (rtenv.BrowseStatResult, error)
 }
 
 // Deps 聚合构造 Router 所需的全部依赖，便于装配层一次性注入。
@@ -419,6 +429,7 @@ type Deps struct {
 	SystemLogs      SystemLogService
 	Templates       TemplateService
 	RuntimeEnv      RuntimeEnvironmentService
+	Scripts         ScriptService
 }
 
 // NewRouter 构造管理 REST API 路由器。
@@ -450,6 +461,7 @@ func NewRouter(d Deps) *Router {
 		systemLogs:      d.SystemLogs,
 		templates:       d.Templates,
 		runtimeEnv:      d.RuntimeEnv,
+		scripts:         d.Scripts,
 	}
 }
 
@@ -484,6 +496,8 @@ func (r *Router) Register(router gin.IRouter, adminAuth gin.HandlerFunc) {
 	r.registerAuditRoutes(admin)
 	r.registerSecurityRoutes(admin)
 	r.registerRuntimeRoutes(admin)
+	r.registerFSBrowseRoutes(admin)
+	r.registerScriptRoutes(admin)
 	r.registerSystemLogRoutes(admin)
 	r.registerTemplateRoutes(admin)
 	r.registerProtectedAuthRoutes(admin)

@@ -35,6 +35,31 @@ test('summarizes an available HTTP upstream', () => {
   assert.equal(summary.connectionItems.find((item) => item.label === '访问凭证')?.value, '已配置')
 })
 
+test('summarizes stdio security profile label', () => {
+  const summary = buildUpstreamDetailSummary(
+    upstream({
+      config: {
+        name: '本地',
+        tags: [],
+        transport: 'stdio',
+        connParams: {
+          command: 'node',
+          securityProfile: { mode: 'unrestricted', note: 'lab' },
+        },
+        credential: '',
+        enabled: true,
+        sortOrder: 0,
+        autoSync: true,
+        rateLimits: { enabled: false },
+      },
+    }),
+  )
+  assert.equal(
+    summary.connectionItems.find((item) => item.label === '本地安全档位')?.value.includes('完全放行'),
+    true,
+  )
+})
+
 test('summarizes stdio command and unsynced cache', () => {
   const summary = buildUpstreamDetailSummary(
     upstream({

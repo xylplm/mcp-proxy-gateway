@@ -157,6 +157,15 @@ const router = createRouter({
       },
     },
     {
+      path: '/scripts',
+      name: 'Scripts',
+      component: () => import('../views/ScriptsView.vue'),
+      meta: {
+        title: '脚本中心',
+        requiresAuth: true,
+      },
+    },
+    {
       path: '/security',
       name: 'SecurityCenter',
       component: () => import('../views/SecurityCenterView.vue'),

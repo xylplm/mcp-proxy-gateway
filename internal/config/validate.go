@@ -142,6 +142,48 @@ func ValidateYAMLConfig(cfg YAMLConfig) error {
 			fields[fmt.Sprintf("runtime.extra_sensitive_env_prefixes.%d", i)] = "前缀不能为空"
 		}
 	}
+	switch strings.ToLower(strings.TrimSpace(cfg.Runtime.DefaultStdioSecurityMode)) {
+	case "", "standard", "strict", "unrestricted":
+	default:
+		fields["runtime.default_stdio_security_mode"] = "仅支持 standard、strict、unrestricted"
+	}
+	if len(cfg.Runtime.StrictCommandAllowlist) > 64 {
+		fields["runtime.strict_command_allowlist"] = "严格档命令白名单最多 64 项"
+	}
+	for i, item := range cfg.Runtime.StrictCommandAllowlist {
+		if strings.TrimSpace(item) == "" {
+			fields[fmt.Sprintf("runtime.strict_command_allowlist.%d", i)] = "命令白名单项不能为空"
+		}
+	}
+	if len(cfg.Runtime.StrictPackageAllowlist) > 128 {
+		fields["runtime.strict_package_allowlist"] = "严格档包白名单最多 128 项"
+	}
+	for i, item := range cfg.Runtime.StrictPackageAllowlist {
+		if strings.TrimSpace(item) == "" {
+			fields[fmt.Sprintf("runtime.strict_package_allowlist.%d", i)] = "包白名单项不能为空"
+		}
+	}
+	if len(cfg.Runtime.GlobalFileRoots) > 32 {
+		fields["runtime.global_file_roots"] = "全局文件允许路径最多 32 项"
+	}
+	for i, item := range cfg.Runtime.GlobalFileRoots {
+		if strings.TrimSpace(item) == "" {
+			fields[fmt.Sprintf("runtime.global_file_roots.%d", i)] = "路径不能为空"
+		}
+	}
+	if len(cfg.Runtime.BrowseExtraRoots) > 32 {
+		fields["runtime.browse_extra_roots"] = "路径浏览额外根最多 32 项"
+	}
+	for i, item := range cfg.Runtime.BrowseExtraRoots {
+		if strings.TrimSpace(item) == "" {
+			fields[fmt.Sprintf("runtime.browse_extra_roots.%d", i)] = "路径不能为空"
+		}
+	}
+	switch strings.ToLower(strings.TrimSpace(cfg.Runtime.StrictNetworkDefault)) {
+	case "", "deny", "allowlist":
+	default:
+		fields["runtime.strict_network_default"] = "仅支持 deny 或 allowlist"
+	}
 
 	if len(fields) > 0 {
 		return domain.NewValidationError("YAML 配置校验失败", fields)

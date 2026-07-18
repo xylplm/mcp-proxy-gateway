@@ -19,6 +19,8 @@
 *.test
 *.out
 coverage.*
+# rapid 属性测试失败样本由测试运行自动生成，仅用于本地复现。
+/internal/transport/testdata/rapid/
 # 本地运行数据目录（YAML 配置与持久化数据）
 /data/
 
@@ -34,3 +36,4 @@ Thumbs.db
 .vscode/launch.json
 __debug_bin.exe*
 /.cache
+/.zcode/plans

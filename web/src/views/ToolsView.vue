@@ -111,8 +111,8 @@ const upstreamOptions = computed(() => {
     .sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
 })
 
-const selectedAPIKey = computed(() =>
-  apiKeys.value.find((item) => item.id === selectedAPIKeyID.value) ?? null,
+const selectedAPIKey = computed(
+  () => apiKeys.value.find((item) => item.id === selectedAPIKeyID.value) ?? null,
 )
 const perspectiveLabel = computed(() => selectedAPIKey.value?.name ?? '全局视角')
 const perspectiveDescription = computed(() => {
@@ -126,11 +126,18 @@ const visibleToolDetails = computed(() => {
   const keyword = normalizedSearchKeyword.value
   return toolDetails.value.filter((detail) => {
     if (!matchesSmartView(detail, smartView.value)) return false
-    if (selectedUpstream.value !== '' && !(detail.sources ?? []).some((source) => source.upstreamId === selectedUpstream.value)) {
+    if (
+      selectedUpstream.value !== '' &&
+      !(detail.sources ?? []).some((source) => source.upstreamId === selectedUpstream.value)
+    ) {
       return false
     }
     if (conflictFilter.value === 'conflict' && !detail.tool.schemaConflict) return false
-    if (conflictFilter.value === 'multi' && (detail.tool.sourceCount ?? detail.sources?.length ?? 1) <= 1) return false
+    if (
+      conflictFilter.value === 'multi' &&
+      (detail.tool.sourceCount ?? detail.sources?.length ?? 1) <= 1
+    )
+      return false
     if (riskFilter.value === 'risk' && toolRiskTags(detail).length === 0) return false
     if (keyword !== '' && !toolSearchText(detail).includes(keyword)) return false
     return true
@@ -149,12 +156,14 @@ const totalSourceCount = computed(() =>
   toolDetails.value.reduce((sum, detail) => sum + (detail.sources?.length ?? 0), 0),
 )
 const multiSourceCount = computed(
-  () => toolDetails.value.filter((detail) => (detail.tool.sourceCount ?? detail.sources?.length ?? 1) > 1).length,
+  () =>
+    toolDetails.value.filter(
+      (detail) => (detail.tool.sourceCount ?? detail.sources?.length ?? 1) > 1,
+    ).length,
 )
-const schemaConflictCount = computed(
-  () => toolDetails.value.filter((detail) => detail.tool.schemaConflict === true).length,
+const riskToolCount = computed(
+  () => toolDetails.value.filter((detail) => toolRiskTags(detail).length > 0).length,
 )
-const riskToolCount = computed(() => toolDetails.value.filter((detail) => toolRiskTags(detail).length > 0).length)
 const degradedSourceCount = computed(() =>
   toolDetails.value.reduce((sum, detail) => sum + degradedSources(detail).length, 0),
 )
@@ -165,14 +174,20 @@ const smartViewOptions = computed<Array<{ value: SmartView; label: string; count
   { value: 'risk', label: '风险提示', count: riskToolCount.value },
   { value: 'degraded', label: '降级来源', count: degradedToolCount.value },
 ])
-const attentionToolCount = computed(() =>
-  toolDetails.value.filter((detail) => matchesSmartView(detail, 'attention')).length,
+const attentionToolCount = computed(
+  () => toolDetails.value.filter((detail) => matchesSmartView(detail, 'attention')).length,
 )
-const degradedToolCount = computed(() =>
-  toolDetails.value.filter((detail) => matchesSmartView(detail, 'degraded')).length,
+const degradedToolCount = computed(
+  () => toolDetails.value.filter((detail) => matchesSmartView(detail, 'degraded')).length,
 )
 const visibleCountLabel = computed(() => {
-  if (smartView.value !== 'all' || hasSearchKeyword.value || selectedUpstream.value !== '' || conflictFilter.value !== 'all' || riskFilter.value !== 'all') {
+  if (
+    smartView.value !== 'all' ||
+    hasSearchKeyword.value ||
+    selectedUpstream.value !== '' ||
+    conflictFilter.value !== 'all' ||
+    riskFilter.value !== 'all'
+  ) {
     return `${visibleToolDetails.value.length.toLocaleString('zh-CN')} / ${toolDetails.value.length.toLocaleString('zh-CN')}`
   }
   return toolDetails.value.length.toLocaleString('zh-CN')
@@ -204,9 +219,10 @@ async function loadTools(showLoading = true): Promise<void> {
   loadError.value = ''
   try {
     const result = await getAggregatedTools({ apiKeyId: selectedAPIKeyID.value || undefined })
-    toolDetails.value = result.toolDetails.length > 0
-      ? result.toolDetails
-      : result.tools.map((tool) => ({ tool, sources: [] }))
+    toolDetails.value =
+      result.toolDetails.length > 0
+        ? result.toolDetails
+        : result.tools.map((tool) => ({ tool, sources: [] }))
     openSelectedToolFromQuery()
     ensureSelectedTool()
   } catch (err) {
@@ -270,7 +286,10 @@ async function clearSelectedToolResultCache(): Promise<void> {
 async function loadAPIKeyOptions(): Promise<void> {
   try {
     apiKeys.value = await listAPIKeys()
-    if (selectedAPIKeyID.value !== '' && !apiKeys.value.some((key) => key.id === selectedAPIKeyID.value)) {
+    if (
+      selectedAPIKeyID.value !== '' &&
+      !apiKeys.value.some((key) => key.id === selectedAPIKeyID.value)
+    ) {
       selectedAPIKeyID.value = ''
       scheduleRouteSync()
     }
@@ -421,9 +440,11 @@ function matchesSmartView(detail: ToolDetail, view: SmartView): boolean {
   if (view === 'multi') return (detail.tool.sourceCount ?? detail.sources?.length ?? 1) > 1
   if (view === 'risk') return toolRiskTags(detail).length > 0
   if (view === 'degraded') return degradedSources(detail).length > 0
-  return detail.tool.schemaConflict === true
-    || toolRiskTags(detail).length > 0
-    || degradedSources(detail).length > 0
+  return (
+    detail.tool.schemaConflict === true ||
+    toolRiskTags(detail).length > 0 ||
+    degradedSources(detail).length > 0
+  )
 }
 
 function schemaPreview(value: unknown): string {
@@ -475,7 +496,8 @@ function degradedSources(detail: ToolDetail): ToolSource[] {
 }
 
 function degradationText(source: ToolSource): string {
-  const reason = source.degradationReason?.trim() || '该来源近期连续失败，网关会优先尝试其他健康来源。'
+  const reason =
+    source.degradationReason?.trim() || '该来源近期连续失败，网关会优先尝试其他健康来源。'
   if (!source.degradationUntil) return reason
   const until = new Date(source.degradationUntil)
   if (Number.isNaN(until.getTime())) return reason
@@ -524,12 +546,18 @@ function nextExactPolicySortOrder(policies: ToolPolicyRule[]): number {
   return Math.min(...policies.map((policy) => policy.sortOrder)) - 1
 }
 
-function baseRiskPolicy(detail: ToolDetail, policies: ToolPolicyRule[]): {
+function baseRiskPolicy(
+  detail: ToolDetail,
+  policies: ToolPolicyRule[],
+): {
   exact: ToolPolicyRule | null
   payload: ToolPolicyRuleRequest
 } {
-  const exact = policies.find((policy) => !policy.isRegex && policy.pattern === detail.tool.name) ?? null
-  const matched = detail.policy?.ruleId ? policies.find((policy) => policy.id === detail.policy?.ruleId) : null
+  const exact =
+    policies.find((policy) => !policy.isRegex && policy.pattern === detail.tool.name) ?? null
+  const matched = detail.policy?.ruleId
+    ? policies.find((policy) => policy.id === detail.policy?.ruleId)
+    : null
   const exactIsActive = exact !== null && detail.policy?.ruleId === exact.id
   const source = exactIsActive ? exact : (matched ?? exact)
   const payload = toolPolicyToRequest(
@@ -652,12 +680,9 @@ watch(
   },
 )
 
-watch(
-  [smartView, searchKeyword, selectedUpstream, conflictFilter, riskFilter],
-  () => {
-    scheduleRouteSync()
-  },
-)
+watch([smartView, searchKeyword, selectedUpstream, conflictFilter, riskFilter], () => {
+  scheduleRouteSync()
+})
 
 onMounted(async () => {
   applyRouteQuery()
@@ -688,7 +713,7 @@ onUnmounted(() => {
       <button
         v-tooltip:bottom-end="'刷新工具目录'"
         type="button"
-        class="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-gray-200 text-gray-600 transition hover:border-brand-300 hover:bg-brand-50 hover:text-brand-600 disabled:opacity-60 dark:border-gray-800 dark:text-gray-400 dark:hover:border-brand-500/40 dark:hover:bg-brand-500/[0.08] dark:hover:text-brand-400"
+        class="hover:border-brand-300 hover:bg-brand-50 hover:text-brand-600 dark:hover:border-brand-500/40 dark:hover:bg-brand-500/[0.08] dark:hover:text-brand-400 inline-flex h-10 w-10 items-center justify-center rounded-lg border border-gray-200 text-gray-600 transition disabled:opacity-60 dark:border-gray-800 dark:text-gray-400"
         :disabled="loading || refreshing"
         aria-label="刷新工具目录"
         @click="() => loadTools(false)"
@@ -699,7 +724,7 @@ onUnmounted(() => {
 
     <p
       v-if="loadError !== ''"
-      class="mb-4 rounded-lg bg-error-50 px-4 py-2.5 text-sm text-error-600 dark:bg-error-500/10 dark:text-error-400"
+      class="bg-error-50 text-error-600 dark:bg-error-500/10 dark:text-error-400 mb-4 rounded-lg px-4 py-2.5 text-sm"
     >
       {{ loadError }}
     </p>
@@ -707,7 +732,9 @@ onUnmounted(() => {
     <div class="mb-5 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
       <section :class="cardClass">
         <p class="text-sm text-gray-500 dark:text-gray-400">可见工具</p>
-        <p class="mt-2 text-2xl font-semibold text-gray-800 dark:text-white/90">{{ visibleCountLabel }}</p>
+        <p class="mt-2 text-2xl font-semibold text-gray-800 dark:text-white/90">
+          {{ visibleCountLabel }}
+        </p>
       </section>
       <section :class="cardClass">
         <p class="text-sm text-gray-500 dark:text-gray-400">来源上游</p>
@@ -723,11 +750,19 @@ onUnmounted(() => {
       </section>
       <section :class="cardClass">
         <p class="text-sm text-gray-500 dark:text-gray-400">需关注</p>
-        <p class="mt-2 text-2xl font-semibold" :class="attentionToolCount > 0 ? 'text-warning-700 dark:text-warning-400' : 'text-success-700 dark:text-success-400'">
+        <p
+          class="mt-2 text-2xl font-semibold"
+          :class="
+            attentionToolCount > 0
+              ? 'text-warning-700 dark:text-warning-400'
+              : 'text-success-700 dark:text-success-400'
+          "
+        >
           {{ attentionToolCount.toLocaleString('zh-CN') }}
         </p>
         <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-          风险提示 {{ riskToolCount.toLocaleString('zh-CN') }} 个，降级来源 {{ degradedSourceCount.toLocaleString('zh-CN') }} 个
+          风险提示 {{ riskToolCount.toLocaleString('zh-CN') }} 个，降级来源
+          {{ degradedSourceCount.toLocaleString('zh-CN') }} 个
         </p>
       </section>
     </div>
@@ -740,14 +775,17 @@ onUnmounted(() => {
             {{ cacheEntriesLabel }} 条
           </p>
           <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-            命中率 {{ cacheHitRateLabel }}，写入 {{ (resultCache?.stores ?? 0).toLocaleString('zh-CN') }} 次，上次清理：{{ cacheLastClearedLabel }}
+            命中率 {{ cacheHitRateLabel }}，写入
+            {{ (resultCache?.stores ?? 0).toLocaleString('zh-CN') }} 次，上次清理：{{
+              cacheLastClearedLabel
+            }}
           </p>
         </div>
         <div class="flex flex-wrap gap-2">
           <button
             v-tooltip:bottom-end="'刷新缓存状态'"
             type="button"
-            class="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-gray-200 text-gray-600 transition hover:border-brand-300 hover:bg-brand-50 hover:text-brand-600 disabled:opacity-60 dark:border-gray-800 dark:text-gray-400 dark:hover:border-brand-500/40 dark:hover:bg-brand-500/[0.08] dark:hover:text-brand-400"
+            class="hover:border-brand-300 hover:bg-brand-50 hover:text-brand-600 dark:hover:border-brand-500/40 dark:hover:bg-brand-500/[0.08] dark:hover:text-brand-400 inline-flex h-10 w-10 items-center justify-center rounded-lg border border-gray-200 text-gray-600 transition disabled:opacity-60 dark:border-gray-800 dark:text-gray-400"
             :disabled="cacheLoading || cacheClearing"
             aria-label="刷新缓存状态"
             @click="loadResultCacheStats"
@@ -756,7 +794,7 @@ onUnmounted(() => {
           </button>
           <button
             type="button"
-            class="inline-flex h-10 items-center gap-2 rounded-lg border border-gray-200 px-3 text-sm font-medium text-gray-700 transition hover:border-error-300 hover:bg-error-50 hover:text-error-600 disabled:opacity-60 dark:border-gray-800 dark:text-gray-300 dark:hover:border-error-500/40 dark:hover:bg-error-500/[0.08] dark:hover:text-error-400"
+            class="hover:border-error-300 hover:bg-error-50 hover:text-error-600 dark:hover:border-error-500/40 dark:hover:bg-error-500/[0.08] dark:hover:text-error-400 inline-flex h-10 items-center gap-2 rounded-lg border border-gray-200 px-3 text-sm font-medium text-gray-700 transition disabled:opacity-60 dark:border-gray-800 dark:text-gray-300"
             :disabled="cacheClearing || (resultCache?.entries ?? 0) === 0"
             @click="clearAllResultCache"
           >
@@ -765,7 +803,10 @@ onUnmounted(() => {
           </button>
         </div>
       </div>
-      <p v-if="cacheError !== ''" class="mt-3 rounded-lg bg-error-50 px-3 py-2 text-xs text-error-600 dark:bg-error-500/10 dark:text-error-400">
+      <p
+        v-if="cacheError !== ''"
+        class="bg-error-50 text-error-600 dark:bg-error-500/10 dark:text-error-400 mt-3 rounded-lg px-3 py-2 text-xs"
+      >
         {{ cacheError }}
       </p>
     </section>
@@ -784,23 +825,35 @@ onUnmounted(() => {
             :key="item.value"
             type="button"
             class="inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition"
-            :class="smartView === item.value
-              ? 'border-brand-300 bg-brand-50 text-brand-700 dark:border-brand-500/30 dark:bg-brand-500/10 dark:text-brand-300'
-              : 'border-gray-200 text-gray-600 hover:bg-gray-50 dark:border-gray-800 dark:text-gray-300 dark:hover:bg-gray-800'"
+            :class="
+              smartView === item.value
+                ? 'border-brand-300 bg-brand-50 text-brand-700 dark:border-brand-500/30 dark:bg-brand-500/10 dark:text-brand-300'
+                : 'border-gray-200 text-gray-600 hover:bg-gray-50 dark:border-gray-800 dark:text-gray-300 dark:hover:bg-gray-800'
+            "
             @click="setSmartView(item.value)"
           >
             <span>{{ item.label }}</span>
-            <span class="rounded-full bg-white/80 px-1.5 py-0.5 text-[11px] text-gray-500 dark:bg-gray-900/60 dark:text-gray-400">
+            <span
+              class="rounded-full bg-white/80 px-1.5 py-0.5 text-[11px] text-gray-500 dark:bg-gray-900/60 dark:text-gray-400"
+            >
               {{ item.count.toLocaleString('zh-CN') }}
             </span>
           </button>
         </div>
       </div>
 
-      <div class="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-[240px_minmax(0,1fr)_220px_170px_160px_auto] xl:items-end">
+      <div
+        class="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-[240px_minmax(0,1fr)_220px_170px_160px_auto] xl:items-end"
+      >
         <label class="block">
-          <span class="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400">调用视角</span>
-          <select v-model="selectedAPIKeyID" :class="[controlClass, 'w-full']" @change="changePerspective">
+          <span class="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400"
+            >调用视角</span
+          >
+          <select
+            v-model="selectedAPIKeyID"
+            :class="[controlClass, 'w-full']"
+            @change="changePerspective"
+          >
             <option value="">全局视角</option>
             <option v-for="key in apiKeys" :key="key.id" :value="key.id">
               {{ key.name }}{{ key.enabled ? '' : '（已停用）' }}
@@ -808,7 +861,9 @@ onUnmounted(() => {
           </select>
         </label>
         <label class="block">
-          <span class="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400">搜索工具</span>
+          <span class="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400"
+            >搜索工具</span
+          >
           <input
             v-model="searchKeyword"
             type="search"
@@ -817,7 +872,9 @@ onUnmounted(() => {
           />
         </label>
         <label class="block">
-          <span class="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400">来源上游</span>
+          <span class="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400"
+            >来源上游</span
+          >
           <select v-model="selectedUpstream" :class="[controlClass, 'w-full']">
             <option value="">全部上游</option>
             <option v-for="upstream in upstreamOptions" :key="upstream.id" :value="upstream.id">
@@ -826,7 +883,9 @@ onUnmounted(() => {
           </select>
         </label>
         <label class="block">
-          <span class="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400">工具状态</span>
+          <span class="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400"
+            >工具状态</span
+          >
           <select v-model="conflictFilter" :class="[controlClass, 'w-full']">
             <option value="all">全部工具</option>
             <option value="multi">多来源工具</option>
@@ -834,7 +893,9 @@ onUnmounted(() => {
           </select>
         </label>
         <label class="block">
-          <span class="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400">风险提示</span>
+          <span class="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400"
+            >风险提示</span
+          >
           <select v-model="riskFilter" :class="[controlClass, 'w-full']">
             <option value="all">全部工具</option>
             <option value="risk">仅看风险提示</option>
@@ -848,7 +909,9 @@ onUnmounted(() => {
           重置
         </button>
       </div>
-      <div class="mt-4 rounded-lg border border-brand-100 bg-brand-50 px-3 py-2 text-xs leading-5 text-brand-700 dark:border-brand-500/20 dark:bg-brand-500/10 dark:text-brand-300">
+      <div
+        class="border-brand-100 bg-brand-50 text-brand-700 dark:border-brand-500/20 dark:bg-brand-500/10 dark:text-brand-300 mt-4 rounded-lg border px-3 py-2 text-xs leading-5"
+      >
         当前视角：{{ perspectiveLabel }}。{{ perspectiveDescription }}
       </div>
     </section>
@@ -872,12 +935,12 @@ onUnmounted(() => {
       没有匹配的工具
     </div>
 
-    <div v-else class="grid grid-cols-1 gap-4 xl:grid-cols-2 3xl:grid-cols-3">
+    <div v-else class="3xl:grid-cols-3 grid grid-cols-1 gap-4 xl:grid-cols-2">
       <button
         v-for="detail in visibleToolDetails"
         :key="detail.tool.name"
         type="button"
-        class="rounded-2xl border border-gray-200 bg-white p-4 text-left shadow-sm transition hover:border-brand-300 hover:shadow-theme-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-400 dark:border-gray-800 dark:bg-white/[0.03] dark:hover:border-brand-500/40"
+        class="hover:border-brand-300 hover:shadow-theme-sm focus-visible:ring-brand-400 dark:hover:border-brand-500/40 rounded-2xl border border-gray-200 bg-white p-4 text-left shadow-sm transition focus:outline-none focus-visible:ring-2 dark:border-gray-800 dark:bg-white/[0.03]"
         :aria-label="`查看 ${detail.tool.name} 工具详情`"
         @click="openDetail(detail)"
       >
@@ -893,19 +956,19 @@ onUnmounted(() => {
           <div class="flex shrink-0 flex-col items-end gap-1.5">
             <span
               v-if="(detail.tool.sourceCount ?? detail.sources?.length ?? 1) > 1"
-              class="rounded-full bg-brand-50 px-2 py-0.5 text-[11px] font-medium text-brand-600 dark:bg-brand-500/10 dark:text-brand-400"
+              class="bg-brand-50 text-brand-600 dark:bg-brand-500/10 dark:text-brand-400 rounded-full px-2 py-0.5 text-[11px] font-medium"
             >
               {{ sourceCountText(detail) }}
             </span>
             <span
               v-if="detail.tool.schemaConflict"
-              class="rounded-full bg-warning-50 px-2 py-0.5 text-[11px] font-medium text-warning-700 dark:bg-warning-500/10 dark:text-warning-400"
+              class="bg-warning-50 text-warning-700 dark:bg-warning-500/10 dark:text-warning-400 rounded-full px-2 py-0.5 text-[11px] font-medium"
             >
               Schema 不一致
             </span>
             <span
               v-if="degradedSources(detail).length > 0"
-              class="rounded-full bg-warning-50 px-2 py-0.5 text-[11px] font-medium text-warning-700 dark:bg-warning-500/10 dark:text-warning-400"
+              class="bg-warning-50 text-warning-700 dark:bg-warning-500/10 dark:text-warning-400 rounded-full px-2 py-0.5 text-[11px] font-medium"
             >
               来源降级
             </span>
@@ -945,9 +1008,13 @@ onUnmounted(() => {
           role="dialog"
           aria-modal="true"
         >
-          <div class="flex items-start justify-between gap-4 border-b border-gray-200 px-5 py-4 dark:border-gray-800">
+          <div
+            class="flex items-start justify-between gap-4 border-b border-gray-200 px-5 py-4 dark:border-gray-800"
+          >
             <div class="min-w-0">
-              <p class="truncate font-mono text-base font-semibold text-gray-800 dark:text-white/90">
+              <p
+                class="truncate font-mono text-base font-semibold text-gray-800 dark:text-white/90"
+              >
                 {{ selectedToolDetail.tool.name }}
               </p>
               <p class="mt-1 text-sm leading-6 text-gray-500 dark:text-gray-400">
@@ -966,18 +1033,20 @@ onUnmounted(() => {
 
           <div class="custom-scrollbar min-h-0 flex-1 overflow-y-auto p-5">
             <div class="flex flex-wrap items-center gap-2">
-              <span class="rounded-full bg-success-50 px-2.5 py-1 text-xs font-medium text-success-700 dark:bg-success-500/10 dark:text-success-400">
+              <span
+                class="bg-success-50 text-success-700 dark:bg-success-500/10 dark:text-success-400 rounded-full px-2.5 py-1 text-xs font-medium"
+              >
                 {{ selectedToolDetail.sources?.length ?? 0 }} 个来源上游
               </span>
               <span
                 v-if="selectedToolDetail.tool.schemaConflict"
-                class="rounded-full bg-warning-50 px-2.5 py-1 text-xs font-medium text-warning-700 dark:bg-warning-500/10 dark:text-warning-400"
+                class="bg-warning-50 text-warning-700 dark:bg-warning-500/10 dark:text-warning-400 rounded-full px-2.5 py-1 text-xs font-medium"
               >
                 Schema 不一致
               </span>
               <span
                 v-if="degradedSources(selectedToolDetail).length > 0"
-                class="rounded-full bg-warning-50 px-2.5 py-1 text-xs font-medium text-warning-700 dark:bg-warning-500/10 dark:text-warning-400"
+                class="bg-warning-50 text-warning-700 dark:bg-warning-500/10 dark:text-warning-400 rounded-full px-2.5 py-1 text-xs font-medium"
               >
                 {{ degradedSources(selectedToolDetail).length }} 个来源降级
               </span>
@@ -994,7 +1063,7 @@ onUnmounted(() => {
               <button
                 v-tooltip:bottom-end="'只清理当前工具的结果缓存'"
                 type="button"
-                class="inline-flex h-9 items-center gap-2 rounded-lg border border-gray-200 px-3 text-xs font-medium text-gray-700 transition hover:border-error-300 hover:bg-error-50 hover:text-error-600 disabled:opacity-60 dark:border-gray-800 dark:text-gray-300 dark:hover:border-error-500/40 dark:hover:bg-error-500/[0.08] dark:hover:text-error-400"
+                class="hover:border-error-300 hover:bg-error-50 hover:text-error-600 dark:hover:border-error-500/40 dark:hover:bg-error-500/[0.08] dark:hover:text-error-400 inline-flex h-9 items-center gap-2 rounded-lg border border-gray-200 px-3 text-xs font-medium text-gray-700 transition disabled:opacity-60 dark:border-gray-800 dark:text-gray-300"
                 :disabled="cacheClearing || (resultCache?.entries ?? 0) === 0"
                 @click="clearSelectedToolResultCache"
               >
@@ -1011,10 +1080,14 @@ onUnmounted(() => {
               该工具名称或描述包含可能改变数据、发送消息或触发财务动作的关键词；网关仅做提示与筛选，不会默认拦截。
             </div>
 
-            <section class="mt-4 rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-white/[0.02]">
+            <section
+              class="mt-4 rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-white/[0.02]"
+            >
               <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                 <div class="min-w-0">
-                  <h4 class="text-sm font-semibold text-gray-800 dark:text-white/90">风险提示修正</h4>
+                  <h4 class="text-sm font-semibold text-gray-800 dark:text-white/90">
+                    风险提示修正
+                  </h4>
                   <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
                     调整当前工具的提示标签，仅影响展示和筛选，不改变调用行为。
                   </p>
@@ -1031,7 +1104,7 @@ onUnmounted(() => {
 
               <p
                 v-if="riskError !== ''"
-                class="mt-3 rounded-lg bg-error-50 px-3 py-2 text-xs text-error-600 dark:bg-error-500/10 dark:text-error-400"
+                class="bg-error-50 text-error-600 dark:bg-error-500/10 dark:text-error-400 mt-3 rounded-lg px-3 py-2 text-xs"
               >
                 {{ riskError }}
               </p>
@@ -1044,16 +1117,24 @@ onUnmounted(() => {
                     :key="tag.key"
                     type="button"
                     class="rounded-lg border px-3 py-2 text-left text-xs transition disabled:cursor-not-allowed disabled:opacity-50"
-                    :class="autoRiskTagIgnored(selectedToolDetail, tag.key)
-                      ? 'border-gray-300 bg-gray-100 text-gray-700 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200'
-                      : autoRiskTagDetected(selectedToolDetail, tag.key)
-                        ? 'border-warning-200 bg-warning-50 text-warning-700 hover:bg-warning-100 dark:border-warning-500/30 dark:bg-warning-500/10 dark:text-warning-300'
-                        : 'border-gray-200 text-gray-500 dark:border-gray-800 dark:text-gray-500'"
+                    :class="
+                      autoRiskTagIgnored(selectedToolDetail, tag.key)
+                        ? 'border-gray-300 bg-gray-100 text-gray-700 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200'
+                        : autoRiskTagDetected(selectedToolDetail, tag.key)
+                          ? 'border-warning-200 bg-warning-50 text-warning-700 hover:bg-warning-100 dark:border-warning-500/30 dark:bg-warning-500/10 dark:text-warning-300'
+                          : 'border-gray-200 text-gray-500 dark:border-gray-800 dark:text-gray-500'
+                    "
                     :disabled="riskSaving || !autoRiskTagDetected(selectedToolDetail, tag.key)"
                     @click="toggleAutoRiskTagIgnore(tag.key)"
                   >
                     <span class="block font-medium">
-                      {{ autoRiskTagIgnored(selectedToolDetail, tag.key) ? '已忽略' : autoRiskTagDetected(selectedToolDetail, tag.key) ? '已识别' : '未识别' }}：{{ tag.label }}
+                      {{
+                        autoRiskTagIgnored(selectedToolDetail, tag.key)
+                          ? '已忽略'
+                          : autoRiskTagDetected(selectedToolDetail, tag.key)
+                            ? '已识别'
+                            : '未识别'
+                      }}：{{ tag.label }}
                     </span>
                     <span class="mt-1 block text-[11px] opacity-80">{{ tag.description }}</span>
                   </button>
@@ -1068,7 +1149,11 @@ onUnmounted(() => {
                     :key="tag"
                     type="button"
                     class="rounded-full border px-2.5 py-1 text-xs font-medium transition disabled:opacity-50"
-                    :class="customRiskTags(selectedToolDetail).includes(tag) ? 'border-warning-300 bg-warning-50 text-warning-700 dark:border-warning-500/30 dark:bg-warning-500/10 dark:text-warning-300' : 'border-gray-200 text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800'"
+                    :class="
+                      customRiskTags(selectedToolDetail).includes(tag)
+                        ? 'border-warning-300 bg-warning-50 text-warning-700 dark:border-warning-500/30 dark:bg-warning-500/10 dark:text-warning-300'
+                        : 'border-gray-200 text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800'
+                    "
                     :disabled="riskSaving"
                     @click="toggleCustomRiskTag(tag)"
                   >
@@ -1080,7 +1165,7 @@ onUnmounted(() => {
                     v-model="riskTagInput"
                     type="text"
                     placeholder="自定义标签"
-                    class="min-w-0 flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-800 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 focus:outline-none disabled:opacity-50 dark:border-gray-700 dark:bg-gray-800 dark:text-white/90"
+                    class="focus:border-brand-400 focus:ring-brand-100 min-w-0 flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-800 focus:ring-2 focus:outline-none disabled:opacity-50 dark:border-gray-700 dark:bg-gray-800 dark:text-white/90"
                     :disabled="riskSaving"
                     @keydown="onRiskTagInputKeydown"
                   />
@@ -1093,12 +1178,15 @@ onUnmounted(() => {
                     添加
                   </button>
                 </div>
-                <div v-if="customRiskTags(selectedToolDetail).length > 0" class="mt-2 flex flex-wrap gap-1.5">
+                <div
+                  v-if="customRiskTags(selectedToolDetail).length > 0"
+                  class="mt-2 flex flex-wrap gap-1.5"
+                >
                   <button
                     v-for="tag in customRiskTags(selectedToolDetail)"
                     :key="tag"
                     type="button"
-                    class="rounded-full bg-warning-50 px-2 py-0.5 text-xs text-warning-700 transition hover:bg-warning-100 disabled:opacity-50 dark:bg-warning-500/10 dark:text-warning-300"
+                    class="bg-warning-50 text-warning-700 hover:bg-warning-100 dark:bg-warning-500/10 dark:text-warning-300 rounded-full px-2 py-0.5 text-xs transition disabled:opacity-50"
                     :disabled="riskSaving"
                     @click="removeCustomRiskTag(tag)"
                   >
@@ -1110,14 +1198,14 @@ onUnmounted(() => {
 
             <div
               v-if="selectedToolDetail.tool.schemaConflict"
-              class="mt-4 rounded-lg border border-warning-200 bg-warning-50 px-3 py-2 text-xs leading-5 text-warning-700 dark:border-warning-500/30 dark:bg-warning-500/10 dark:text-warning-300"
+              class="border-warning-200 bg-warning-50 text-warning-700 dark:border-warning-500/30 dark:bg-warning-500/10 dark:text-warning-300 mt-4 rounded-lg border px-3 py-2 text-xs leading-5"
             >
               同名来源的入参 Schema 不完全一致，调用时只会选择与当前展示 Schema 一致的来源。
             </div>
 
             <div
               v-if="degradedSources(selectedToolDetail).length > 0"
-              class="mt-4 rounded-lg border border-warning-200 bg-warning-50 px-3 py-2 text-xs leading-5 text-warning-700 dark:border-warning-500/30 dark:bg-warning-500/10 dark:text-warning-300"
+              class="border-warning-200 bg-warning-50 text-warning-700 dark:border-warning-500/30 dark:bg-warning-500/10 dark:text-warning-300 mt-4 rounded-lg border px-3 py-2 text-xs leading-5"
             >
               部分来源近期连续失败，网关正在优先选择其他健康来源；冷却结束后会自动恢复尝试。
             </div>
@@ -1135,7 +1223,9 @@ onUnmounted(() => {
                     {{ selectedGovernance.description }}
                   </p>
                 </div>
-                <span class="shrink-0 rounded-full bg-gray-100 px-2.5 py-1 text-xs text-gray-600 dark:bg-white/5 dark:text-gray-400">
+                <span
+                  class="shrink-0 rounded-full bg-gray-100 px-2.5 py-1 text-xs text-gray-600 dark:bg-white/5 dark:text-gray-400"
+                >
                   治理解释
                 </span>
               </div>
@@ -1167,7 +1257,10 @@ onUnmounted(() => {
                       {{ source.originalName }}
                     </p>
                   </div>
-                  <span class="rounded-full px-2 py-0.5 text-[11px] font-medium" :class="sourceStatusClass(source)">
+                  <span
+                    class="rounded-full px-2 py-0.5 text-[11px] font-medium"
+                    :class="sourceStatusClass(source)"
+                  >
                     {{ sourceStatusLabel(source) }}
                   </span>
                 </div>
@@ -1179,7 +1272,7 @@ onUnmounted(() => {
                 </p>
                 <p
                   v-if="source.temporarilyDegraded"
-                  class="mt-2 rounded-md bg-warning-50 px-2 py-1 text-[11px] leading-5 text-warning-700 dark:bg-warning-500/10 dark:text-warning-300"
+                  class="bg-warning-50 text-warning-700 dark:bg-warning-500/10 dark:text-warning-300 mt-2 rounded-md px-2 py-1 text-[11px] leading-5"
                 >
                   {{ degradationText(source) }}
                 </p>
@@ -1197,7 +1290,10 @@ onUnmounted(() => {
               <summary class="cursor-pointer text-xs font-medium text-gray-700 dark:text-gray-300">
                 查看入参 Schema
               </summary>
-              <pre class="custom-scrollbar mt-3 max-h-72 overflow-auto text-xs leading-5 text-gray-600 dark:text-gray-300">{{ schemaPreview(selectedToolDetail.tool.inputSchema) }}</pre>
+              <pre
+                class="custom-scrollbar mt-3 max-h-72 overflow-auto text-xs leading-5 text-gray-600 dark:text-gray-300"
+                >{{ schemaPreview(selectedToolDetail.tool.inputSchema) }}</pre
+              >
             </details>
           </div>
         </div>

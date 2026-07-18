@@ -1,0 +1,47 @@
+# 完整版镜像（full）：精简网关 + 常用本地 stdio 运行时（Node.js / npm / Python 3）。
+# 目标：模板市场与常见本地 MCP 开箱即用；体积大于默认 slim。
+#
+# 标签约定（CI）：
+#   xylplm/mcp-proxy-gateway:full
+#   xylplm/mcp-proxy-gateway:<version>-full
+#
+# 仍可通过管理台预置安装 uv，或把工具放入 $MPG_DATA_DIR/runtime 覆盖/补充。
+# 多架构：Alpine apk 与 TARGETARCH 二进制一致，buildx 一次推 linux/amd64+arm64。
+#
+# 本地构建示例：
+#   docker build -f Dockerfile.full --build-arg TARGETARCH=amd64 -t xylplm/mcp-proxy-gateway:full .
+
+FROM alpine:3.24
+
+# ca/tz + 最常用 stdio 宿主：Node（含 npx/npm）与 Python3。
+# 使用发行版 apk 以保证 amd64/arm64 同源可维护；版本随 Alpine 3.24 小版本演进。
+RUN apk add --no-cache \
+      ca-certificates \
+      tzdata \
+      nodejs \
+      npm \
+      python3 \
+      py3-pip \
+  && ln -sf python3 /usr/bin/python \
+  && node -v \
+  && npm -v \
+  && python3 --version \
+  && python --version
+
+ARG TARGETARCH
+COPY bin/mpg-linux-${TARGETARCH} /mpg
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /mpg /entrypoint.sh
+
+ENV MPG_PG_DSN="" \
+    MPG_REDIS_ADDR="" \
+    MPG_DATA_DIR="/data" \
+    # 便于运维与管理台识别镜像形态（非网关硬依赖）
+    MPG_IMAGE_FLAVOR="full"
+
+VOLUME ["/data"]
+
+EXPOSE 8080
+
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["/mpg"]

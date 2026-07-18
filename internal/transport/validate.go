@@ -7,6 +7,7 @@ import (
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
 	"github.com/myGithub/mcp-proxy-gateway/internal/runtime"
+	"github.com/myGithub/mcp-proxy-gateway/internal/scripts"
 )
 
 // 连接参数键名常量，集中定义以便各传输类型会话实现（任务 8.3-8.6）复用，
@@ -20,8 +21,14 @@ const (
 	ParamEnv = "env"
 	// ParamCWD 为 stdio 传输的工作目录，可选，需为非空字符串。
 	ParamCWD = "cwd"
+	// ParamLaunchMode 为 stdio 启动形态（command | script），缺省为 command。
+	ParamLaunchMode = "launchMode"
+	// ParamScriptRef 为受管脚本引用（launchMode=script）。
+	ParamScriptRef = "scriptRef"
 	// ParamRuntimeRequirements 为 stdio 本地运行时依赖声明，可选对象。
 	ParamRuntimeRequirements = runtime.ParamRuntimeRequirements
+	// ParamSecurityProfile 为 stdio 本地运行安全档位与子策略，可选对象。
+	ParamSecurityProfile = runtime.ParamSecurityProfile
 	// ParamURL 为 SSE / Streamable-HTTP / WebSocket 传输的服务地址，必填。
 	ParamURL = "url"
 	// ParamHeaders 为 SSE / Streamable-HTTP / WebSocket 传输的请求头映射，可选。
@@ -90,34 +97,98 @@ func ValidateConnParams(cfg domain.UpstreamConfig) error {
 
 // validateStdioParams 校验 stdio 传输的连接参数：command 必填，args/env/cwd 可选。
 func validateStdioParams(params map[string]any, fields map[string]string) {
-	command, ok := requireStringParam(params, ParamCommand, fields)
-	if ok {
-		// 安全策略：危险 shell denylist + 可配置 allowlist + stdio 总开关。
-		if err := runtime.ValidateCommand(command, currentPolicy()); err != nil {
-			fields[fieldKey(ParamCommand)] = err.Error()
+	policy := currentPolicy()
+	profile := runtime.SecurityProfile{}
+	if raw, ok := params[ParamSecurityProfile]; ok && raw != nil {
+		p, err := runtime.ValidateSecurityProfile(raw)
+		if err != nil {
+			fields[fieldKey(ParamSecurityProfile)] = err.Error()
+		} else {
+			profile = p
 		}
 	}
 
+	var args []string
 	// args 为可选参数；若提供则必须为字符串数组（兼容 JSON 解析得到的 []any）。
 	if raw, ok := params[ParamArgs]; ok && raw != nil {
 		switch v := raw.(type) {
 		case []string:
-			// 已是字符串数组，合法。
+			args = append(args, v...)
 		case []any:
 			for i, item := range v {
-				if _, isStr := item.(string); !isStr {
+				s, isStr := item.(string)
+				if !isStr {
 					fields[fieldKey(ParamArgs)] = fmt.Sprintf("连接参数 %q 第 %d 个元素必须为字符串", ParamArgs, i)
 					return
 				}
+				args = append(args, s)
 			}
 		default:
 			fields[fieldKey(ParamArgs)] = fmt.Sprintf("连接参数 %q 必须为字符串数组", ParamArgs)
 		}
 	}
 
+	cwd := ""
+	if raw, ok := params[ParamCWD]; ok && raw != nil {
+		if s, isStr := raw.(string); isStr {
+			cwd = strings.TrimSpace(s)
+		}
+	}
+
+	command := ""
+	scriptRisk := scripts.RiskLevel("")
+	if managedCommand, managedArgs, managedCWD, risk, _, isScript, err := resolveManagedScript(params); isScript {
+		if err != nil {
+			fields[fieldKey(ParamScriptRef)] = err.Error()
+		} else {
+			command = managedCommand
+			args = managedArgs
+			cwd = managedCWD
+			scriptRisk = risk
+		}
+	} else if dirCommand, dirArgs, dirCWD, isDirectory, err := resolveDirectoryLaunch(params, policy, profile.FileAccess.Paths); isDirectory {
+		if err != nil {
+			fields["connParams.directoryRef"] = err.Error()
+		} else {
+			command = dirCommand
+			args = dirArgs
+			cwd = dirCWD
+		}
+	} else {
+		command, _ = requireStringParam(params, ParamCommand, fields)
+	}
+
+	eff := runtime.ResolveEffectiveSecurity(policy, profile, cwd)
+	if err := runtime.ValidateIsolationRequirement(policy, eff); err != nil {
+		fields[fieldKey(ParamSecurityProfile)] = err.Error()
+	}
+	if scriptRisk == scripts.RiskCritical && eff.Mode != runtime.SecurityModeUnrestricted {
+		fields[fieldKey(ParamSecurityProfile)] = "极高风险脚本必须使用完全放行档位并明确确认风险"
+	}
+
+	if command != "" {
+		// 安全策略：危险 shell denylist + 按档位 allowlist + stdio 总开关。
+		if err := runtime.ValidateCommandForSecurity(command, policy, eff); err != nil {
+			fields[fieldKey(ParamCommand)] = err.Error()
+		}
+	}
+
 	validateOptionalStringMapParam(params, ParamEnv, fields)
 	validateOptionalStringParam(params, ParamCWD, fields)
 	validateRuntimeRequirements(params, fields)
+
+	if err := runtime.ValidateEffectiveSecurityWithCommand(eff, cwd, command, args); err != nil {
+		// 挂到最相关字段，便于表单定位。
+		msg := err.Error()
+		switch {
+		case strings.Contains(msg, "工作目录") || strings.Contains(msg, "文件允许"):
+			fields[fieldKey(ParamCWD)] = msg
+		case strings.Contains(msg, "自装包") || strings.Contains(msg, "全局安装"):
+			fields[fieldKey(ParamArgs)] = msg
+		default:
+			fields[fieldKey(ParamSecurityProfile)] = msg
+		}
+	}
 }
 
 func validateRuntimeRequirements(params map[string]any, fields map[string]string) {

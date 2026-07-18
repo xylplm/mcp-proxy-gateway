@@ -139,6 +139,22 @@ export interface RuntimePolicyConfig {
   extra_sensitive_env_prefixes: string[]
   /** 是否启用 stdio 进程加固（Linux 进程组/父亡杀子等），默认 true。 */
   process_hardening?: boolean
+  /** 上游未声明时的默认本地运行安全档位。 */
+  default_stdio_security_mode?: 'standard' | 'strict' | 'unrestricted' | string
+  /** 严格档命令子集（与 command_allowlist 取交集）。 */
+  strict_command_allowlist?: string[]
+  /** 严格档允许 npx/uvx 执行的包/工具名（支持 @scope/*）。 */
+  strict_package_allowlist?: string[]
+  /** 全局默认文件允许路径。 */
+  global_file_roots?: string[]
+  /** 路径选择器额外可浏览根（仅扩大浏览，不改变 stdio 安全策略）。 */
+  browse_extra_roots?: string[]
+  /** 严格档是否仅从 runtime 卷解析命令。 */
+  strict_path_only_runtime?: boolean
+  /** 严格档默认网络策略。 */
+  strict_network_default?: 'deny' | 'allowlist' | string
+  /** 无内核隔离时是否允许严格档仅策略运行。 */
+  strict_allow_policy_only?: boolean
 }
 
 /** 小智接入配置（对应后端 XiaoZhiConfig，Req 15）。 */
@@ -243,7 +259,10 @@ export async function getSettings(): Promise<YAMLConfig> {
  * cron 非法或字段越界时后端返回 VALIDATION（HTTP 400，含 fields），由调用方按字段展示；
  * 成功时返回回写后的配置快照（管理员凭证已清空）。
  */
-export async function updateSettings(payload: YAMLConfig, options?: UpdateSettingsOptions): Promise<YAMLConfig> {
+export async function updateSettings(
+  payload: YAMLConfig,
+  options?: UpdateSettingsOptions,
+): Promise<YAMLConfig> {
   const res = await request.put<SettingsResponse>('/settings', payload, {
     params: options?.restart ? { restart: 'true' } : undefined,
   })

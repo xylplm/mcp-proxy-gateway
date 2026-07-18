@@ -5,8 +5,6 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-
-	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
 )
 
 // ctxClaimsKey 是校验通过的会话信息在 gin.Context 中的存储键。
@@ -143,5 +141,9 @@ func extractBearerToken(header string) (string, bool) {
 
 // abortUnauthorized 以统一错误模型返回 HTTP 401 并中止后续处理器执行（Req 1.6）。
 func abortUnauthorized(c *gin.Context, message string) {
-	c.AbortWithStatusJSON(http.StatusUnauthorized, domain.NewError(domain.CodeUnauthorized, message))
+	c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+		"code":    40100,
+		"message": message,
+		"data":    nil,
+	})
 }

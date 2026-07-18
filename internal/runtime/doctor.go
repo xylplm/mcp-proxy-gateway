@@ -18,20 +18,25 @@ type ToolStatus struct {
 
 // Summary 为管理台「运行环境」摘要。
 type Summary struct {
-	StdioEnabled      bool                `json:"stdioEnabled"`
-	CommandAllowlist  []string            `json:"commandAllowlist"`
-	Tools             []ToolStatus        `json:"tools"`
-	AvailableCount    int                 `json:"availableCount"`
-	MissingCount      int                 `json:"missingCount"`
-	DataDir           string              `json:"dataDir,omitempty"`
-	RuntimeDir        string              `json:"runtimeDir,omitempty"`
-	PathPrefixes      []string            `json:"pathPrefixes,omitempty"`
-	LayoutReady       bool                `json:"layoutReady"`
-	ProcessHardening  bool                `json:"processHardening"`
-	Sandbox           SandboxCapabilities `json:"sandbox"`
-	Catalog           []CatalogPackage    `json:"catalog,omitempty"`
-	InstalledPackages []InstallRecord     `json:"installedPackages,omitempty"`
-	RiskNotes         []string            `json:"riskNotes"`
+	StdioEnabled             bool                `json:"stdioEnabled"`
+	CommandAllowlist         []string            `json:"commandAllowlist"`
+	StrictCommandAllowlist   []string            `json:"strictCommandAllowlist,omitempty"`
+	StrictPackageAllowlist   []string            `json:"strictPackageAllowlist,omitempty"`
+	DefaultStdioSecurityMode StdioSecurityMode   `json:"defaultStdioSecurityMode"`
+	GlobalFileRoots          []string            `json:"globalFileRoots,omitempty"`
+	StrictPathOnlyRuntime    bool                `json:"strictPathOnlyRuntime"`
+	Tools                    []ToolStatus        `json:"tools"`
+	AvailableCount           int                 `json:"availableCount"`
+	MissingCount             int                 `json:"missingCount"`
+	DataDir                  string              `json:"dataDir,omitempty"`
+	RuntimeDir               string              `json:"runtimeDir,omitempty"`
+	PathPrefixes             []string            `json:"pathPrefixes,omitempty"`
+	LayoutReady              bool                `json:"layoutReady"`
+	ProcessHardening         bool                `json:"processHardening"`
+	Sandbox                  SandboxCapabilities `json:"sandbox"`
+	Catalog                  []CatalogPackage    `json:"catalog,omitempty"`
+	InstalledPackages        []InstallRecord     `json:"installedPackages,omitempty"`
+	RiskNotes                []string            `json:"riskNotes"`
 }
 
 // LookPathFunc 便于单测注入。
@@ -104,8 +109,18 @@ func BuildSummary(
 			}
 		}
 	}
+	strictAllow := policy.StrictCommandAllowlist
+	if len(strictAllow) == 0 {
+		strictAllow = DefaultStrictCommandAllowlist()
+	}
+	pkgAllow := policy.StrictPackageAllowlist
+	if len(pkgAllow) == 0 {
+		pkgAllow = DefaultStrictPackageAllowlist()
+	}
 	notes := []string{
 		"stdio 上游在网关进程旁启动本地子进程，请仅接入可信命令与包来源。",
+		"本地运行安全档位（标准 / 严格 / 完全放行）可按上游收敛命令、文件路径与自装包意图；当前为策略约束，不是内核沙箱。",
+		"严格模式下 npx/uvx 可执行，但目标包/工具必须落在包白名单内（支持 @scope/*）。",
 		"远程 SSE / HTTP / WebSocket / OpenAPI 上游不依赖本页工具探测。",
 		"预置安装仅允许内置目录中的 Node / uv 固定版本，禁止任意 URL 或 npm 包名。",
 	}
@@ -119,20 +134,25 @@ func BuildSummary(
 		)
 	}
 	return Summary{
-		StdioEnabled:      policy.StdioEnabled,
-		CommandAllowlist:  append([]string{}, allowlist...),
-		Tools:             tools,
-		AvailableCount:    available,
-		MissingCount:      missing,
-		DataDir:           dataDir,
-		RuntimeDir:        runtimeDir,
-		PathPrefixes:      append([]string{}, pathPrefixes...),
-		LayoutReady:       layoutReady,
-		ProcessHardening:  policy.ProcessHardening,
-		Sandbox:           DescribeSandbox(),
-		Catalog:           catalog,
-		InstalledPackages: installed,
-		RiskNotes:         notes,
+		StdioEnabled:             policy.StdioEnabled,
+		CommandAllowlist:         append([]string{}, allowlist...),
+		StrictCommandAllowlist:   append([]string{}, strictAllow...),
+		StrictPackageAllowlist:   append([]string{}, pkgAllow...),
+		DefaultStdioSecurityMode: policy.DefaultStdioSecurityMode,
+		GlobalFileRoots:          append([]string{}, policy.GlobalFileRoots...),
+		StrictPathOnlyRuntime:    policy.StrictPathOnlyRuntime,
+		Tools:                    tools,
+		AvailableCount:           available,
+		MissingCount:             missing,
+		DataDir:                  dataDir,
+		RuntimeDir:               runtimeDir,
+		PathPrefixes:             append([]string{}, pathPrefixes...),
+		LayoutReady:              layoutReady,
+		ProcessHardening:         policy.ProcessHardening,
+		Sandbox:                  DescribeSandbox(),
+		Catalog:                  catalog,
+		InstalledPackages:        installed,
+		RiskNotes:                notes,
 	}
 }
 

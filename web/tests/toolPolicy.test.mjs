@@ -38,7 +38,7 @@ test('builds compact tool policy request', () => {
 
 test('formats routing and cache labels', () => {
   assert.equal(routingStrategyLabel(''), '不覆盖')
-  assert.equal(routingStrategyLabel('round_robin'), '轮询')
+  assert.equal(routingStrategyLabel('round_robin'), '智能均衡')
   assert.equal(cachePolicyLabel({ cacheEnabled: false }), '未启用缓存')
   assert.equal(cachePolicyLabel({ cacheEnabled: true, cacheTtlSeconds: 30 }), '缓存 30 秒')
 })

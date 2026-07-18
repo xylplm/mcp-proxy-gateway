@@ -207,7 +207,7 @@ func TestAdminAPIRejectedWithoutJWT(t *testing.T) {
 		if rec.Code != http.StatusUnauthorized {
 			t.Fatalf("无 JWT 的管理 API %q 应返回 401，实际 %d（body=%s）", path, rec.Code, rec.Body.String())
 		}
-		assertErrorCode(t, rec.Body.Bytes(), domain.CodeUnauthorized)
+		assertBusinessCode(t, rec.Body.Bytes(), 40100)
 	}
 }
 
@@ -226,7 +226,7 @@ func TestMCPAPIRejectedWithoutAPIKey(t *testing.T) {
 		if rec.Code != http.StatusUnauthorized {
 			t.Fatalf("无 API Key 的 MCP 请求 %q 应返回 401，实际 %d（body=%s）", path, rec.Code, rec.Body.String())
 		}
-		assertErrorCode(t, rec.Body.Bytes(), domain.CodeUnauthorized)
+		assertDomainErrorCode(t, rec.Body.Bytes(), domain.CodeUnauthorized)
 	}
 }
 
@@ -304,14 +304,28 @@ func TestHealthzReachableWithoutAuth(t *testing.T) {
 	}
 }
 
-// assertErrorCode 断言响应体是统一错误模型且其 code 等于期望值。
-func assertErrorCode(t *testing.T, body []byte, want domain.ErrorCode) {
+func assertDomainErrorCode(t *testing.T, body []byte, want domain.ErrorCode) {
 	t.Helper()
 	var apiErr domain.APIError
 	if err := json.Unmarshal(body, &apiErr); err != nil {
-		t.Fatalf("响应体应为统一错误模型 JSON，解析失败：%v（body=%s）", err, string(body))
+		t.Fatalf("响应体应为领域错误 JSON，解析失败：%v（body=%s）", err, string(body))
 	}
 	if apiErr.Code != want {
 		t.Fatalf("错误 code 应为 %q，实际 %q", want, apiErr.Code)
+	}
+}
+
+// assertBusinessCode 断言响应体使用统一数字信封且 code 等于期望值。
+func assertBusinessCode(t *testing.T, body []byte, want int) {
+	t.Helper()
+	var envelope struct {
+		Code int `json:"code"`
+		Data any `json:"data"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		t.Fatalf("响应体应为统一信封 JSON，解析失败：%v（body=%s）", err, string(body))
+	}
+	if envelope.Code != want || envelope.Data != nil {
+		t.Fatalf("错误 code 应为 %d 且 data=null，实际 %+v", want, envelope)
 	}
 }

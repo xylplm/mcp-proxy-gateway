@@ -213,12 +213,15 @@ func assertUnauthorizedNoDetails(t *testing.T, rec *httptest.ResponseRecorder) {
 		t.Fatalf("未通过鉴权应返回 401，实际 %d（body=%s）", rec.Code, rec.Body.String())
 	}
 
-	var apiErr domain.APIError
-	if err := json.Unmarshal(rec.Body.Bytes(), &apiErr); err != nil {
-		t.Fatalf("响应应为合法 APIError JSON：%v", err)
+	var envelope struct {
+		Code int `json:"code"`
+		Data any `json:"data"`
 	}
-	if apiErr.Code != domain.CodeUnauthorized {
-		t.Errorf("错误码应为 %q，实际 %q", domain.CodeUnauthorized, apiErr.Code)
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("响应应为合法统一信封 JSON：%v", err)
+	}
+	if envelope.Code != 40100 || envelope.Data != nil {
+		t.Errorf("错误码应为 40100 且 data=null，实际 %+v", envelope)
 	}
 
 	// 401 响应不得泄露任何健康明细（Req 20.8）。

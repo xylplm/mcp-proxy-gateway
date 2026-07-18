@@ -3,6 +3,7 @@
 package runtime
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"syscall"
@@ -11,8 +12,8 @@ import (
 
 // TerminateProcessTree 在会话关闭后清理 stdio 子进程树。
 //
-// Linux/Unix：若启用了独立进程组，向整个组发送 SIGTERM，短暂等待后再 SIGKILL，
-// 避免 npx/uvx 拉起的孙进程在主进程退出后残留。
+// Unix：若启用了独立进程组，向整个组发送 SIGTERM，短暂等待后再 SIGKILL。
+// exec.Cmd 的 Wait 由 SDK 唯一负责；这里仅观察进程组，避免并发/重复回收主进程。
 func TerminateProcessTree(cmd *exec.Cmd) {
 	if cmd == nil || cmd.Process == nil {
 		return
@@ -22,28 +23,25 @@ func TerminateProcessTree(cmd *exec.Cmd) {
 		return
 	}
 
-	// 先尝试按进程组终止（ApplySandbox 设置了 Setpgid）。
-	_ = syscall.Kill(-pid, syscall.SIGTERM)
-
-	done := make(chan struct{})
-	go func() {
-		_, _ = cmd.Process.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-		return
-	case <-time.After(2 * time.Second):
+	if err := syscall.Kill(-pid, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
+		// 进程组未建立或信号失败时，至少终止 leader；SDK 仍负责 Wait。
+		_ = cmd.Process.Signal(syscall.SIGTERM)
 	}
 
-	_ = syscall.Kill(-pid, syscall.SIGKILL)
-	// 兜底杀 leader（组信号失败时）。
+	deadline := time.Now().Add(2 * time.Second)
+	for processGroupAlive(pid) && time.Now().Before(deadline) {
+		time.Sleep(25 * time.Millisecond)
+	}
+	if processGroupAlive(pid) {
+		_ = syscall.Kill(-pid, syscall.SIGKILL)
+	}
+	// 兜底杀 leader（组信号失败时）；不调用 Wait。
 	_ = cmd.Process.Kill()
-	select {
-	case <-done:
-	case <-time.After(1 * time.Second):
-	}
+}
+
+func processGroupAlive(pid int) bool {
+	err := syscall.Kill(-pid, syscall.Signal(0))
+	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
 // ensureProcessStarted 供测试/兼容；unix 下无额外动作。

@@ -12,6 +12,9 @@ export interface RuntimeToolStatus {
 
 export interface SandboxCapabilities {
   processHardeningSupported: boolean
+  filesystemIsolationSupported?: boolean
+  networkIsolationSupported?: boolean
+  isolationBackend?: string
   platform: string
   description: string
 }
@@ -53,6 +56,11 @@ export interface RuntimeInstallRecord {
 export interface RuntimeSummary {
   stdioEnabled: boolean
   commandAllowlist: string[]
+  strictCommandAllowlist?: string[]
+  strictPackageAllowlist?: string[]
+  defaultStdioSecurityMode?: 'standard' | 'strict' | 'unrestricted' | string
+  globalFileRoots?: string[]
+  strictPathOnlyRuntime?: boolean
   tools: RuntimeToolStatus[]
   availableCount: number
   missingCount: number
@@ -74,6 +82,28 @@ export interface RuntimeInstallResult {
   tools: string[]
   runtimeDir: string
   reused: boolean
+}
+
+export interface DirectoryLaunchEntry {
+  id: string
+  label?: string
+  runtime: string
+  command: string
+  args: string[]
+  cwd?: string
+  recommendedMode?: string
+}
+
+export interface DirectoryLaunchResult {
+  root: string
+  manifestPath?: string
+  entries: DirectoryLaunchEntry[]
+  warnings: string[]
+}
+
+export async function inspectRuntimeDirectory(path: string): Promise<DirectoryLaunchResult> {
+  const res = await request.post<DirectoryLaunchResult>('/runtime/directory/inspect', { path })
+  return res.data
 }
 
 export async function getRuntimeSummary(): Promise<RuntimeSummary> {
@@ -98,10 +128,15 @@ export async function installRuntimePackage(packageId: string): Promise<RuntimeI
   return res.data
 }
 
-export async function uninstallRuntimePackage(packageId: string): Promise<{ uninstalled: boolean; packageId: string }> {
-  const res = await request.post<{ uninstalled: boolean; packageId: string }>('/runtime/uninstall', {
-    packageId,
-  })
+export async function uninstallRuntimePackage(
+  packageId: string,
+): Promise<{ uninstalled: boolean; packageId: string }> {
+  const res = await request.post<{ uninstalled: boolean; packageId: string }>(
+    '/runtime/uninstall',
+    {
+      packageId,
+    },
+  )
   return res.data
 }
 
@@ -135,6 +170,21 @@ export interface RuntimePreflightAction {
   label: string
 }
 
+export interface RuntimeEffectiveSecurity {
+  mode: string
+  fileAccess?: { mode?: string; paths?: string[] }
+  network?: { mode?: string; hosts?: string[] }
+  dependencyPolicy?: string
+  allowSelfInstall?: boolean
+  processHardening?: boolean
+  strictPathOnlyRuntime?: boolean
+  commandAllowlist?: string[]
+  riskLevel?: string
+  note?: string
+  requiresAck?: boolean
+  policyOnlyIsolation?: boolean
+}
+
 export interface RuntimePreflightResult {
   ready: boolean
   transport: string
@@ -148,6 +198,13 @@ export interface RuntimePreflightResult {
   runtimeDir?: string
   actions?: RuntimePreflightAction[]
   cached?: boolean
+  securityMode?: string
+  riskLevel?: string
+  securityOk?: boolean
+  securityError?: string
+  effectiveSecurity?: RuntimeEffectiveSecurity
+  fileAccessOk?: boolean
+  networkPolicy?: { mode?: string; hosts?: string[] }
 }
 
 export async function getRuntimeKnownTools(): Promise<RuntimeKnownTool[]> {
@@ -158,7 +215,10 @@ export async function getRuntimeKnownTools(): Promise<RuntimeKnownTool[]> {
 export async function preflightRuntime(payload: {
   transport: string
   command?: string
+  args?: string[]
+  cwd?: string
   requirements?: RuntimeRequirementsPayload
+  securityProfile?: import('@/api/upstreams').SecurityProfile
   templateRuntimes?: string[]
 }): Promise<RuntimePreflightResult> {
   const res = await request.post<RuntimePreflightResult>('/runtime/preflight', payload)

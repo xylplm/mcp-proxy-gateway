@@ -62,13 +62,54 @@ export interface RuntimeRequirements {
   note?: string
 }
 
+/** stdio 本地运行安全档位（与后端 securityProfile 对齐）。 */
+export type StdioSecurityMode = 'standard' | 'strict' | 'unrestricted'
+
+export interface SecurityProfile {
+  mode?: StdioSecurityMode | ''
+  fileAccess?: {
+    mode?: 'inherit' | 'deny' | 'allowlist' | 'unrestricted' | string
+    paths?: string[]
+  }
+  network?: {
+    mode?: 'inherit' | 'deny' | 'allowlist' | 'unrestricted' | string
+    hosts?: string[]
+  }
+  dependencyPolicy?: 'inherit' | 'declared_only' | 'catalog_only' | 'unrestricted' | string
+  /** 严格档追加的 npx/uvx 包白名单（与全局并集）。 */
+  packageAllowlist?: string[]
+  allowSelfInstall?: boolean
+  note?: string
+}
+
+export interface ScriptRef {
+  scriptId: string
+  version: string
+  contentSha256: string
+  /** 启动预览可返回，持久化绑定不依赖这些部署路径字段。 */
+  entryFile?: string
+  runtime?: string
+  entryPath?: string
+}
+
 export interface ConnParams {
+  /** stdio 启动形态；缺省视为 command。 */
+  launchMode?: 'command' | 'script' | 'directory' | string
+  /** 受管脚本引用（launchMode=script）。 */
+  scriptRef?: ScriptRef
+  /** 本地目录启动引用（launchMode=directory）。 */
+  directoryRef?: {
+    root: string
+    entryId: string
+  }
   command?: string
   args?: string[]
   env?: Record<string, string>
   cwd?: string
   /** stdio 依赖声明：自动推断或用户手选工具。 */
   runtimeRequirements?: RuntimeRequirements
+  /** stdio 本地运行安全档位与文件/网络子策略。 */
+  securityProfile?: SecurityProfile
   url?: string
   headers?: Record<string, string>
   baseUrl?: string

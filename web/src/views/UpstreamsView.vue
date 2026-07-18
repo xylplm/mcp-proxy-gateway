@@ -18,16 +18,16 @@ import TemplateMarketModal from '@/components/upstreams/TemplateMarketModal.vue'
 import { useBreakpoint } from '@/composables/useBreakpoint'
 import { useConfirm } from '@/composables/useConfirm'
 import { useToast } from '@/composables/useToast'
+import { installRuntimePackage, preflightRuntime, type RuntimePreflightResult } from '@/api/runtime'
+import { normalizeRequirements } from '@/utils/runtimeRequirements'
 import {
-  installRuntimePackage,
-  preflightRuntime,
-  type RuntimePreflightResult,
-} from '@/api/runtime'
-import {
-  normalizeRequirements,
-  preflightReadyLabel,
-  preflightTone,
-} from '@/utils/runtimeRequirements'
+  normalizeSecurityProfile,
+  preflightReadyLabelEx,
+  preflightToneEx,
+  securityModeBadgeClass,
+  securityModeLabel,
+  securityRiskLabel,
+} from '@/utils/stdioSecurity'
 import {
   listUpstreams,
   setUpstreamEnabled,
@@ -224,7 +224,9 @@ const upstreamCountLabel = computed(() => {
 })
 
 /** 总页数（仅列表模式分页）。 */
-const totalPages = computed(() => Math.max(1, Math.ceil(filteredUpstreams.value.length / pageSize.value)))
+const totalPages = computed(() =>
+  Math.max(1, Math.ceil(filteredUpstreams.value.length / pageSize.value)),
+)
 
 /** 当前页展示的上游切片（列表模式）。 */
 const pagedUpstreams = computed(() => {
@@ -235,8 +237,12 @@ const pagedUpstreams = computed(() => {
 const nextSortOrder = computed(
   () => upstreams.value.reduce((max, up) => Math.max(max, up.config.sortOrder), -1) + 1,
 )
-const hasConnectingUpstream = computed(() => upstreams.value.some((up) => up.state === 'connecting'))
-const normalizedToolModalSearchKeyword = computed(() => toolModalSearchKeyword.value.trim().toLowerCase())
+const hasConnectingUpstream = computed(() =>
+  upstreams.value.some((up) => up.state === 'connecting'),
+)
+const normalizedToolModalSearchKeyword = computed(() =>
+  toolModalSearchKeyword.value.trim().toLowerCase(),
+)
 const hasToolModalSearchKeyword = computed(() => normalizedToolModalSearchKeyword.value !== '')
 const filteredToolModalTools = computed(() => {
   const keyword = normalizedToolModalSearchKeyword.value
@@ -277,8 +283,16 @@ const detailPreflightBanner = computed(() => {
   if (!detailIsStdio.value || detailPreflight.value === null) return null
   const p = detailPreflight.value
   return {
-    tone: preflightTone(p.ready, p.stdioEnabled, p.commandAllowed),
-    label: preflightReadyLabel(p.ready, p.stdioEnabled, p.commandAllowed),
+    tone: preflightToneEx(p.ready, p.stdioEnabled, p.commandAllowed, p.securityOk, p.riskLevel),
+    label: preflightReadyLabelEx(
+      p.ready,
+      p.stdioEnabled,
+      p.commandAllowed,
+      p.securityOk,
+      p.securityError,
+    ),
+    mode: p.securityMode || 'standard',
+    risk: securityRiskLabel(p.riskLevel),
   }
 })
 
@@ -292,14 +306,21 @@ async function loadDetailPreflight(): Promise<void> {
   detailPreflightLoading.value = true
   try {
     const rr = normalizeRequirements(u.config.connParams.runtimeRequirements)
+    const sp = normalizeSecurityProfile(u.config.connParams.securityProfile)
+    const args = Array.isArray(u.config.connParams.args)
+      ? u.config.connParams.args.filter((a): a is string => typeof a === 'string')
+      : []
     const result = await preflightRuntime({
       transport: 'stdio',
       command: typeof u.config.connParams.command === 'string' ? u.config.connParams.command : '',
+      args,
+      cwd: typeof u.config.connParams.cwd === 'string' ? u.config.connParams.cwd : undefined,
       requirements: {
         mode: rr.mode,
         tools: rr.tools,
         ...(rr.note ? { note: rr.note } : {}),
       },
+      securityProfile: sp,
     })
     if (seq === detailPreflightSeq) detailPreflight.value = result
   } catch {
@@ -341,11 +362,15 @@ watch(
     const u = detailUpstream.value
     if (u === null) return ''
     const rr = u.config.connParams?.runtimeRequirements
+    const sp = u.config.connParams?.securityProfile
     return [
       u.id,
       u.config.transport,
       typeof u.config.connParams?.command === 'string' ? u.config.connParams.command : '',
+      typeof u.config.connParams?.cwd === 'string' ? u.config.connParams.cwd : '',
+      JSON.stringify(u.config.connParams?.args ?? null),
       JSON.stringify(rr ?? null),
+      JSON.stringify(sp ?? null),
     ].join('|')
   },
   () => {
@@ -743,7 +768,9 @@ async function submitImport(): Promise<void> {
       ensureStatusPolling(60_000)
     }
     if (result.failed.length > 0) {
-      toast.warning(`${result.failed.length} 个上游导入失败，可按提示调整后重试`, { duration: 3600 })
+      toast.warning(`${result.failed.length} 个上游导入失败，可按提示调整后重试`, {
+        duration: 3600,
+      })
     }
   } catch (err) {
     importError.value = err instanceof Error ? err.message : '导入失败'
@@ -796,7 +823,10 @@ async function refresh(up: Upstream): Promise<void> {
   setBusy(key, true)
   try {
     const count = await refreshUpstream(up.id)
-    toolCounts.value = { ...toolCounts.value, [up.id]: buildToolCountSnapshot(count, new Date().toISOString()) }
+    toolCounts.value = {
+      ...toolCounts.value,
+      [up.id]: buildToolCountSnapshot(count, new Date().toISOString()),
+    }
     toast.success(`已刷新「${up.config.name}」，共 ${count} 个工具`)
     await loadUpstreams()
   } catch (err) {
@@ -840,14 +870,7 @@ function schemaPreview(schema: unknown): string {
 }
 
 function toolSearchText(tool: ToolDef): string {
-  return [
-    tool.name,
-    tool.originalName,
-    tool.description,
-    tool.upstreamId,
-  ]
-    .join(' ')
-    .toLowerCase()
+  return [tool.name, tool.originalName, tool.description, tool.upstreamId].join(' ').toLowerCase()
 }
 
 async function openToolModal(up: Upstream): Promise<void> {
@@ -1058,7 +1081,7 @@ function goPage(p: number): void {
             v-model="searchKeyword"
             type="search"
             placeholder="搜索名称、标签或状态"
-            class="h-10 w-full rounded-lg border border-gray-300 bg-white px-3 pr-12 text-sm text-gray-800 shadow-sm transition placeholder:text-gray-400 focus:border-brand-300 focus:ring-3 focus:ring-brand-500/10 focus:outline-none dark:border-gray-700 dark:bg-gray-900 dark:text-white/90"
+            class="focus:border-brand-300 focus:ring-brand-500/10 h-10 w-full rounded-lg border border-gray-300 bg-white px-3 pr-12 text-sm text-gray-800 shadow-sm transition placeholder:text-gray-400 focus:ring-3 focus:outline-none dark:border-gray-700 dark:bg-gray-900 dark:text-white/90"
           />
           <button
             v-if="hasSearchKeyword"
@@ -1221,7 +1244,7 @@ function goPage(p: number): void {
     <div v-if="showTagFilterBar && !loading && upstreams.length > 0" class="mb-4">
       <div class="relative">
         <div
-          class="flex gap-2 overflow-x-auto pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+          class="flex [scrollbar-width:none] gap-2 overflow-x-auto pb-1 [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
           role="listbox"
           aria-label="按标签筛选上游"
         >
@@ -1234,7 +1257,7 @@ function goPage(p: number): void {
             :class="
               isTagFilterActive(option.value)
                 ? 'border-brand-500 bg-brand-500 text-white shadow-sm'
-                : 'border-gray-200 bg-white text-gray-600 hover:border-brand-200 hover:bg-brand-50/60 dark:border-gray-700 dark:bg-white/[0.03] dark:text-gray-300 dark:hover:border-brand-500/40'
+                : 'hover:border-brand-200 hover:bg-brand-50/60 dark:hover:border-brand-500/40 border-gray-200 bg-white text-gray-600 dark:border-gray-700 dark:bg-white/[0.03] dark:text-gray-300'
             "
             :aria-selected="isTagFilterActive(option.value)"
             @click="selectTagFilter(option.value)"
@@ -1259,7 +1282,7 @@ function goPage(p: number): void {
       <div v-if="hasSearchKeyword || hasTagFilter" class="mt-2 flex items-center gap-2">
         <button
           type="button"
-          class="text-xs font-medium text-brand-600 transition hover:text-brand-700 dark:text-brand-400"
+          class="text-brand-600 hover:text-brand-700 dark:text-brand-400 text-xs font-medium transition"
           @click="clearFilters"
         >
           清除筛选
@@ -1322,6 +1345,26 @@ function goPage(p: number): void {
                   >
                     {{ transportLabel(up.config.transport) }}
                   </span>
+                  <span
+                    v-if="
+                      up.config.transport === 'stdio' &&
+                      normalizeSecurityProfile(up.config.connParams?.securityProfile).mode ===
+                        'unrestricted'
+                    "
+                    class="bg-error-600 ring-error-300/70 dark:ring-error-400/40 inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold tracking-wide text-white shadow-sm ring-1"
+                  >
+                    完全放行
+                  </span>
+                  <span
+                    v-else-if="
+                      up.config.transport === 'stdio' &&
+                      normalizeSecurityProfile(up.config.connParams?.securityProfile).mode ===
+                        'strict'
+                    "
+                    class="bg-success-50 text-success-700 ring-success-200 dark:bg-success-500/10 dark:text-success-400 dark:ring-success-500/30 inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ring-1"
+                  >
+                    严格安全
+                  </span>
                   <ConnStateBadge :state="up.state" />
                 </div>
                 <div v-if="up.config.tags?.length" class="mt-2 flex flex-wrap gap-1.5">
@@ -1372,7 +1415,7 @@ function goPage(p: number): void {
             >
               <button
                 type="button"
-                class="rounded-lg bg-gray-50 px-2.5 py-1.5 text-xs font-medium text-gray-600 transition hover:bg-brand-50 hover:text-brand-600 dark:bg-white/5 dark:text-gray-300 dark:hover:bg-brand-500/10 dark:hover:text-brand-400"
+                class="hover:bg-brand-50 hover:text-brand-600 dark:hover:bg-brand-500/10 dark:hover:text-brand-400 rounded-lg bg-gray-50 px-2.5 py-1.5 text-xs font-medium text-gray-600 transition dark:bg-white/5 dark:text-gray-300"
                 @click="openToolModal(up)"
               >
                 {{ toolCountLabel(toolCounts[up.id]) }}
@@ -1468,11 +1511,11 @@ function goPage(p: number): void {
         >
           <button
             type="button"
-            class="flex w-full items-center justify-between gap-3 border-b border-gray-100 px-4 py-3 text-left transition hover:bg-gray-50/80 dark:border-gray-800 dark:hover:bg-white/[0.04] sm:px-5"
+            class="flex w-full items-center justify-between gap-3 border-b border-gray-100 px-4 py-3 text-left transition hover:bg-gray-50/80 sm:px-5 dark:border-gray-800 dark:hover:bg-white/[0.04]"
             :aria-expanded="!isGroupCollapsed(group.key)"
             @click="toggleGroupCollapsed(group.key)"
           >
-            <div class="min-w-0 flex items-center gap-2.5">
+            <div class="flex min-w-0 items-center gap-2.5">
               <span
                 class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg"
                 :class="
@@ -1518,6 +1561,26 @@ function goPage(p: number): void {
                       class="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-600 dark:bg-gray-800 dark:text-gray-300"
                     >
                       {{ transportLabel(up.config.transport) }}
+                    </span>
+                    <span
+                      v-if="
+                        up.config.transport === 'stdio' &&
+                        normalizeSecurityProfile(up.config.connParams?.securityProfile).mode ===
+                          'unrestricted'
+                      "
+                      class="bg-error-600 ring-error-300/70 dark:ring-error-400/40 inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold tracking-wide text-white shadow-sm ring-1"
+                    >
+                      完全放行
+                    </span>
+                    <span
+                      v-else-if="
+                        up.config.transport === 'stdio' &&
+                        normalizeSecurityProfile(up.config.connParams?.securityProfile).mode ===
+                          'strict'
+                      "
+                      class="bg-success-50 text-success-700 ring-success-200 dark:bg-success-500/10 dark:text-success-400 dark:ring-success-500/30 inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ring-1"
+                    >
+                      严格安全
                     </span>
                     <ConnStateBadge :state="up.state" />
                   </div>
@@ -1569,7 +1632,7 @@ function goPage(p: number): void {
               >
                 <button
                   type="button"
-                  class="rounded-lg bg-gray-50 px-2.5 py-1.5 text-xs font-medium text-gray-600 transition hover:bg-brand-50 hover:text-brand-600 dark:bg-white/5 dark:text-gray-300 dark:hover:bg-brand-500/10 dark:hover:text-brand-400"
+                  class="hover:bg-brand-50 hover:text-brand-600 dark:hover:bg-brand-500/10 dark:hover:text-brand-400 rounded-lg bg-gray-50 px-2.5 py-1.5 text-xs font-medium text-gray-600 transition dark:bg-white/5 dark:text-gray-300"
                   @click="openToolModal(up)"
                 >
                   {{ toolCountLabel(toolCounts[up.id]) }}
@@ -1636,7 +1699,9 @@ function goPage(p: number): void {
           role="dialog"
           aria-modal="true"
         >
-          <div class="flex items-start justify-between gap-4 border-b border-gray-200 px-5 py-4 dark:border-gray-800">
+          <div
+            class="flex items-start justify-between gap-4 border-b border-gray-200 px-5 py-4 dark:border-gray-800"
+          >
             <div class="min-w-0">
               <div class="flex flex-wrap items-center gap-2">
                 <h3 class="truncate text-base font-semibold text-gray-800 dark:text-white/90">
@@ -1644,7 +1709,7 @@ function goPage(p: number): void {
                 </h3>
                 <ConnStateBadge :state="detailUpstream.state" />
               </div>
-              <p class="mt-1 break-all text-xs text-gray-500 dark:text-gray-400">
+              <p class="mt-1 text-xs break-all text-gray-500 dark:text-gray-400">
                 {{ detailSummary.endpointValue }}
               </p>
             </div>
@@ -1668,13 +1733,17 @@ function goPage(p: number): void {
 
           <div class="custom-scrollbar min-h-0 flex-1 overflow-y-auto p-5">
             <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <section class="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-800 dark:bg-white/[0.03]">
+              <section
+                class="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-800 dark:bg-white/[0.03]"
+              >
                 <p class="text-xs text-gray-500 dark:text-gray-400">运行状态</p>
                 <p class="mt-2 text-sm leading-6 text-gray-700 dark:text-gray-300">
                   {{ detailSummary.healthDescription }}
                 </p>
               </section>
-              <section class="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-800 dark:bg-white/[0.03]">
+              <section
+                class="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-800 dark:bg-white/[0.03]"
+              >
                 <p class="text-xs text-gray-500 dark:text-gray-400">工具缓存</p>
                 <p class="mt-2 text-lg font-semibold text-gray-800 dark:text-white/90">
                   {{ detailSummary.toolLabel }}
@@ -1695,22 +1764,59 @@ function goPage(p: number): void {
                     本地运行环境
                   </h4>
                   <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                    该上游声明的宿主工具依赖与当前探测结果。
+                    安全档位、宿主依赖与当前探测结果。当前为策略约束，不是内核沙箱。
                   </p>
                 </div>
-                <span
-                  v-if="detailPreflightBanner"
-                  class="rounded-full px-2.5 py-1 text-xs font-medium"
-                  :class="depChipClass(detailPreflightBanner.tone === 'success')"
-                >
-                  {{ detailPreflightLoading ? '检测中…' : detailPreflightBanner.label }}
-                </span>
+                <div class="flex flex-wrap items-center gap-2">
+                  <span
+                    class="rounded-full px-2.5 py-1 text-xs font-semibold"
+                    :class="
+                      securityModeBadgeClass(
+                        detailPreflight?.securityMode ||
+                          normalizeSecurityProfile(
+                            detailUpstream?.config.connParams.securityProfile,
+                          ).mode ||
+                          'standard',
+                      )
+                    "
+                  >
+                    {{
+                      securityModeLabel(
+                        detailPreflight?.securityMode ||
+                          normalizeSecurityProfile(
+                            detailUpstream?.config.connParams.securityProfile,
+                          ).mode ||
+                          'standard',
+                      )
+                    }}
+                  </span>
+                  <span
+                    v-if="detailPreflightBanner"
+                    class="rounded-full px-2.5 py-1 text-xs font-medium"
+                    :class="depChipClass(detailPreflightBanner.tone === 'success')"
+                  >
+                    {{ detailPreflightLoading ? '检测中…' : detailPreflightBanner.label }}
+                  </span>
+                </div>
               </div>
 
               <div
-                v-if="detailPreflight?.items?.length"
-                class="space-y-2"
+                v-if="detailPreflight?.securityError || detailPreflight?.riskLevel === 'critical'"
+                class="mb-3 rounded-lg border px-3 py-2 text-xs leading-5"
+                :class="
+                  detailPreflight?.riskLevel === 'critical' ||
+                  detailPreflightBanner?.tone === 'error'
+                    ? 'border-error-300 bg-error-50 text-error-800 dark:border-error-500/30 dark:bg-error-500/10 dark:text-error-200'
+                    : 'border-warning-200 bg-warning-50 text-warning-800 dark:border-warning-500/20 dark:bg-warning-500/10 dark:text-warning-200'
+                "
               >
+                <p v-if="detailPreflight?.securityError">{{ detailPreflight.securityError }}</p>
+                <p v-else-if="detailPreflightBanner?.risk">
+                  风险等级：{{ detailPreflightBanner.risk }}
+                </p>
+              </div>
+
+              <div v-if="detailPreflight?.items?.length" class="space-y-2">
                 <div
                   v-for="item in detailPreflight.items"
                   :key="item.name"
@@ -1721,16 +1827,10 @@ function goPage(p: number): void {
                       {{ item.label }}
                       <span class="font-mono text-gray-400">({{ item.name }})</span>
                     </p>
-                    <p
-                      v-if="item.path"
-                      class="mt-0.5 break-all text-[11px] text-gray-400"
-                    >
+                    <p v-if="item.path" class="mt-0.5 text-[11px] break-all text-gray-400">
                       {{ item.path }}
                     </p>
-                    <p
-                      v-else-if="item.message"
-                      class="mt-0.5 text-[11px] text-gray-400"
-                    >
+                    <p v-else-if="item.message" class="mt-0.5 text-[11px] text-gray-400">
                       {{ item.message }}
                     </p>
                   </div>
@@ -1744,13 +1844,11 @@ function goPage(p: number): void {
                     <button
                       v-if="!item.available && item.fixable && item.packageId"
                       type="button"
-                      class="font-medium text-brand-600 hover:underline disabled:opacity-50 dark:text-brand-400"
+                      class="text-brand-600 dark:text-brand-400 font-medium hover:underline disabled:opacity-50"
                       :disabled="detailInstallingPackageId !== ''"
                       @click="installFromDetail(item.packageId!)"
                     >
-                      {{
-                        detailInstallingPackageId === item.packageId ? '安装中…' : '一键安装'
-                      }}
+                      {{ detailInstallingPackageId === item.packageId ? '安装中…' : '一键安装' }}
                     </button>
                   </div>
                 </div>
@@ -1765,7 +1863,7 @@ function goPage(p: number): void {
               <div class="mt-3 flex flex-wrap gap-3">
                 <router-link
                   to="/runtime"
-                  class="text-xs font-medium text-brand-600 hover:underline dark:text-brand-400"
+                  class="text-brand-600 dark:text-brand-400 text-xs font-medium hover:underline"
                 >
                   打开运行环境
                 </router-link>
@@ -1785,9 +1883,11 @@ function goPage(p: number): void {
                 <h4 class="text-sm font-semibold text-gray-800 dark:text-white/90">连接摘要</h4>
                 <span
                   class="rounded-full px-2.5 py-1 text-xs"
-                  :class="detailUpstream.config.enabled
-                    ? 'bg-success-50 text-success-700 dark:bg-success-500/10 dark:text-success-400'
-                    : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300'"
+                  :class="
+                    detailUpstream.config.enabled
+                      ? 'bg-success-50 text-success-700 dark:bg-success-500/10 dark:text-success-400'
+                      : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300'
+                  "
                 >
                   {{ detailUpstream.config.enabled ? '启用' : '停用' }}
                 </span>
@@ -1799,7 +1899,7 @@ function goPage(p: number): void {
                   class="min-w-0 rounded-lg bg-gray-50 px-3 py-2 dark:bg-white/[0.03]"
                 >
                   <dt class="text-xs text-gray-400 dark:text-gray-500">{{ item.label }}</dt>
-                  <dd class="mt-1 break-all text-sm font-medium text-gray-700 dark:text-gray-200">
+                  <dd class="mt-1 text-sm font-medium break-all text-gray-700 dark:text-gray-200">
                     {{ item.value }}
                   </dd>
                 </div>
@@ -1815,7 +1915,7 @@ function goPage(p: number): void {
                   class="min-w-0 rounded-lg bg-gray-50 px-3 py-2 dark:bg-white/[0.03]"
                 >
                   <dt class="text-xs text-gray-400 dark:text-gray-500">{{ item.label }}</dt>
-                  <dd class="mt-1 break-all text-sm font-medium text-gray-700 dark:text-gray-200">
+                  <dd class="mt-1 text-sm font-medium break-all text-gray-700 dark:text-gray-200">
                     {{ item.value }}
                   </dd>
                 </div>
@@ -1879,7 +1979,7 @@ function goPage(p: number): void {
               </button>
               <button
                 type="button"
-                class="rounded-lg bg-brand-500 px-3 py-2 text-sm font-medium text-white transition hover:bg-brand-600 sm:col-span-2"
+                class="bg-brand-500 hover:bg-brand-600 rounded-lg px-3 py-2 text-sm font-medium text-white transition sm:col-span-2"
                 @click="editFromDetail(detailUpstream)"
               >
                 编辑
@@ -1911,7 +2011,9 @@ function goPage(p: number): void {
             class="flex items-center justify-between gap-3 border-b border-gray-200 px-5 py-4 dark:border-gray-800"
           >
             <div class="min-w-0">
-              <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">导入 MCP JSON</h3>
+              <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">
+                导入 MCP JSON
+              </h3>
               <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
                 支持 mcpServers、upstreams 或上游数组，确认后会批量创建上游。
               </p>
@@ -1937,7 +2039,7 @@ function goPage(p: number): void {
 
           <div class="custom-scrollbar flex-1 overflow-y-auto p-5">
             <div
-              class="mb-4 rounded-xl border border-dashed border-gray-300 bg-gray-50 px-4 py-5 text-center transition hover:border-brand-300 hover:bg-brand-50/40 dark:border-gray-700 dark:bg-white/[0.03] dark:hover:border-brand-500/40 dark:hover:bg-brand-500/[0.06]"
+              class="hover:border-brand-300 hover:bg-brand-50/40 dark:hover:border-brand-500/40 dark:hover:bg-brand-500/[0.06] mb-4 rounded-xl border border-dashed border-gray-300 bg-gray-50 px-4 py-5 text-center transition dark:border-gray-700 dark:bg-white/[0.03]"
               @dragover.prevent
               @drop="onImportDrop"
             >
@@ -1953,18 +2055,22 @@ function goPage(p: number): void {
                 拖放 MCP JSON 文件到这里，或
                 <label
                   for="upstream-import-file"
-                  class="cursor-pointer text-brand-600 hover:underline dark:text-brand-400"
+                  class="text-brand-600 dark:text-brand-400 cursor-pointer hover:underline"
                 >
                   选择文件
                 </label>
               </p>
               <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">
-                支持 .json / .txt，最大 {{ formatFileSize(MAX_UPSTREAM_IMPORT_FILE_BYTES) }}；也可以直接在下方粘贴配置。
+                支持 .json / .txt，最大
+                {{ formatFileSize(MAX_UPSTREAM_IMPORT_FILE_BYTES) }}；也可以直接在下方粘贴配置。
               </p>
-              <p v-if="importFileReading" class="mt-2 text-xs text-brand-600 dark:text-brand-400">
+              <p v-if="importFileReading" class="text-brand-600 dark:text-brand-400 mt-2 text-xs">
                 正在读取文件...
               </p>
-              <p v-else-if="importFileName !== ''" class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+              <p
+                v-else-if="importFileName !== ''"
+                class="mt-2 text-xs text-gray-500 dark:text-gray-400"
+              >
                 已读取 {{ importFileName }}
               </p>
             </div>
@@ -1974,7 +2080,7 @@ function goPage(p: number): void {
               </span>
               <textarea
                 v-model="importContent"
-                class="min-h-64 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 font-mono text-sm text-gray-800 shadow-sm transition placeholder:text-gray-400 focus:border-brand-300 focus:ring-3 focus:ring-brand-500/10 focus:outline-none dark:border-gray-700 dark:bg-gray-950 dark:text-white/90"
+                class="focus:border-brand-300 focus:ring-brand-500/10 min-h-64 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 font-mono text-sm text-gray-800 shadow-sm transition placeholder:text-gray-400 focus:ring-3 focus:outline-none dark:border-gray-700 dark:bg-gray-950 dark:text-white/90"
                 spellcheck="false"
                 placeholder='{"mcpServers":{"filesystem":{"command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","D:/work"]}}}'
                 @input="importFileName = ''"
@@ -1983,7 +2089,7 @@ function goPage(p: number): void {
 
             <p
               v-if="importError !== ''"
-              class="mt-4 rounded-lg bg-error-50 px-4 py-2.5 text-sm text-error-600 dark:bg-error-500/10 dark:text-error-400"
+              class="bg-error-50 text-error-600 dark:bg-error-500/10 dark:text-error-400 mt-4 rounded-lg px-4 py-2.5 text-sm"
             >
               {{ importError }}
             </p>
@@ -2012,7 +2118,11 @@ function goPage(p: number): void {
                         {{ item.config.name || '未命名上游' }}
                       </p>
                       <p class="mt-1 truncate font-mono text-xs text-gray-400">
-                        {{ item.config.connParams.url || item.config.connParams.command || '待补全连接参数' }}
+                        {{
+                          item.config.connParams.url ||
+                          item.config.connParams.command ||
+                          '待补全连接参数'
+                        }}
                       </p>
                     </div>
                     <span
@@ -2049,28 +2159,34 @@ function goPage(p: number): void {
               class="mt-5 rounded-xl border border-gray-200 dark:border-gray-800"
             >
               <div class="border-b border-gray-200 px-4 py-3 dark:border-gray-800">
-                <p class="text-sm font-medium text-gray-800 dark:text-white/90">{{ importResultLabel }}</p>
+                <p class="text-sm font-medium text-gray-800 dark:text-white/90">
+                  {{ importResultLabel }}
+                </p>
               </div>
               <div class="space-y-3 p-4">
                 <div v-if="importCreated.length > 0">
-                  <p class="mb-2 text-xs font-medium text-success-600 dark:text-success-400">导入成功</p>
+                  <p class="text-success-600 dark:text-success-400 mb-2 text-xs font-medium">
+                    导入成功
+                  </p>
                   <div class="flex flex-wrap gap-2">
                     <span
                       v-for="item in importCreated"
                       :key="`created-${item.index}`"
-                      class="rounded-full bg-success-50 px-2.5 py-1 text-xs text-success-600 dark:bg-success-500/10 dark:text-success-400"
+                      class="bg-success-50 text-success-600 dark:bg-success-500/10 dark:text-success-400 rounded-full px-2.5 py-1 text-xs"
                     >
                       {{ item.name }}
                     </span>
                   </div>
                 </div>
                 <div v-if="importFailed.length > 0">
-                  <p class="mb-2 text-xs font-medium text-error-600 dark:text-error-400">需要处理</p>
+                  <p class="text-error-600 dark:text-error-400 mb-2 text-xs font-medium">
+                    需要处理
+                  </p>
                   <div class="space-y-2">
                     <div
                       v-for="item in importFailed"
                       :key="`failed-${item.index}`"
-                      class="rounded-lg bg-error-50 px-3 py-2 text-sm text-error-600 dark:bg-error-500/10 dark:text-error-400"
+                      class="bg-error-50 text-error-600 dark:bg-error-500/10 dark:text-error-400 rounded-lg px-3 py-2 text-sm"
                     >
                       <p class="font-medium">{{ item.name || `第 ${item.index + 1} 项` }}</p>
                       <p class="mt-1 text-xs leading-5">
@@ -2084,7 +2200,7 @@ function goPage(p: number): void {
           </div>
 
           <div
-            class="flex flex-col-reverse gap-3 border-t border-gray-200 px-5 py-4 dark:border-gray-800 sm:flex-row sm:items-center sm:justify-end"
+            class="flex flex-col-reverse gap-3 border-t border-gray-200 px-5 py-4 sm:flex-row sm:items-center sm:justify-end dark:border-gray-800"
           >
             <button
               type="button"
@@ -2157,7 +2273,7 @@ function goPage(p: number): void {
           <div class="custom-scrollbar flex-1 overflow-y-auto p-5">
             <p
               v-if="toolModalError !== ''"
-              class="mb-4 rounded-lg bg-error-50 px-4 py-2.5 text-sm text-error-600 dark:bg-error-500/10 dark:text-error-400"
+              class="bg-error-50 text-error-600 dark:bg-error-500/10 dark:text-error-400 mb-4 rounded-lg px-4 py-2.5 text-sm"
             >
               {{ toolModalError }}
             </p>
@@ -2167,7 +2283,7 @@ function goPage(p: number): void {
                 v-model="toolModalSearchKeyword"
                 type="search"
                 placeholder="搜索工具名称、原始名或描述"
-                class="h-10 w-full rounded-lg border border-gray-300 bg-white px-3 pr-12 text-sm text-gray-800 shadow-sm transition placeholder:text-gray-400 focus:border-brand-300 focus:ring-3 focus:ring-brand-500/10 focus:outline-none dark:border-gray-700 dark:bg-gray-900 dark:text-white/90"
+                class="focus:border-brand-300 focus:ring-brand-500/10 h-10 w-full rounded-lg border border-gray-300 bg-white px-3 pr-12 text-sm text-gray-800 shadow-sm transition placeholder:text-gray-400 focus:ring-3 focus:outline-none dark:border-gray-700 dark:bg-gray-900 dark:text-white/90"
               />
               <button
                 v-if="hasToolModalSearchKeyword"
@@ -2210,7 +2326,9 @@ function goPage(p: number): void {
                 <p class="mt-3 line-clamp-3 text-sm leading-6 text-gray-500 dark:text-gray-400">
                   {{ tool.description || '暂无描述' }}
                 </p>
-                <p class="mt-3 truncate rounded-lg bg-gray-50 px-3 py-2 font-mono text-xs text-gray-500 dark:bg-gray-800/60 dark:text-gray-400">
+                <p
+                  class="mt-3 truncate rounded-lg bg-gray-50 px-3 py-2 font-mono text-xs text-gray-500 dark:bg-gray-800/60 dark:text-gray-400"
+                >
                   {{ schemaPreview(tool.inputSchema) }}
                 </p>
               </article>
@@ -2346,6 +2464,26 @@ function goPage(p: number): void {
                     {{ transportLabel(up.config.transport) }}
                   </span>
                   <span
+                    v-if="
+                      up.config.transport === 'stdio' &&
+                      normalizeSecurityProfile(up.config.connParams?.securityProfile).mode ===
+                        'unrestricted'
+                    "
+                    class="bg-error-600 rounded-full px-2 py-0.5 text-[10px] font-semibold text-white"
+                  >
+                    完全放行
+                  </span>
+                  <span
+                    v-else-if="
+                      up.config.transport === 'stdio' &&
+                      normalizeSecurityProfile(up.config.connParams?.securityProfile).mode ===
+                        'strict'
+                    "
+                    class="bg-success-50 text-success-700 dark:bg-success-500/10 dark:text-success-400 rounded-full px-2 py-0.5 text-[10px] font-semibold"
+                  >
+                    严格安全
+                  </span>
+                  <span
                     v-for="tag in up.config.tags ?? []"
                     :key="tag"
                     class="bg-brand-50 text-brand-600 dark:bg-brand-500/10 dark:text-brand-300 rounded-full px-2 py-0.5 text-xs"
@@ -2453,7 +2591,6 @@ function goPage(p: number): void {
         </div>
       </div>
     </transition>
-
   </AdminLayout>
 </template>
 

@@ -36,6 +36,8 @@ const (
 	ResourceAdmin ResourceKind = "admin"
 	// ResourceSetting 表示系统设置。
 	ResourceSetting ResourceKind = "setting"
+	// ResourceScript 表示脚本中心受管脚本资产。
+	ResourceScript ResourceKind = "script"
 )
 
 // AuditRepository 是审计服务依赖的仓储窄接口（Req 22）。

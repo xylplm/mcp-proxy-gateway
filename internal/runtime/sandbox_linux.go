@@ -18,9 +18,20 @@ func applySandboxPlatform(cmd *exec.Cmd) {
 }
 
 func describeSandboxPlatform() SandboxCapabilities {
-	return SandboxCapabilities{
-		ProcessHardeningSupported: true,
-		Platform:                  "linux",
-		Description:               "Linux：stdio 子进程使用独立进程组，并在网关进程退出时发送 SIGTERM。",
+	caps := SandboxCapabilities{
+		ProcessHardeningSupported:    true,
+		FilesystemIsolationSupported: false,
+		NetworkIsolationSupported:    false,
+		IsolationBackend:             "none",
+		Platform:                     "linux",
+		Description:                  "Linux：stdio 子进程使用独立进程组，并在网关进程退出时发送 SIGTERM。文件/网络为策略约束（非内核沙箱）。",
 	}
+	// Phase C：探测 bubblewrap；实际包装启用前仅用于管理台能力展示。
+	if path, err := exec.LookPath("bwrap"); err == nil && path != "" {
+		caps.FilesystemIsolationSupported = true
+		caps.NetworkIsolationSupported = true
+		caps.IsolationBackend = "bwrap"
+		caps.Description = "Linux：进程组加固可用；检测到 bubblewrap，可在后续版本对严格档启用文件/网络命名空间隔离。"
+	}
+	return caps
 }

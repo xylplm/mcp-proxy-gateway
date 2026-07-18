@@ -14,6 +14,10 @@ export interface SettingsDraftInput {
   trustedProxyCIDRs: string[]
   exemptCIDRs: string[]
   commandAllowlist: string[]
+  strictCommandAllowlist?: string[]
+  strictPackageAllowlist?: string[]
+  globalFileRoots?: string[]
+  browseExtraRoots?: string[]
   extraSensitiveEnvPrefixes: string[]
 }
 
@@ -24,6 +28,20 @@ function ensureRuntime(config: YAMLConfig): void {
       command_allowlist: ['node', 'npx', 'npm', 'python', 'python3', 'uv', 'uvx', 'docker'],
       extra_sensitive_env_prefixes: [],
       process_hardening: true,
+      default_stdio_security_mode: 'standard',
+      strict_command_allowlist: ['node', 'npx', 'python', 'python3', 'uv', 'uvx'],
+      strict_package_allowlist: [
+        '@modelcontextprotocol/*',
+        '@playwright/mcp',
+        '@notionhq/notion-mcp-server',
+        'firecrawl-mcp',
+        'exa-mcp-server',
+      ],
+      global_file_roots: [],
+      browse_extra_roots: [],
+      strict_path_only_runtime: true,
+      strict_network_default: 'allowlist',
+      strict_allow_policy_only: true,
     }
   }
   if (!Array.isArray(config.runtime.command_allowlist)) {
@@ -34,6 +52,30 @@ function ensureRuntime(config: YAMLConfig): void {
   }
   if (config.runtime.process_hardening == null) {
     config.runtime.process_hardening = true
+  }
+  if (!config.runtime.default_stdio_security_mode) {
+    config.runtime.default_stdio_security_mode = 'standard'
+  }
+  if (!Array.isArray(config.runtime.strict_command_allowlist)) {
+    config.runtime.strict_command_allowlist = []
+  }
+  if (!Array.isArray(config.runtime.strict_package_allowlist)) {
+    config.runtime.strict_package_allowlist = []
+  }
+  if (!Array.isArray(config.runtime.global_file_roots)) {
+    config.runtime.global_file_roots = []
+  }
+  if (!Array.isArray(config.runtime.browse_extra_roots)) {
+    config.runtime.browse_extra_roots = []
+  }
+  if (config.runtime.strict_path_only_runtime == null) {
+    config.runtime.strict_path_only_runtime = true
+  }
+  if (!config.runtime.strict_network_default) {
+    config.runtime.strict_network_default = 'allowlist'
+  }
+  if (config.runtime.strict_allow_policy_only == null) {
+    config.runtime.strict_allow_policy_only = true
   }
 }
 
@@ -64,6 +106,18 @@ export function buildSettingsDraft(config: YAMLConfig, input: SettingsDraftInput
   draft.security.exempt_cidrs = input.exemptCIDRs
   draft.runtime!.command_allowlist = input.commandAllowlist
   draft.runtime!.extra_sensitive_env_prefixes = input.extraSensitiveEnvPrefixes
+  if (input.strictCommandAllowlist) {
+    draft.runtime!.strict_command_allowlist = input.strictCommandAllowlist
+  }
+  if (input.strictPackageAllowlist) {
+    draft.runtime!.strict_package_allowlist = input.strictPackageAllowlist
+  }
+  if (input.globalFileRoots) {
+    draft.runtime!.global_file_roots = input.globalFileRoots
+  }
+  if (input.browseExtraRoots) {
+    draft.runtime!.browse_extra_roots = input.browseExtraRoots
+  }
   return draft
 }
 
@@ -73,7 +127,14 @@ export function collectSettingsChanges(before: YAMLConfig, after: YAMLConfig): S
   const runtimeOnly = false
 
   addChange(changes, '同步 cron', before.sync.cron, after.sync.cron, needsRestart)
-  addChange(changes, '同步超时', before.sync.timeout_s, after.sync.timeout_s, needsRestart, secondsLabel)
+  addChange(
+    changes,
+    '同步超时',
+    before.sync.timeout_s,
+    after.sync.timeout_s,
+    needsRestart,
+    secondsLabel,
+  )
   addChange(
     changes,
     '连接建立超时',
@@ -168,7 +229,14 @@ export function collectSettingsChanges(before: YAMLConfig, after: YAMLConfig): S
     runtimeOnly,
     mibLabel,
   )
-  addChange(changes, '安全防护模式', before.security.mode, after.security.mode, runtimeOnly, securityModeLabel)
+  addChange(
+    changes,
+    '安全防护模式',
+    before.security.mode,
+    after.security.mode,
+    runtimeOnly,
+    securityModeLabel,
+  )
   addChange(
     changes,
     '失败统计窗口',
@@ -272,6 +340,59 @@ export function collectSettingsChanges(before: YAMLConfig, after: YAMLConfig): S
   )
   addChange(
     changes,
+    '默认本地安全档位',
+    before.runtime?.default_stdio_security_mode ?? 'standard',
+    after.runtime?.default_stdio_security_mode ?? 'standard',
+    runtimeOnly,
+    (v) => {
+      const m = String(v)
+      if (m === 'strict') return '严格安全'
+      if (m === 'unrestricted') return '完全放行'
+      return '标准'
+    },
+  )
+  addChange(
+    changes,
+    '严格档命令白名单',
+    before.runtime?.strict_command_allowlist ?? [],
+    after.runtime?.strict_command_allowlist ?? [],
+    runtimeOnly,
+    (v) => (Array.isArray(v) && v.length > 0 ? v.join('、') : '默认列表'),
+  )
+  addChange(
+    changes,
+    '严格档包白名单',
+    before.runtime?.strict_package_allowlist ?? [],
+    after.runtime?.strict_package_allowlist ?? [],
+    runtimeOnly,
+    (v) => (Array.isArray(v) && v.length > 0 ? v.join('、') : '默认列表'),
+  )
+  addChange(
+    changes,
+    '全局文件允许路径',
+    before.runtime?.global_file_roots ?? [],
+    after.runtime?.global_file_roots ?? [],
+    runtimeOnly,
+    (v) => (Array.isArray(v) && v.length > 0 ? v.join('、') : '无'),
+  )
+  addChange(
+    changes,
+    '路径浏览额外根',
+    before.runtime?.browse_extra_roots ?? [],
+    after.runtime?.browse_extra_roots ?? [],
+    runtimeOnly,
+    (v) => (Array.isArray(v) && v.length > 0 ? v.join('、') : '无'),
+  )
+  addChange(
+    changes,
+    '严格档仅 runtime 路径',
+    before.runtime?.strict_path_only_runtime ?? true,
+    after.runtime?.strict_path_only_runtime ?? true,
+    runtimeOnly,
+    (v) => (v ? '启用' : '关闭'),
+  )
+  addChange(
+    changes,
     '调用记录保留天数',
     before.statistics.retention_days,
     after.statistics.retention_days,
@@ -320,7 +441,8 @@ export function settingsConfirmMessage(changes: SettingsChange[]): string {
   const preview = changes
     .slice(0, 8)
     .map((item) => `• ${item.label}：${item.before} → ${item.after}（${item.impact}）`)
-  const extra = changes.length > preview.length ? `\n• 另有 ${changes.length - preview.length} 项配置变更` : ''
+  const extra =
+    changes.length > preview.length ? `\n• 另有 ${changes.length - preview.length} 项配置变更` : ''
   const tail = settingsChangesRequireRestart(changes)
     ? '保存后网关会自动重启以应用相关配置，重启期间管理台和对外 MCP 服务会短暂不可用。'
     : '这些变更会写入配置文件，并直接应用到当前运行中的服务。'
