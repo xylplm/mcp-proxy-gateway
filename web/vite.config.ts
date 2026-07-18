@@ -27,6 +27,20 @@ export default defineConfig({
       '@': fileURLToPath(new URL('./src', import.meta.url)),
     },
   },
+  build: {
+    // 图表库体积大，单独分包并通过 LazyApexChart 视口懒加载，避免拖大首包。
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('node_modules/apexcharts') || id.includes('node_modules/vue3-apexcharts')) {
+            return 'apexcharts'
+          }
+        },
+      },
+    },
+    // apexcharts 懒加载独立 chunk 仍约 1MB；不计入首屏，提高阈值避免误报。
+    chunkSizeWarningLimit: 1200,
+  },
   server: {
     // 开发态把后端路由代理到 Go 网关，避免 Vite SPA fallback 把
     // /api/* 等路径吞成 index.html（导致前端拿到 HTML 而非 JSON）。

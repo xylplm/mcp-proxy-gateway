@@ -1337,11 +1337,11 @@ const errClass = 'mt-1 text-xs text-error-500'
               <div>
                 <FieldLabel
                   label="严格档默认网络策略"
-                  tooltip="仅在安全档位为「严格」且上游未声明自己的网络策略时生效。允许名单：要求上游声明可访问主机；拒绝出站：策略上默认不允许外连。当前是声明与预检约束，不会在内核层强制断网。"
+                  tooltip="仅在安全档位为「严格」且上游未声明自己的网络策略时生效。允许名单：要求上游声明可访问主机；拒绝出站：策略上默认不允许外连。Linux 严格档 + bubblewrap 时 deny 会网络命名空间断网；主机 allowlist 仍为策略声明。"
                 />
                 <select v-model="config.runtime.strict_network_default" :class="inputClass">
                   <option value="allowlist">允许名单（启用自装包时需声明主机）</option>
-                  <option value="deny">拒绝出站（策略声明，非内核拦截）</option>
+                  <option value="deny">拒绝出站（Linux 严格档真断网）</option>
                 </select>
                 <p :class="hintClass">用于引导严格档上游声明网络需求；不是防火墙规则本身。</p>
               </div>

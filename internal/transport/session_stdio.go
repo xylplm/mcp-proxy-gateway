@@ -142,14 +142,18 @@ func (s *stdioSession) Connect(ctx context.Context) error {
 			NetworkMode:  eff.Network.Mode,
 			NetworkHosts: eff.Network.Hosts,
 		}, pathPrefixes...)
-		// 进程级加固（Linux: 进程组 + Pdeathsig；其他平台 no-op）。严格档强制启用。
-		hardening := eff.ProcessHardening
-		runtime.ApplySandbox(cmd, runtime.SandboxOptions{
-			Enabled:      hardening,
-			SecurityMode: eff.Mode,
-			FileRoots:    eff.FileAccess.Paths,
-			NetworkMode:  eff.Network.Mode,
-		})
+// 进程级加固（Linux: 进程组 + Pdeathsig；其他平台 no-op）。
+			// 严格档 + bwrap：文件 bind 隔离；网络 deny 时 unshare-net。
+			hardening := eff.ProcessHardening
+			runtime.ApplySandbox(cmd, runtime.SandboxOptions{
+				Enabled:      hardening,
+				SecurityMode: eff.Mode,
+				FileRoots:    eff.FileAccess.Paths,
+				CWD:          cwd,
+				NetworkMode:  eff.Network.Mode,
+				NetworkHosts: eff.Network.Hosts,
+				RuntimeDir:   currentRuntimeDir(),
+			})
 		transport := &mcp.CommandTransport{
 			Command:           cmd,
 			TerminateDuration: time.Second,

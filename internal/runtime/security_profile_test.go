@@ -149,7 +149,12 @@ func TestValidateIsolationRequirement(t *testing.T) {
 		t.Fatalf("default policy-only compatibility should pass: %v", err)
 	}
 	policy.StrictAllowPolicyOnly = false
-	if err := ValidateIsolationRequirement(policy, eff); err == nil {
+	// Linux + bubblewrap 视为隔离后端可用；其它宿主在禁止仅策略时应拒绝。
+	if IsolationAvailable() {
+		if err := ValidateIsolationRequirement(policy, eff); err != nil {
+			t.Fatalf("strict with isolation backend should pass: %v", err)
+		}
+	} else if err := ValidateIsolationRequirement(policy, eff); err == nil {
 		t.Fatal("strict restrictions must fail when policy-only isolation is disabled")
 	}
 	unrestricted := eff

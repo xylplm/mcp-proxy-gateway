@@ -14,6 +14,8 @@ export interface SandboxCapabilities {
   processHardeningSupported: boolean
   filesystemIsolationSupported?: boolean
   networkIsolationSupported?: boolean
+  /** 是否可内核级按主机过滤；bwrap 仅支持 deny 断网，allowlist 仍为策略声明。 */
+  hostAllowlistEnforced?: boolean
   isolationBackend?: string
   platform: string
   description: string

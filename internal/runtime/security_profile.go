@@ -443,7 +443,12 @@ func ResolveEffectiveSecurity(policy Policy, profile SecurityProfile, _ string) 
 	eff.PackageAllowlist = MergePackageAllowlist(globalPkgs, profile.PackageAllowlist)
 
 	eff.RiskLevel = riskLevelFor(mode, eff)
-	eff.PolicyOnlyIsolation = true // Phase A/B：用户态策略；C 有 bwrap 时再改
+	// 有内核隔离后端时，严格档不再标记为仅策略；标准/完全放行仍是策略层。
+	if mode == SecurityModeStrict && IsolationAvailable() {
+		eff.PolicyOnlyIsolation = false
+	} else {
+		eff.PolicyOnlyIsolation = true
+	}
 	return eff
 }
 
@@ -472,14 +477,22 @@ func EffectiveCommandAllowlist(policy Policy, mode StdioSecurityMode) []string {
 }
 
 // ValidateIsolationRequirement 校验严格档是否允许在无内核隔离时仅靠策略运行。
+//
+// 当 Linux 检测到 bubblewrap 时视为隔离后端可用；否则依赖 StrictAllowPolicyOnly。
 func ValidateIsolationRequirement(policy Policy, eff EffectiveSecurity) error {
-	if eff.Mode != SecurityModeStrict || policy.StrictAllowPolicyOnly {
+	if eff.Mode != SecurityModeStrict {
+		return nil
+	}
+	if IsolationAvailable() {
+		return nil
+	}
+	if policy.StrictAllowPolicyOnly {
 		return nil
 	}
 	if eff.FileAccess.Mode == FileAccessUnrestricted && eff.Network.Mode == NetworkAccessUnrestricted {
 		return nil
 	}
-	return fmt.Errorf("严格安全模式要求文件/网络内核隔离，但当前版本尚未启用可执行隔离后端；可改用标准档，或在系统设置中允许仅策略运行")
+	return fmt.Errorf("严格安全模式要求文件/网络内核隔离，但当前宿主未检测到 bubblewrap；可改用标准档、在 Linux 容器安装 bubblewrap，或在系统设置中允许仅策略运行")
 }
 
 // ValidateCommandForSecurity 按生效安全配置校验命令。

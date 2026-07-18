@@ -14,19 +14,22 @@
 FROM alpine:3.24
 
 # ca/tz + 最常用 stdio 宿主：Node（含 npx/npm）与 Python3。
-# 使用发行版 apk 以保证 amd64/arm64 同源可维护；版本随 Alpine 3.24 小版本演进。
-RUN apk add --no-cache \
-      ca-certificates \
-      tzdata \
-      nodejs \
-      npm \
-      python3 \
-      py3-pip \
-  && ln -sf python3 /usr/bin/python \
-  && node -v \
-  && npm -v \
-  && python3 --version \
-  && python --version
+	# bubblewrap：严格档 stdio 文件 bind 隔离与网络 deny 命名空间断网。
+	# 使用发行版 apk 以保证 amd64/arm64 同源可维护；版本随 Alpine 3.24 小版本演进。
+	RUN apk add --no-cache \
+	      ca-certificates \
+	      tzdata \
+	      nodejs \
+	      npm \
+	      python3 \
+	      py3-pip \
+	      bubblewrap \
+	  && ln -sf python3 /usr/bin/python \
+	  && node -v \
+	  && npm -v \
+	  && python3 --version \
+	  && python --version \
+	  && bwrap --version
 
 ARG TARGETARCH
 COPY bin/mpg-linux-${TARGETARCH} /mpg

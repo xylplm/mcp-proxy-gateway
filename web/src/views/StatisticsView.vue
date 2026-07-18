@@ -1,9 +1,10 @@
 ﻿<script setup lang="ts">
-import { computed, defineAsyncComponent, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { nextTick, onUnmounted } from 'vue'
 import type { ApexOptions } from 'apexcharts'
 import AdminLayout from '@/components/layout/AdminLayout.vue'
 import PageBreadcrumb from '@/components/common/PageBreadcrumb.vue'
+import LazyApexChart from '@/components/charts/LazyApexChart.vue'
 import {
   callHealth,
   dailyStats,
@@ -26,8 +27,6 @@ import { listAPIKeys } from '@/api/apikeys'
 import { listUpstreams } from '@/api/upstreams'
 import { getAggregatedTools } from '@/api/tools'
 import { statsToolCallsQuery, statsToolFailuresQuery } from '@/utils/statsDrilldown'
-
-const ApexChart = defineAsyncComponent(() => import('vue3-apexcharts'))
 
 const startLocal = ref('')
 const endLocal = ref('')
@@ -615,10 +614,10 @@ onUnmounted(() => {
             峰值 {{ formatFullDate(busiestDay.Day) }} · {{ formatInt(busiestDay.TotalCalls) }} 次
           </span>
         </div>
-        <ApexChart
+        <LazyApexChart
           v-if="daily.length > 0"
           type="area"
-          height="320"
+          :height="320"
           :options="trendOptions"
           :series="trendSeries"
         />

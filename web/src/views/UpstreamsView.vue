@@ -1764,7 +1764,7 @@ function goPage(p: number): void {
                     本地运行环境
                   </h4>
                   <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                    安全档位、宿主依赖与当前探测结果。当前为策略约束，不是内核沙箱。
+                    安全档位、宿主依赖与当前探测结果。Linux 有 bubblewrap 时，严格档启用文件/网络隔离。
                   </p>
                 </div>
                 <div class="flex flex-wrap items-center gap-2">

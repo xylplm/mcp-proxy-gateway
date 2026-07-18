@@ -264,8 +264,8 @@ onMounted(load)
       >
         <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">本地安全能力</h3>
         <p class="mt-1 text-sm leading-6 text-gray-500 dark:text-gray-400">
-          三档模式（标准 / 严格 /
-          完全放行）可在上游表单单独设置。当前为策略约束；内核级文件/网络隔离取决于宿主能力。
+          三档模式（标准 / 严格 / 完全放行）可在上游表单单独设置。Linux 安装 bubblewrap
+          后，严格档将自动启用文件 bind 隔离；网络 deny 会 unshare 网络命名空间断网。
         </p>
         <div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
           <div
@@ -283,8 +283,8 @@ onMounted(load)
             <p class="mt-1 text-gray-500 dark:text-gray-400">
               {{
                 summary.sandbox?.filesystemIsolationSupported
-                  ? `可升级（${summary.sandbox?.isolationBackend || 'backend'}）`
-                  : '策略 allowlist（非内核）'
+                  ? `严格档已启用（${summary.sandbox?.isolationBackend || 'backend'}）`
+                  : '策略 allowlist（本宿主无 bwrap）'
               }}
             </p>
           </div>
@@ -295,8 +295,10 @@ onMounted(load)
             <p class="mt-1 text-gray-500 dark:text-gray-400">
               {{
                 summary.sandbox?.networkIsolationSupported
-                  ? `可升级（${summary.sandbox?.isolationBackend || 'backend'}）`
-                  : '策略声明（非内核）'
+                  ? summary.sandbox?.hostAllowlistEnforced
+                    ? `严格档可强制（${summary.sandbox?.isolationBackend || 'backend'}）`
+                    : `deny 真断网（${summary.sandbox?.isolationBackend || 'backend'}）；主机名单仍为策略`
+                  : '策略声明（本宿主无 bwrap）'
               }}
             </p>
           </div>

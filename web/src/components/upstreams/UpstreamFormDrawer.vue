@@ -30,11 +30,6 @@ import {
   type ScriptLaunchBinding,
 } from '@/api/scripts'
 import {
-  languageLabel as scriptLanguageLabel,
-  riskBadgeClass as scriptRiskBadgeClass,
-  riskLabel as scriptRiskLabel,
-} from '@/utils/scripts'
-import {
   CheckIcon,
   ChevronDownIcon,
   ErrorIcon,
@@ -51,14 +46,11 @@ import {
   type RequirementsMode,
 } from '@/utils/runtimeRequirements'
 import {
-  STDIO_SECURITY_MODES,
   buildSecurityProfilePayload,
   normalizeSecurityMode,
   normalizeSecurityProfile,
   preflightReadyLabelEx,
   preflightToneEx,
-  securityModeBadgeClass,
-  securityModeCardClass,
   securityRiskLabel,
   type NetworkAccessMode,
   type StdioSecurityMode,
@@ -66,6 +58,8 @@ import {
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
 import PathField from '@/components/common/PathField.vue'
+import StdioLaunchPanel from '@/components/upstreams/StdioLaunchPanel.vue'
+import StdioSecurityPanel from '@/components/upstreams/StdioSecurityPanel.vue'
 import { splitPathLines } from '@/utils/pathPicker'
 
 const props = defineProps<{
@@ -311,7 +305,6 @@ let preflightTimer: ReturnType<typeof setTimeout> | null = null
 let preflightSeq = 0
 
 const showRuntimeDeps = computed(() => form.transport === 'stdio')
-const securityModes = STDIO_SECURITY_MODES
 const preflightBanner = computed(() => {
   if (form.transport !== 'stdio') return null
   if (preflight.value === null) return null
@@ -1917,134 +1910,27 @@ const errorClass = 'mt-1.5 text-xs text-error-500'
             </section>
 
             <!-- 模板 stdio：安全档位 + 依赖卡片；保存时写入 securityProfile / runtimeRequirements -->
-            <section
+            <StdioSecurityPanel
               v-if="fromTemplate && form.transport === 'stdio'"
-              class="space-y-3 rounded-xl border p-4"
-              :class="securityModeCardClass(form.securityMode)"
-            >
-              <div class="flex flex-wrap items-start justify-between gap-2">
-                <div>
-                  <h4 class="text-sm font-semibold text-gray-800 dark:text-white/90">
-                    本地运行安全档位
-                  </h4>
-                  <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
-                    模板创建同样受档位约束。完全放行需勾选确认并填写备注。
-                  </p>
-                </div>
-                <span
-                  class="inline-flex rounded-full px-2.5 py-1 text-[11px] font-semibold"
-                  :class="securityModeBadgeClass(form.securityMode)"
-                >
-                  {{ securityModes.find((m) => m.value === form.securityMode)?.label }}
-                </span>
-              </div>
-              <div
-                class="grid gap-2 sm:grid-cols-3"
-                role="radiogroup"
-                aria-label="本地运行安全档位"
-              >
-                <button
-                  v-for="m in securityModes"
-                  :key="`tpl-sec-${m.value}`"
-                  type="button"
-                  role="radio"
-                  :aria-checked="form.securityMode === m.value"
-                  class="rounded-lg border px-3 py-2 text-left text-xs transition"
-                  :class="
-                    form.securityMode === m.value
-                      ? m.value === 'unrestricted'
-                        ? 'border-error-500 bg-error-600 text-white'
-                        : m.value === 'strict'
-                          ? 'border-success-400 bg-success-50 text-success-900 dark:bg-success-500/15 dark:text-success-200'
-                          : 'border-brand-300 text-brand-900 bg-white shadow-sm dark:bg-gray-900'
-                      : 'border-gray-200 text-gray-600 dark:border-gray-700 dark:text-gray-300'
-                  "
-                  @click="setSecurityMode(m.value)"
-                >
-                  <div class="font-semibold">{{ m.label }}</div>
-                </button>
-              </div>
-              <div
-                v-if="isUnrestrictedMode"
-                class="border-error-400/80 bg-error-600 rounded-xl border px-3 py-2.5 text-xs text-white shadow-sm"
-              >
-                <button
-                  type="button"
-                  role="checkbox"
-                  class="group flex w-full items-start gap-2.5 rounded-lg text-left transition"
-                  :aria-checked="form.unrestrictedAck"
-                  @click="form.unrestrictedAck = !form.unrestrictedAck"
-                >
-                  <span
-                    class="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md border transition duration-150"
-                    :class="
-                      form.unrestrictedAck
-                        ? 'text-error-600 border-white bg-white shadow-sm'
-                        : 'border-white/50 bg-white/10 text-transparent group-hover:border-white/80 group-hover:bg-white/15'
-                    "
-                    aria-hidden="true"
-                  >
-                    <svg class="h-3.5 w-3.5" viewBox="0 0 16 16" fill="none">
-                      <path
-                        d="M3.5 8.2 6.4 11l6.1-6.5"
-                        stroke="currentColor"
-                        stroke-width="2"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                      />
-                    </svg>
-                  </span>
-                  <span class="min-w-0 leading-5">
-                    <span class="block font-medium">我已了解完全放行风险</span>
-                    <span class="mt-0.5 block text-[11px] leading-4 text-white/80">
-                      勾选后表示接受与网关同权限运行本地 MCP 的风险
-                    </span>
-                  </span>
-                </button>
-                <input
-                  v-model="form.securityNote"
-                  type="text"
-                  class="border-error-300/50 mt-2.5 w-full rounded-lg border bg-white/10 px-2.5 py-2 text-xs text-white placeholder:text-white/60 focus:border-white/80 focus:outline-none"
-                  placeholder="确认备注（推荐填写原因；未填将写入默认确认语）"
-                  maxlength="300"
-                />
-              </div>
-              <div v-if="isStrictMode" class="space-y-2">
-                <label for="tpl-cwd" :class="labelClass"
-                  >工作目录<span class="text-error-500">*</span></label
-                >
-                <PathField
-                  input-id="tpl-cwd"
-                  v-model="form.cwd"
-                  mode="directory"
-                  title="选择工作目录（网关主机）"
-                  placeholder="/data/workspaces/demo"
-                  :input-class="inputClass"
-                  :context-roots="pathPickerContextRoots"
-                />
-                <label for="tpl-files" :class="labelClass"
-                  >文件允许路径<span class="text-error-500">*</span></label
-                >
-                <PathField
-                  input-id="tpl-files"
-                  v-model="form.filePathsText"
-                  mode="directory"
-                  multiple
-                  :rows="2"
-                  title="添加文件允许路径（网关主机）"
-                  placeholder="每行一个绝对路径"
-                  :input-class="textareaClass"
-                  :context-roots="pathPickerContextRoots"
-                />
-                <p v-if="fieldErrors.cwd" :class="errorClass">{{ fieldErrors.cwd }}</p>
-                <p v-if="fieldErrors.filePathsText" :class="errorClass">
-                  {{ fieldErrors.filePathsText }}
-                </p>
-              </div>
-              <p v-if="fieldErrors.securityProfile" :class="errorClass">
-                {{ fieldErrors.securityProfile }}
-              </p>
-            </section>
+              compact
+              v-model:security-mode="form.securityMode"
+              v-model:unrestricted-ack="form.unrestrictedAck"
+              v-model:security-note="form.securityNote"
+              v-model:file-paths-text="form.filePathsText"
+              v-model:package-allowlist-text="form.packageAllowlistText"
+              v-model:network-mode="form.networkMode"
+              v-model:network-hosts-text="form.networkHostsText"
+              v-model:allow-self-install="form.allowSelfInstall"
+              v-model:cwd="form.cwd"
+              :path-picker-context-roots="pathPickerContextRoots"
+              :field-errors="fieldErrors"
+              :input-class="inputClass"
+              :textarea-class="textareaClass"
+              :label-class="labelClass"
+              :help-class="helpClass"
+              :error-class="errorClass"
+              @set-mode="setSecurityMode"
+            />
 
             <section
               v-if="fromTemplate && form.transport === 'stdio'"
@@ -2157,488 +2043,56 @@ const errorClass = 'mt-1.5 text-xs text-error-500'
                 </div>
 
                 <template v-if="form.transport === 'stdio'">
-                  <div class="space-y-4">
-                    <div>
-                      <span :class="labelClass">本地启动方式</span>
-                      <div class="grid grid-cols-1 gap-2 sm:grid-cols-3">
-                        <button
-                          type="button"
-                          class="rounded-xl border p-3 text-left transition"
-                          :class="
-                            form.launchMode === 'command'
-                              ? 'border-brand-300 bg-brand-50/70 ring-brand-100 dark:border-brand-500/40 dark:bg-brand-500/10 ring-1'
-                              : 'hover:border-brand-200 dark:hover:border-brand-500/30 border-gray-200 dark:border-gray-800'
-                          "
-                          @click="form.launchMode = 'command'"
-                        >
-                          <span class="block text-sm font-semibold text-gray-800 dark:text-white/90"
-                            >命令启动</span
-                          >
-                          <span
-                            class="mt-1 block text-xs leading-5 text-gray-500 dark:text-gray-400"
-                            >手动填写白名单命令、参数与工作目录。</span
-                          >
-                        </button>
-                        <button
-                          type="button"
-                          class="rounded-xl border p-3 text-left transition"
-                          :class="
-                            form.launchMode === 'script'
-                              ? 'border-success-300 bg-success-50/70 ring-success-100 dark:border-success-500/40 dark:bg-success-500/10 ring-1'
-                              : 'hover:border-success-200 dark:hover:border-success-500/30 border-gray-200 dark:border-gray-800'
-                          "
-                          @click="selectScriptLaunchMode"
-                        >
-                          <span class="block text-sm font-semibold text-gray-800 dark:text-white/90"
-                            >脚本中心启动</span
-                          >
-                          <span
-                            class="mt-1 block text-xs leading-5 text-gray-500 dark:text-gray-400"
-                            >选择受管脚本，自动填入解释器、版本路径与工作目录。</span
-                          >
-                        </button>
-                        <button
-                          type="button"
-                          class="rounded-xl border p-3 text-left transition"
-                          :class="
-                            form.launchMode === 'directory'
-                              ? 'border-warning-300 bg-warning-50/70 ring-warning-100 dark:border-warning-500/40 dark:bg-warning-500/10 ring-1'
-                              : 'hover:border-warning-200 dark:hover:border-warning-500/30 border-gray-200 dark:border-gray-800'
-                          "
-                          @click="form.launchMode = 'directory'"
-                        >
-                          <span class="block text-sm font-semibold text-gray-800 dark:text-white/90"
-                            >本地目录启动</span
-                          >
-                          <span
-                            class="mt-1 block text-xs leading-5 text-gray-500 dark:text-gray-400"
-                            >选择项目目录，只读识别清单或常见入口后生成启动配置。</span
-                          >
-                        </button>
-                      </div>
-                    </div>
+                  <StdioLaunchPanel
+                    v-model:launch-mode="form.launchMode"
+                    v-model:command="form.command"
+                    v-model:args="form.args"
+                    v-model:directory-root="form.directoryRoot"
+                    :script-id="form.scriptId"
+                    :script-version="form.scriptVersion"
+                    :managed-scripts="managedScripts"
+                    :scripts-loading="scriptsLoading"
+                    :script-binding-loading="scriptBindingLoading"
+                    :directory-entry-id="form.directoryEntryId"
+                    :directory-entries="directoryEntries"
+                    :directory-warnings="directoryWarnings"
+                    :directory-inspect-loading="directoryInspectLoading"
+                    :command-placeholder="currentTransport.placeholder"
+                    :path-picker-context-roots="pathPickerContextRoots"
+                    :field-errors="fieldErrors"
+                    :input-class="inputClass"
+                    :textarea-class="textareaClass"
+                    :label-class="labelClass"
+                    :help-class="helpClass"
+                    :error-class="errorClass"
+                    @select-script-mode="selectScriptLaunchMode"
+                    @apply-script="applyManagedScript"
+                    @refresh-scripts="ensureManagedScripts(true)"
+                    @inspect-directory="inspectDirectory()"
+                    @apply-directory-entry="applyDirectoryEntry"
+                  />
 
-                    <div
-                      v-if="form.launchMode === 'script'"
-                      class="border-success-200 bg-success-50/40 dark:border-success-500/20 dark:bg-success-500/5 rounded-xl border p-4"
-                    >
-                      <div class="flex flex-wrap items-start justify-between gap-2">
-                        <div>
-                          <label for="up-script" :class="labelClass"
-                            >受管脚本<span class="text-error-500">*</span></label
-                          >
-                          <p class="-mt-1 text-xs text-gray-500 dark:text-gray-400">
-                            脚本来自「脚本中心」，保存为不可变版本并经过静态风险分析。
-                          </p>
-                        </div>
-                        <router-link
-                          to="/scripts"
-                          class="text-brand-600 dark:text-brand-400 text-xs font-medium hover:underline"
-                          >打开脚本中心</router-link
-                        >
-                      </div>
-                      <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
-                        <select
-                          id="up-script"
-                          :value="form.scriptId"
-                          :class="[inputClass, 'sm:flex-1']"
-                          :disabled="scriptsLoading || scriptBindingLoading"
-                          @change="applyManagedScript(($event.target as HTMLSelectElement).value)"
-                        >
-                          <option value="">
-                            {{ scriptsLoading ? '加载脚本中…' : '请选择脚本' }}
-                          </option>
-                          <option
-                            v-for="script in managedScripts"
-                            :key="script.id"
-                            :value="script.id"
-                          >
-                            {{ script.name }} · {{ scriptLanguageLabel(script.language) }} ·
-                            {{ script.currentVersion }} ·
-                            {{ scriptRiskLabel(script.risk.level) }}风险
-                          </option>
-                        </select>
-                        <button
-                          type="button"
-                          class="h-11 shrink-0 rounded-lg border border-gray-300 px-3 text-sm font-medium text-gray-600 transition hover:bg-gray-50 disabled:opacity-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-white/5"
-                          :disabled="scriptsLoading || scriptBindingLoading"
-                          @click="ensureManagedScripts(true)"
-                        >
-                          {{ scriptsLoading ? '刷新中…' : '刷新列表' }}
-                        </button>
-                      </div>
-                      <div
-                        v-if="form.scriptId"
-                        class="mt-3 rounded-lg bg-white/80 p-3 dark:bg-gray-900/50"
-                      >
-                        <template v-if="managedScripts.find((s) => s.id === form.scriptId)">
-                          <div class="flex flex-wrap items-center gap-2 text-xs">
-                            <span class="font-medium text-gray-700 dark:text-gray-200">{{
-                              managedScripts.find((s) => s.id === form.scriptId)?.name
-                            }}</span>
-                            <span
-                              class="rounded-full px-2 py-0.5 font-semibold"
-                              :class="
-                                scriptRiskBadgeClass(
-                                  managedScripts.find((s) => s.id === form.scriptId)?.risk.level ??
-                                    'low',
-                                )
-                              "
-                            >
-                              {{
-                                scriptRiskLabel(
-                                  managedScripts.find((s) => s.id === form.scriptId)?.risk.level ??
-                                    'low',
-                                )
-                              }}风险 ·
-                              {{
-                                managedScripts.find((s) => s.id === form.scriptId)?.risk.score ?? 0
-                              }}
-                            </span>
-                            <span class="text-gray-400">版本 {{ form.scriptVersion }}</span>
-                          </div>
-                          <p
-                            class="mt-2 truncate font-mono text-[11px] text-gray-500 dark:text-gray-400"
-                          >
-                            {{ managedScripts.find((s) => s.id === form.scriptId)?.entryPath }}
-                          </p>
-                        </template>
-                      </div>
-                      <p v-if="fieldErrors.scriptId" :class="errorClass">
-                        {{ fieldErrors.scriptId }}
-                      </p>
-                    </div>
-
-                    <div
-                      v-if="form.launchMode === 'directory'"
-                      class="border-warning-200 bg-warning-50/40 dark:border-warning-500/20 dark:bg-warning-500/5 rounded-xl border p-4"
-                    >
-                      <label for="up-directory-root" :class="labelClass"
-                        >项目目录<span class="text-error-500">*</span></label
-                      >
-                      <div class="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
-                        <PathField
-                          input-id="up-directory-root"
-                          v-model="form.directoryRoot"
-                          mode="directory"
-                          title="选择本地 MCP 项目目录（网关主机）"
-                          placeholder="/data/workspaces/my-mcp"
-                          :input-class="inputClass"
-                          :context-roots="pathPickerContextRoots"
-                        />
-                        <button
-                          type="button"
-                          class="bg-warning-500 hover:bg-warning-600 rounded-lg px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
-                          :disabled="!form.directoryRoot.trim() || directoryInspectLoading"
-                          @click="inspectDirectory()"
-                        >
-                          {{ directoryInspectLoading ? '识别中…' : '识别入口' }}
-                        </button>
-                      </div>
-                      <p :class="helpClass">
-                        优先读取 mpg.launch.json；没有清单时识别
-                        main.py、server.py、index.js、dist/index.js。只读扫描，不执行代码。
-                      </p>
-                      <p v-if="fieldErrors.directoryRoot" :class="errorClass">
-                        {{ fieldErrors.directoryRoot }}
-                      </p>
-                      <div v-if="directoryEntries.length > 0" class="mt-3 space-y-2">
-                        <button
-                          v-for="entry in directoryEntries"
-                          :key="entry.id"
-                          type="button"
-                          class="flex w-full items-start justify-between gap-3 rounded-lg border p-3 text-left transition"
-                          :class="
-                            form.directoryEntryId === entry.id
-                              ? 'border-warning-400 ring-warning-200 dark:ring-warning-500/30 bg-white ring-1 dark:bg-gray-900'
-                              : 'border-warning-200 hover:border-warning-300 dark:border-warning-500/20 bg-white/60 dark:bg-white/5'
-                          "
-                          @click="applyDirectoryEntry(entry)"
-                        >
-                          <span class="min-w-0"
-                            ><span
-                              class="block text-sm font-medium text-gray-800 dark:text-white/90"
-                              >{{ entry.label || entry.id }}</span
-                            ><span class="mt-1 block truncate font-mono text-[11px] text-gray-500"
-                              >{{ entry.command }} {{ entry.args.join(' ') }}</span
-                            ></span
-                          >
-                          <span class="shrink-0 text-[10px] text-gray-400">{{
-                            entry.recommendedMode || 'strict'
-                          }}</span>
-                        </button>
-                      </div>
-                      <p
-                        v-if="directoryWarnings.length > 0"
-                        class="text-warning-700 dark:text-warning-300 mt-2 text-xs"
-                      >
-                        {{ directoryWarnings.join('；') }}
-                      </p>
-                      <p v-if="fieldErrors.directoryEntryId" :class="errorClass">
-                        {{ fieldErrors.directoryEntryId }}
-                      </p>
-                    </div>
-
-                    <div>
-                      <label for="up-command" :class="labelClass"
-                        >启动命令<span class="text-error-500">*</span></label
-                      >
-                      <input
-                        id="up-command"
-                        v-model="form.command"
-                        type="text"
-                        :readonly="form.launchMode !== 'command'"
-                        :class="[
-                          inputClass,
-                          form.launchMode !== 'command'
-                            ? 'bg-gray-50 text-gray-500 dark:bg-white/5'
-                            : '',
-                        ]"
-                        :placeholder="currentTransport.placeholder"
-                      />
-                      <p v-if="form.launchMode !== 'command'" :class="helpClass">
-                        由所选脚本或目录入口自动生成；执行仍经过 stdio 命令白名单校验。
-                      </p>
-                      <p v-if="fieldErrors.command" :class="errorClass">
-                        {{ fieldErrors.command }}
-                      </p>
-                    </div>
-                    <div>
-                      <label for="up-args" :class="labelClass">命令参数</label>
-                      <textarea
-                        id="up-args"
-                        v-model="form.args"
-                        rows="4"
-                        :readonly="form.launchMode !== 'command'"
-                        :class="[
-                          textareaClass,
-                          form.launchMode !== 'command'
-                            ? 'bg-gray-50 text-gray-500 dark:bg-white/5'
-                            : '',
-                        ]"
-                        placeholder="-y&#10;@modelcontextprotocol/server-filesystem&#10;D:\\data"
-                      ></textarea>
-                      <p :class="helpClass">
-                        <template v-if="form.launchMode === 'script'"
-                          >首个参数固定为受管脚本版本路径，避免运行内容漂移。</template
-                        >
-                        <template v-else-if="form.launchMode === 'directory'"
-                          >由只读目录探测生成绝对入口路径，不通过 shell。</template
-                        >
-                        <template v-else
-                          >每行一个参数。需要在参数中放凭证时，选择自定义注入并写入
-                          ${credential}。</template
-                        >
-                      </p>
-                      <p v-if="fieldErrors.args" :class="errorClass">{{ fieldErrors.args }}</p>
-                    </div>
-
-                    <div
-                      v-if="showRuntimeDeps"
-                      class="rounded-xl border p-4 transition"
-                      :class="securityModeCardClass(form.securityMode)"
-                    >
-                      <div class="flex flex-wrap items-start justify-between gap-2">
-                        <div>
-                          <h5 class="text-sm font-semibold text-gray-900 dark:text-white/90">
-                            本地运行安全档位
-                          </h5>
-                          <p class="mt-1 text-xs leading-5 text-gray-600 dark:text-gray-400">
-                            标准兼容常用
-                            MCP；严格收敛命令/文件/自装包；完全放行与网关同权限。均为策略约束，不是内核沙箱。
-                          </p>
-                        </div>
-                        <span
-                          class="inline-flex rounded-full px-2.5 py-1 text-[11px] font-semibold"
-                          :class="securityModeBadgeClass(form.securityMode)"
-                        >
-                          {{
-                            securityModes.find((m) => m.value === form.securityMode)?.label ||
-                            form.securityMode
-                          }}
-                        </span>
-                      </div>
-
-                      <div
-                        class="mt-3 grid gap-2 sm:grid-cols-3"
-                        role="radiogroup"
-                        aria-label="本地运行安全档位"
-                      >
-                        <button
-                          v-for="m in securityModes"
-                          :key="m.value"
-                          type="button"
-                          role="radio"
-                          :aria-checked="form.securityMode === m.value"
-                          class="rounded-lg border px-3 py-2.5 text-left transition"
-                          :class="
-                            form.securityMode === m.value
-                              ? m.value === 'unrestricted'
-                                ? 'border-error-500 bg-error-600 text-white shadow-sm'
-                                : m.value === 'strict'
-                                  ? 'border-success-400 bg-success-50 text-success-900 dark:border-success-500/50 dark:bg-success-500/15 dark:text-success-200'
-                                  : 'border-brand-300 text-brand-900 dark:border-brand-500/40 dark:text-brand-100 bg-white shadow-sm dark:bg-gray-900'
-                              : 'border-gray-200 bg-white/70 text-gray-600 hover:border-gray-300 dark:border-gray-700 dark:bg-gray-900/40 dark:text-gray-300'
-                          "
-                          @click="setSecurityMode(m.value)"
-                        >
-                          <div class="text-xs font-semibold">{{ m.label }}</div>
-                          <div
-                            class="mt-1 text-[11px] leading-4 opacity-90"
-                            :class="
-                              form.securityMode === m.value && m.value === 'unrestricted'
-                                ? 'text-white/90'
-                                : 'text-gray-500 dark:text-gray-400'
-                            "
-                          >
-                            {{ m.desc }}
-                          </div>
-                        </button>
-                      </div>
-
-                      <div
-                        v-if="isUnrestrictedMode"
-                        class="border-error-400/80 bg-error-600 mt-3 rounded-xl border px-3.5 py-3 text-xs leading-5 text-white shadow-sm"
-                      >
-                        <p class="font-semibold tracking-wide">完全放行 · 极高风险</p>
-                        <p class="mt-1 text-white/90">
-                          子进程与网关同用户权限，可能读写其可见文件并发起网络请求。恶意或被篡改的本地
-                          MCP 等同于在本机执行任意代码。当前为策略约束，不是内核沙箱。
-                        </p>
-                        <button
-                          type="button"
-                          role="checkbox"
-                          class="group mt-2.5 flex w-full items-start gap-2.5 rounded-lg text-left transition"
-                          :aria-checked="form.unrestrictedAck"
-                          @click="form.unrestrictedAck = !form.unrestrictedAck"
-                        >
-                          <span
-                            class="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md border transition duration-150"
-                            :class="
-                              form.unrestrictedAck
-                                ? 'text-error-600 border-white bg-white shadow-sm'
-                                : 'border-white/50 bg-white/10 text-transparent group-hover:border-white/80 group-hover:bg-white/15'
-                            "
-                            aria-hidden="true"
-                          >
-                            <svg class="h-3.5 w-3.5" viewBox="0 0 16 16" fill="none">
-                              <path
-                                d="M3.5 8.2 6.4 11l6.1-6.5"
-                                stroke="currentColor"
-                                stroke-width="2"
-                                stroke-linecap="round"
-                                stroke-linejoin="round"
-                              />
-                            </svg>
-                          </span>
-                          <span class="min-w-0 leading-5">
-                            <span class="block font-medium"
-                              >我已了解风险，仍要为此上游启用完全放行</span
-                            >
-                            <span class="mt-0.5 block text-[11px] leading-4 text-white/80">
-                              勾选表示接受与网关同权限运行本地 MCP；建议填写放行原因
-                            </span>
-                          </span>
-                        </button>
-                        <input
-                          v-model="form.securityNote"
-                          type="text"
-                          class="border-error-300/60 mt-2.5 w-full rounded-lg border bg-white/10 px-2.5 py-2 text-xs text-white placeholder:text-white/60 focus:border-white/80 focus:outline-none"
-                          placeholder="可选：放行原因（写入配置备注）"
-                          maxlength="300"
-                        />
-                      </div>
-
-                      <div
-                        v-if="isStrictMode || form.filePathsText.trim() !== ''"
-                        class="mt-3 space-y-3"
-                      >
-                        <div>
-                          <label for="up-file-roots" :class="labelClass">
-                            文件允许路径
-                            <span v-if="isStrictMode" class="text-error-500">*</span>
-                          </label>
-                          <PathField
-                            input-id="up-file-roots"
-                            v-model="form.filePathsText"
-                            mode="directory"
-                            multiple
-                            :rows="3"
-                            title="添加文件允许路径（网关主机）"
-                            placeholder="每行一个绝对路径，例如：&#10;D:\\mcp-workspace&#10;/data/workspaces/demo"
-                            :input-class="textareaClass"
-                            :context-roots="pathPickerContextRoots"
-                          />
-                          <p :class="helpClass">
-                            严格模式要求工作目录位于这些路径内。可手输或点右侧文件夹浏览网关主机目录；这是声明与校验，不是内核强制隔离。
-                          </p>
-                          <p v-if="fieldErrors.filePathsText" :class="errorClass">
-                            {{ fieldErrors.filePathsText }}
-                          </p>
-                        </div>
-                        <div v-if="isStrictMode">
-                          <label for="up-pkg-allow" :class="labelClass"
-                            >追加包白名单（npx / uvx）</label
-                          >
-                          <textarea
-                            id="up-pkg-allow"
-                            v-model="form.packageAllowlistText"
-                            rows="3"
-                            :class="textareaClass"
-                            placeholder="每行一个包名，将与系统全局包白名单合并：&#10;@my-org/*&#10;my-custom-mcp"
-                          ></textarea>
-                          <p :class="helpClass">
-                            严格模式允许使用 npx/uvx，但目标包必须在全局或此处追加的白名单内。支持
-                            @scope/*。禁止本地路径与 URL。
-                          </p>
-                        </div>
-                        <div class="grid gap-3 sm:grid-cols-2">
-                          <div>
-                            <label for="up-net-mode" :class="labelClass">网络策略</label>
-                            <select id="up-net-mode" v-model="form.networkMode" :class="inputClass">
-                              <option value="inherit">跟随档位默认</option>
-                              <option value="deny">拒绝出站（策略声明）</option>
-                              <option value="allowlist">仅允许声明主机</option>
-                              <option value="unrestricted">不限制</option>
-                            </select>
-                          </div>
-                          <div>
-                            <label
-                              class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-200"
-                            >
-                              <input
-                                v-model="form.allowSelfInstall"
-                                type="checkbox"
-                                class="text-brand-600 focus:ring-brand-500 h-4 w-4 rounded border-gray-300"
-                                :disabled="isStrictMode && !form.allowSelfInstall && false"
-                              />
-                              允许脚本自装包（npm/pip 等）
-                            </label>
-                            <p :class="helpClass">严格模式默认关闭；开启后需声明网络允许主机。</p>
-                          </div>
-                        </div>
-                        <div v-if="form.networkMode === 'allowlist'">
-                          <label for="up-net-hosts" :class="labelClass">网络允许主机</label>
-                          <textarea
-                            id="up-net-hosts"
-                            v-model="form.networkHostsText"
-                            rows="2"
-                            :class="textareaClass"
-                            placeholder="registry.npmjs.org&#10;pypi.org"
-                          ></textarea>
-                        </div>
-                      </div>
-
-                      <p v-if="fieldErrors.securityProfile" :class="errorClass">
-                        {{ fieldErrors.securityProfile }}
-                      </p>
-                      <p
-                        v-if="preflight?.securityError"
-                        class="text-error-600 dark:text-error-400 mt-2 text-xs"
-                      >
-                        {{ preflight.securityError }}
-                      </p>
-                    </div>
+                  <StdioSecurityPanel
+                    v-if="showRuntimeDeps"
+                    v-model:security-mode="form.securityMode"
+                    v-model:unrestricted-ack="form.unrestrictedAck"
+                    v-model:security-note="form.securityNote"
+                    v-model:file-paths-text="form.filePathsText"
+                    v-model:package-allowlist-text="form.packageAllowlistText"
+                    v-model:network-mode="form.networkMode"
+                    v-model:network-hosts-text="form.networkHostsText"
+                    v-model:allow-self-install="form.allowSelfInstall"
+                    v-model:cwd="form.cwd"
+                    :path-picker-context-roots="pathPickerContextRoots"
+                    :field-errors="fieldErrors"
+                    :security-error="preflight?.securityError || ''"
+                    :input-class="inputClass"
+                    :textarea-class="textareaClass"
+                    :label-class="labelClass"
+                    :help-class="helpClass"
+                    :error-class="errorClass"
+                    @set-mode="setSecurityMode"
+                  />
 
                     <div
                       v-if="showRuntimeDeps"
@@ -2806,7 +2260,6 @@ const errorClass = 'mt-1.5 text-xs text-error-500'
                         {{ fieldErrors.runtimeRequirements }}
                       </p>
                     </div>
-                  </div>
                 </template>
 
                 <template v-else-if="isOpenAPITransport">
