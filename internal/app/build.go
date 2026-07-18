@@ -54,6 +54,14 @@ func (a *App) build(envCfg config.EnvConfig) error {
 			ExtraSensitiveEnvPrefixes: append([]string{}, rt.ExtraSensitiveEnvPrefixes...),
 		}
 	})
+	// 卷内运行时目录：优先 MPG_RUNTIME_DIR，否则 {DataDir}/runtime。
+	runtimeDirFn := func() string {
+		env := a.cfg.Env()
+		return rtenv.ResolveRuntimeDir(env.DataDir, env.RuntimeDir)
+	}
+	transport.SetRuntimeDirProvider(runtimeDirFn)
+	// 启动时幂等创建目录布局（失败不阻断主业务；Summary 时也会再试）。
+	_ = rtenv.EnsureRuntimeLayout(runtimeDirFn())
 	runtimeSvc := rtenv.NewService(
 		func() rtenv.Policy {
 			rt := a.cfg.Config().Runtime
@@ -64,6 +72,7 @@ func (a *App) build(envCfg config.EnvConfig) error {
 			}
 		},
 		func() string { return a.cfg.Env().DataDir },
+		runtimeDirFn,
 	)
 	factory := transport.NewFactory()
 	dialer := newSessionDialer(factory)

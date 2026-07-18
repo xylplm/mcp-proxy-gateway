@@ -284,4 +284,20 @@ func TestLoadEnvConfigSuccess(t *testing.T) {
 	if cfg.DataDir != "/data" {
 		t.Errorf("DataDir 期望默认值 /data，实际 %q", cfg.DataDir)
 	}
+	if cfg.RuntimeDir != "" {
+		t.Errorf("RuntimeDir 未设置时应为空，实际 %q", cfg.RuntimeDir)
+	}
+}
+
+// TestLoadEnvConfigRuntimeDir 验证可选 MPG_RUNTIME_DIR 可被解析。
+func TestLoadEnvConfigRuntimeDir(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("MPG_RUNTIME_DIR", "/custom/runtime")
+	cfg, err := LoadEnvConfig()
+	if err != nil {
+		t.Fatalf("LoadEnvConfig: %v", err)
+	}
+	if cfg.RuntimeDir != "/custom/runtime" {
+		t.Fatalf("RuntimeDir=%q", cfg.RuntimeDir)
+	}
 }

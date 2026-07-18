@@ -2,6 +2,9 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   formatAllowlist,
+  runtimeBinDir,
+  runtimeGuideSteps,
+  shouldShowRuntimeGuide,
   stdioPolicyLabel,
   summarizeToolHealth,
   toolStatusLabel,
@@ -41,4 +44,16 @@ test('policy and allowlist formatting', () => {
   assert.equal(formatAllowlist(['node', 'npx']), 'node、npx')
   assert.equal(formatAllowlist([]), '未配置（使用服务端默认）')
   assert.equal(formatAllowlist(null), '未配置（使用服务端默认）')
+})
+
+test('runtime volume guide helpers', () => {
+  assert.equal(runtimeBinDir({ runtimeDir: '/data/runtime', pathPrefixes: ['/data/runtime/bin'] }), '/data/runtime/bin')
+  assert.equal(runtimeBinDir({ runtimeDir: '/data/runtime', pathPrefixes: [] }), '/data/runtime/bin')
+  assert.equal(runtimeBinDir({ runtimeDir: '', pathPrefixes: [] }), '')
+  assert.equal(shouldShowRuntimeGuide({ missingCount: 2, runtimeDir: '/data/runtime' }), true)
+  assert.equal(shouldShowRuntimeGuide({ missingCount: 0, runtimeDir: '/data/runtime' }), false)
+  assert.equal(shouldShowRuntimeGuide({ missingCount: 1, runtimeDir: '' }), false)
+  const steps = runtimeGuideSteps({ runtimeDir: '/data/runtime', pathPrefixes: [] })
+  assert.equal(steps.length, 3)
+  assert.match(steps[0], /\/data\/runtime\/bin/)
 })

@@ -17,6 +17,9 @@ export interface RuntimeSummary {
   availableCount: number
   missingCount: number
   dataDir?: string
+  runtimeDir?: string
+  pathPrefixes?: string[]
+  layoutReady?: boolean
   riskNotes: string[]
 }
 

@@ -3,6 +3,7 @@ package runtime
 import (
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 )
 
@@ -21,6 +22,9 @@ type Summary struct {
 	AvailableCount   int          `json:"availableCount"`
 	MissingCount     int          `json:"missingCount"`
 	DataDir          string       `json:"dataDir,omitempty"`
+	RuntimeDir       string       `json:"runtimeDir,omitempty"`
+	PathPrefixes     []string     `json:"pathPrefixes,omitempty"`
+	LayoutReady      bool         `json:"layoutReady"`
 	RiskNotes        []string     `json:"riskNotes"`
 }
 
@@ -66,7 +70,7 @@ func (d *Doctor) Probe() []ToolStatus {
 }
 
 // BuildSummary 组合策略与探测结果。
-func BuildSummary(policy Policy, tools []ToolStatus, dataDir string) Summary {
+func BuildSummary(policy Policy, tools []ToolStatus, dataDir, runtimeDir string, pathPrefixes []string) Summary {
 	policy = NormalizePolicy(policy)
 	allowlist := policy.CommandAllowlist
 	if allowlist == nil {
@@ -79,6 +83,13 @@ func BuildSummary(policy Policy, tools []ToolStatus, dataDir string) Summary {
 			available++
 		}
 	}
+	missing := len(tools) - available
+	layoutReady := runtimeDir != ""
+	if runtimeDir != "" {
+		if st, err := os.Stat(runtimeDir); err != nil || !st.IsDir() {
+			layoutReady = false
+		}
+	}
 	notes := []string{
 		"stdio 上游在网关进程旁启动本地子进程，请仅接入可信命令与包来源。",
 		"远程 SSE / HTTP / WebSocket / OpenAPI 上游不依赖本页工具探测。",
@@ -86,37 +97,55 @@ func BuildSummary(policy Policy, tools []ToolStatus, dataDir string) Summary {
 	if !policy.StdioEnabled {
 		notes = append([]string{"本地 stdio 上游已禁用，仅可使用远程与 OpenAPI 上游。"}, notes...)
 	}
+	if missing > 0 && runtimeDir != "" {
+		notes = append(notes,
+			"可将 node、npx、uv 等可执行文件放入 "+runtimeDir+"/bin（或 node/bin 等），重启网关进程后刷新本页。默认镜像不含这些工具，数据卷内安装可在容器更新后保留。",
+		)
+	}
+	if len(pathPrefixes) == 0 && runtimeDir != "" {
+		notes = append(notes, "运行时目录已配置，但尚未发现可用的 bin 子目录；请按目录说明放置工具。")
+	}
 	return Summary{
 		StdioEnabled:     policy.StdioEnabled,
 		CommandAllowlist: append([]string{}, allowlist...),
 		Tools:            tools,
 		AvailableCount:   available,
-		MissingCount:     len(tools) - available,
+		MissingCount:     missing,
 		DataDir:          dataDir,
+		RuntimeDir:       runtimeDir,
+		PathPrefixes:     append([]string{}, pathPrefixes...),
+		LayoutReady:      layoutReady,
 		RiskNotes:        notes,
 	}
 }
 
 // Service 聚合策略读取与探测，供 HTTP 与 transport 注入。
 type Service struct {
-	mu        sync.RWMutex
-	policyFn  func() Policy
-	dataDirFn func() string
-	doctor    *Doctor
+	mu           sync.RWMutex
+	policyFn     func() Policy
+	dataDirFn    func() string
+	runtimeDirFn func() string
 }
 
 // NewService 构造运行时服务。
-func NewService(policyFn func() Policy, dataDirFn func() string) *Service {
+//
+// runtimeDirFn 可空：将由 dataDir + "runtime" 推导。
+func NewService(policyFn func() Policy, dataDirFn func() string, runtimeDirFn func() string) *Service {
 	if policyFn == nil {
 		policyFn = func() Policy { return DefaultPolicy() }
 	}
 	if dataDirFn == nil {
 		dataDirFn = func() string { return os.Getenv("MPG_DATA_DIR") }
 	}
+	if runtimeDirFn == nil {
+		runtimeDirFn = func() string {
+			return ResolveRuntimeDir(dataDirFn(), os.Getenv("MPG_RUNTIME_DIR"))
+		}
+	}
 	return &Service{
-		policyFn:  policyFn,
-		dataDirFn: dataDirFn,
-		doctor:    NewDoctor(nil),
+		policyFn:     policyFn,
+		dataDirFn:    dataDirFn,
+		runtimeDirFn: runtimeDirFn,
 	}
 }
 
@@ -134,21 +163,45 @@ func (s *Service) Policy() Policy {
 	return NormalizePolicy(fn())
 }
 
+// RuntimeDir 返回当前卷内运行时根目录。
+func (s *Service) RuntimeDir() string {
+	if s == nil {
+		return ResolveRuntimeDir(os.Getenv("MPG_DATA_DIR"), os.Getenv("MPG_RUNTIME_DIR"))
+	}
+	s.mu.RLock()
+	fn := s.runtimeDirFn
+	dataFn := s.dataDirFn
+	s.mu.RUnlock()
+	if fn != nil {
+		if dir := strings.TrimSpace(fn()); dir != "" {
+			return dir
+		}
+	}
+	dataDir := ""
+	if dataFn != nil {
+		dataDir = dataFn()
+	}
+	return ResolveRuntimeDir(dataDir, os.Getenv("MPG_RUNTIME_DIR"))
+}
+
 // Summary 返回管理台摘要。
 func (s *Service) Summary() Summary {
 	if s == nil {
-		return BuildSummary(DefaultPolicy(), nil, "")
+		return BuildSummary(DefaultPolicy(), nil, "", "", nil)
 	}
 	policy := s.Policy()
 	dataDir := ""
 	if s.dataDirFn != nil {
 		dataDir = s.dataDirFn()
 	}
-	var tools []ToolStatus
-	if s.doctor != nil {
-		tools = s.doctor.Probe()
-	}
-	return BuildSummary(policy, tools, dataDir)
+	runtimeDir := s.RuntimeDir()
+	// 本机/容器均幂等确保目录存在，便于用户直接往里放工具。
+	_ = EnsureRuntimeLayout(runtimeDir)
+	prefixes := PathPrefixes(runtimeDir)
+	doctor := NewDoctor(func(file string) (string, error) {
+		return LookPathWithPrefixes(file, prefixes, exec.LookPath)
+	})
+	return BuildSummary(policy, doctor.Probe(), dataDir, runtimeDir, prefixes)
 }
 
 // ValidateStdioCommand 供 transport 校验调用。

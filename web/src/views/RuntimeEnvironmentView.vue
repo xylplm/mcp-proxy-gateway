@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
- * 运行环境页：展示本地 stdio 策略与宿主工具探测结果（P0）。
- * 不负责在线装包；引导用户安装运行时或改用远程上游。
+ * 运行环境页：展示本地 stdio 策略、卷内 runtime 目录与宿主工具探测（P1a）。
+ * 不负责在线装包；引导用户将工具放入数据卷或改用远程上游。
  */
 import { computed, onMounted, ref } from 'vue'
 import AdminLayout from '@/components/layout/AdminLayout.vue'
@@ -10,6 +10,9 @@ import { BoxCubeIcon, RefreshIcon } from '@/icons'
 import { getRuntimeSummary, type RuntimeSummary, type RuntimeToolStatus } from '@/api/runtime'
 import {
   formatAllowlist,
+  runtimeBinDir,
+  runtimeGuideSteps,
+  shouldShowRuntimeGuide,
   stdioPolicyLabel,
   summarizeToolHealth,
   toolStatusLabel,
@@ -36,6 +39,12 @@ const stdioToneClass = computed(() => {
     ? 'bg-success-50 text-success-700 dark:bg-success-500/10 dark:text-success-400'
     : 'bg-warning-50 text-warning-700 dark:bg-warning-500/10 dark:text-warning-400'
 })
+
+const showGuide = computed(() => summary.value !== null && shouldShowRuntimeGuide(summary.value))
+
+const guideSteps = computed(() => (summary.value === null ? [] : runtimeGuideSteps(summary.value)))
+
+const binDir = computed(() => (summary.value === null ? '' : runtimeBinDir(summary.value)))
 
 async function load(): Promise<void> {
   if (loading.value) return
@@ -72,13 +81,15 @@ onMounted(load)
       <div class="min-w-0">
         <h2 class="text-lg font-semibold text-gray-800 dark:text-white/90">本地运行时与 stdio 能力</h2>
         <p class="mt-1 max-w-3xl text-sm leading-6 text-gray-500 dark:text-gray-400">
-          探测网关进程可见的 Node / Python / uv / Docker 等工具，并展示当前 stdio 安全策略。远程上游不依赖本页结果。
+          探测网关可见的 Node / Python / uv / Docker 等工具，并展示数据卷运行时目录与 stdio
+          安全策略。远程上游不依赖本页结果。
         </p>
       </div>
       <button
         type="button"
         class="inline-flex h-10 items-center gap-1.5 rounded-lg border border-gray-300 px-3.5 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:opacity-60 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
         :disabled="loading"
+        aria-label="刷新运行环境探测"
         @click="refresh"
       >
         <RefreshIcon class="h-4 w-4" :class="loading ? 'animate-spin' : ''" aria-hidden="true" />
@@ -105,7 +116,9 @@ onMounted(load)
         <section
           class="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-white/[0.03]"
         >
-          <div class="mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-brand-50 text-brand-600 dark:bg-brand-500/10 dark:text-brand-300">
+          <div
+            class="mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-brand-50 text-brand-600 dark:bg-brand-500/10 dark:text-brand-300"
+          >
             <BoxCubeIcon class="h-5 w-5" aria-hidden="true" />
           </div>
           <p class="text-xs text-gray-400 dark:text-gray-500">stdio 策略</p>
@@ -121,12 +134,26 @@ onMounted(load)
           <p class="text-xs text-gray-400 dark:text-gray-500">工具探测</p>
           <p class="mt-2 text-sm font-semibold text-gray-800 dark:text-white/90">{{ healthLabel }}</p>
           <p class="mt-2 text-xs leading-5 text-gray-500 dark:text-gray-400">
-            仅检查 PATH 中是否存在可执行文件，不启动版本探测子进程。
+            优先查找数据卷运行时目录，再检查系统 PATH；不启动版本探测子进程。
           </p>
         </section>
 
         <section
-          class="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-white/[0.03] sm:col-span-2"
+          class="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-white/[0.03]"
+        >
+          <p class="text-xs text-gray-400 dark:text-gray-500">运行时目录</p>
+          <p class="mt-2 break-all font-mono text-sm font-semibold text-gray-800 dark:text-white/90">
+            {{ summary.runtimeDir || '—' }}
+          </p>
+          <p class="mt-2 text-xs leading-5 text-gray-500 dark:text-gray-400">
+            <span v-if="summary.layoutReady">目录已就绪</span>
+            <span v-else>尚未创建或不可读</span>
+            <span v-if="summary.dataDir"> · 数据目录 {{ summary.dataDir }}</span>
+          </p>
+        </section>
+
+        <section
+          class="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-white/[0.03]"
         >
           <p class="text-xs text-gray-400 dark:text-gray-500">命令白名单</p>
           <p class="mt-2 break-all text-sm font-medium text-gray-800 dark:text-white/90">
@@ -139,18 +166,35 @@ onMounted(load)
       </div>
 
       <section
+        v-if="showGuide"
+        class="mb-5 rounded-2xl border border-warning-200 bg-warning-50/60 p-5 shadow-sm dark:border-warning-500/20 dark:bg-warning-500/5"
+      >
+        <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">如何补齐缺失工具</h3>
+        <p class="mt-1 text-sm leading-6 text-gray-600 dark:text-gray-300">
+          默认镜像不含 Node / Python / uv。将工具放入数据卷后，容器更新也不会丢失。
+          <span v-if="binDir" class="font-mono text-xs">优先路径：{{ binDir }}</span>
+        </p>
+        <ol class="mt-3 list-decimal space-y-1.5 pl-5 text-sm leading-6 text-gray-700 dark:text-gray-200">
+          <li v-for="(step, idx) in guideSteps" :key="idx">{{ step }}</li>
+        </ol>
+      </section>
+
+      <section
         class="mb-5 rounded-2xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-white/[0.03]"
       >
         <div class="mb-4 flex flex-wrap items-center justify-between gap-2">
           <div>
             <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">宿主工具</h3>
             <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-              与模板市场常见 stdio 命令对齐。Docker 镜像默认极简，缺失属预期。
+              与模板市场常见 stdio 命令对齐。Docker 默认镜像极简，缺失属预期。
             </p>
           </div>
-          <span v-if="summary.dataDir" class="text-xs text-gray-400 dark:text-gray-500">
-            数据目录 {{ summary.dataDir }}
-          </span>
+          <div class="text-right text-xs text-gray-400 dark:text-gray-500">
+            <p v-if="summary.pathPrefixes?.length">
+              PATH 前缀 {{ summary.pathPrefixes.length }} 项
+            </p>
+            <p v-else-if="summary.runtimeDir">尚未发现 bin 子目录</p>
+          </div>
         </div>
 
         <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -163,12 +207,19 @@ onMounted(load)
               <h4 class="font-mono text-sm font-semibold text-gray-800 dark:text-white/90">
                 {{ tool.name }}
               </h4>
-              <span class="inline-flex shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium" :class="toolChipClass(tool)">
+              <span
+                class="inline-flex shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium"
+                :class="toolChipClass(tool)"
+              >
                 {{ toolStatusLabel(tool) }}
               </span>
             </div>
             <p class="mt-2 break-all text-xs leading-5 text-gray-500 dark:text-gray-400">
-              {{ tool.available ? tool.path || '已在 PATH 中找到' : 'PATH 中未找到，stdio 使用该命令会失败' }}
+              {{
+                tool.available
+                  ? tool.path || '已在 PATH 中找到'
+                  : '未在运行时目录或 PATH 中找到，stdio 使用该命令会失败'
+              }}
             </p>
           </article>
         </div>

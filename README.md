@@ -192,7 +192,7 @@ docker pull xylplm/mcp-proxy-gateway:latest
 docker pull xylplm/mcp-proxy-gateway:1.0.202606071302
 ```
 
-> `stdio` 上游需要在网关运行环境中启动子进程。如果你的 stdio MCP 依赖 Node.js、Python、uvx 等运行时，请使用包含对应运行时的自定义镜像，或在宿主机/容器内预置依赖。远程 SSE、Streamable HTTP、WebSocket 与 OpenAPI 上游不受此限制。
+> `stdio` 上游需要在网关运行环境中启动子进程。默认镜像刻意保持极简（不含 Node / Python / uv）。推荐将工具放入数据卷 **`$MPG_DATA_DIR/runtime`**（可用 `MPG_RUNTIME_DIR` 覆盖）：把 `node`、`npx`、`uv` 等放入 `runtime/bin`（或 `node/bin` 等），重启容器后即可被管理台「运行环境」探测并用于 stdio。也可继续使用包含运行时的自定义镜像。远程 SSE、Streamable HTTP、WebSocket 与 OpenAPI 上游不受此限制。
 
 ## 服务入口
 
@@ -231,6 +231,7 @@ Authorization: Bearer <your-api-key>
 | `MPG_REDIS_ADDR` | 是 | 无 | Redis 地址，例如 `host:6379` |
 | `MPG_REDIS_PASSWORD` | 否 | 空 | Redis 密码 |
 | `MPG_DATA_DIR` | 否 | `/data` | YAML 配置与本地持久化目录 |
+| `MPG_RUNTIME_DIR` | 否 | `{MPG_DATA_DIR}/runtime` | 本地 stdio 工具卷目录（`bin` / `node` / `python` / `uv` 等） |
 
 其余配置保存在 `MPG_DATA_DIR` 下的 YAML 文件中，并可通过管理台修改：
 

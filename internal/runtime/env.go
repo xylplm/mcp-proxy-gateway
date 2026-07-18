@@ -49,18 +49,19 @@ var sensitiveEnvPrefixes = []string{
 // parentEnviron 形如 os.Environ()（KEY=VAL）。
 // userEnv 为上游 connParams.env（已解析占位符）；其键值始终写入，即便键名敏感
 // （用户显式配置的 MCP 凭证需要放行）。
+// pathPrefixes 为卷内运行时目录（可选）；在用户 env 写入前幂等前置到 PATH。
 //
 // 返回的切片保证：
 //   - 保留 PATH / HOME 等非敏感系统变量；
 //   - 剥离父进程中的 MPG_* / 云密钥等；
-//   - 用户 env 覆盖同名键（后写生效，由调用方保证顺序时我们在此重建 map）。
-func BuildChildEnv(parentEnviron []string, userEnv map[string]string, policy Policy) []string {
+//   - 用户 env 覆盖同名键（含 PATH，显式配置优先）。
+func BuildChildEnv(parentEnviron []string, userEnv map[string]string, policy Policy, pathPrefixes ...string) []string {
 	policy = NormalizePolicy(policy)
 	prefixes := append([]string{}, sensitiveEnvPrefixes...)
 	prefixes = append(prefixes, policy.ExtraSensitiveEnvPrefixes...)
 
-	merged := make(map[string]string, len(parentEnviron)+len(userEnv))
-	order := make([]string, 0, len(parentEnviron)+len(userEnv))
+	merged := make(map[string]string, len(parentEnviron)+len(userEnv)+1)
+	order := make([]string, 0, len(parentEnviron)+len(userEnv)+1)
 
 	put := func(key, value string, fromParent bool) {
 		if key == "" {
@@ -82,6 +83,30 @@ func BuildChildEnv(parentEnviron []string, userEnv map[string]string, policy Pol
 		}
 		put(k, v, true)
 	}
+
+	// 卷路径前置：在用户 env 覆盖之前应用，用户仍可显式改写 PATH。
+	if len(pathPrefixes) > 0 {
+		cur, ok := merged["PATH"]
+		if !ok {
+			// Windows 偶发 Path 键名；合并时统一写 PATH。
+			for k, v := range merged {
+				if strings.EqualFold(k, "PATH") {
+					cur = v
+					ok = true
+					delete(merged, k)
+					// 保持 order 中键名规范为 PATH
+					for i, name := range order {
+						if strings.EqualFold(name, "PATH") {
+							order[i] = "PATH"
+						}
+					}
+					break
+				}
+			}
+		}
+		put("PATH", PrependPath(cur, pathPrefixes), false)
+	}
+
 	for k, v := range userEnv {
 		key := strings.TrimSpace(k)
 		if key == "" {

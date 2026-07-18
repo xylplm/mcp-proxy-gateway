@@ -51,8 +51,9 @@ func (s *stdioSession) Connect(ctx context.Context) error {
 		if err := runtime.ValidateCommand(s.params.command, policy); err != nil {
 			return nil, err
 		}
+		pathPrefixes := currentPathPrefixes()
 		command := s.params.command
-		if resolved, err := runtime.ResolveCommand(command); err == nil {
+		if resolved, err := runtime.ResolveCommandWithPrefixes(command, pathPrefixes); err == nil {
 			command = resolved
 			// 解析后的绝对路径再按基名校验，防止 PATH 劫持绕过 allowlist。
 			if err := runtime.ValidateCommand(command, policy); err != nil {
@@ -68,8 +69,8 @@ func (s *stdioSession) Connect(ctx context.Context) error {
 		if s.params.cwd != "" {
 			cmd.Dir = resolveCredentialPlaceholders(s.params.cwd, s.credential)
 		}
-		// 始终显式设置 Env，确保敏感父进程变量被剥离；保留 PATH 等非敏感项。
-		cmd.Env = runtime.BuildChildEnv(os.Environ(), userEnv, policy)
+		// 始终显式设置 Env：剥离敏感父进程变量，并前置卷内 runtime PATH。
+		cmd.Env = runtime.BuildChildEnv(os.Environ(), userEnv, policy, pathPrefixes...)
 		transport := &mcp.CommandTransport{Command: cmd}
 		return connectWithTimeout(dialCtx, transport)
 	})

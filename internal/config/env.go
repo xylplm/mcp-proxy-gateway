@@ -19,6 +19,9 @@ type EnvConfig struct {
 	RedisPassword string `env:"MPG_REDIS_PASSWORD"`
 	// DataDir 为 data 目录路径（环境变量 MPG_DATA_DIR，默认 /data）。
 	DataDir string `env:"MPG_DATA_DIR" envDefault:"/data"`
+	// RuntimeDir 为本地 stdio 工具卷目录（环境变量 MPG_RUNTIME_DIR，可选）。
+	// 为空时使用 {DataDir}/runtime。
+	RuntimeDir string `env:"MPG_RUNTIME_DIR"`
 }
 
 // LoadEnvConfig 从环境变量解析 EnvConfig。

@@ -192,7 +192,7 @@ docker pull xylplm/mcp-proxy-gateway:latest
 docker pull xylplm/mcp-proxy-gateway:1.0.202606071302
 ```
 
-> `stdio` upstreams launch subprocesses inside the gateway runtime. If a stdio MCP server depends on Node.js, Python, uvx or another runtime, use a custom image or preinstall the required runtime. Remote SSE, Streamable HTTP, WebSocket and OpenAPI upstreams do not have this constraint.
+> `stdio` upstreams launch subprocesses inside the gateway runtime. The default image stays minimal (no Node / Python / uv). Prefer placing tools on the data volume under **`$MPG_DATA_DIR/runtime`** (override with `MPG_RUNTIME_DIR`): put `node`, `npx`, `uv`, etc. into `runtime/bin` (or `node/bin`, …), restart the container, then refresh **Runtime** in the admin UI. A custom image with runtimes preinstalled also works. Remote SSE, Streamable HTTP, WebSocket and OpenAPI upstreams do not have this constraint.
 
 ## Service Endpoints
 
@@ -231,6 +231,7 @@ Database, Redis and data directory are configured via environment variables:
 | `MPG_REDIS_ADDR` | yes | none | Redis address, for example `host:6379` |
 | `MPG_REDIS_PASSWORD` | no | empty | Redis password |
 | `MPG_DATA_DIR` | no | `/data` | Directory for YAML config and local persistent data |
+| `MPG_RUNTIME_DIR` | no | `{MPG_DATA_DIR}/runtime` | Local stdio tool volume (`bin` / `node` / `python` / `uv`, …) |
 
 All other settings live in the YAML file under `MPG_DATA_DIR` and can be changed from the admin console:
 

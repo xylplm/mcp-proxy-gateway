@@ -2,7 +2,6 @@ package runtime
 
 import (
 	"fmt"
-	"os/exec"
 	"strings"
 )
 
@@ -73,27 +72,4 @@ func ValidateCommand(command string, policy Policy) error {
 		"命令 %q 不在 stdio 允许列表中，请在系统设置或运行环境中调整策略",
 		base,
 	)
-}
-
-// ResolveCommand 将 command 解析为可执行路径。
-//
-// 若 command 已是绝对路径或包含路径分隔符，优先原样交由 LookPath 处理；
-// 找不到时返回面向用户的错误（引导查看运行环境页）。
-func ResolveCommand(command string) (string, error) {
-	raw := strings.TrimSpace(command)
-	if raw == "" {
-		return "", fmt.Errorf("连接参数 \"command\" 不能为空")
-	}
-	resolved, err := exec.LookPath(raw)
-	if err != nil {
-		base := CommandBaseName(raw)
-		if base == "" {
-			base = raw
-		}
-		return "", fmt.Errorf(
-			"未找到可执行文件 %q。当前环境缺少该工具，请安装对应运行时或改用远程 MCP。可在「运行环境」查看探测结果",
-			base,
-		)
-	}
-	return resolved, nil
 }

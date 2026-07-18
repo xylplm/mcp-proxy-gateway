@@ -83,3 +83,35 @@ func TestBuildChildEnvExtraPrefix(t *testing.T) {
 		t.Fatalf("OK should remain: %v", out)
 	}
 }
+
+func TestBuildChildEnvPrependsRuntimePath(t *testing.T) {
+	t.Parallel()
+	parent := []string{"PATH=/usr/bin", "MPG_PG_DSN=secret"}
+	rtBin := "/data/runtime/bin"
+	out := BuildChildEnv(parent, nil, Policy{StdioEnabled: true}, rtBin)
+	env := map[string]string{}
+	for _, e := range out {
+		k, v, ok := splitEnvEntry(e)
+		if ok {
+			env[k] = v
+		}
+	}
+	if !strings.HasPrefix(env["PATH"], rtBin) {
+		t.Fatalf("PATH should start with runtime bin, got %q", env["PATH"])
+	}
+	if strings.Contains(strings.Join(out, "\n"), "MPG_PG_DSN=") {
+		t.Fatalf("secrets must stay scrubbed: %v", out)
+	}
+	// 用户显式 PATH 覆盖
+	out2 := BuildChildEnv(parent, map[string]string{"PATH": "/only"}, Policy{StdioEnabled: true}, rtBin)
+	env2 := map[string]string{}
+	for _, e := range out2 {
+		k, v, ok := splitEnvEntry(e)
+		if ok {
+			env2[k] = v
+		}
+	}
+	if env2["PATH"] != "/only" {
+		t.Fatalf("user PATH should win, got %q", env2["PATH"])
+	}
+}
