@@ -22,6 +22,8 @@ import (
 const (
 	// maxInstallBytes 单包下载上限（防止异常大文件占满磁盘）。
 	maxInstallBytes = 512 << 20 // 512 MiB
+	// maxExtractBytes 解压后总字节上限（防压缩炸弹）。
+	maxExtractBytes = 1024 << 20 // 1 GiB
 	// defaultInstallTimeout 单次安装超时。
 	defaultInstallTimeout = 10 * time.Minute
 	// installStateFile 安装状态清单。
@@ -67,10 +69,10 @@ type Installer struct {
 	mu sync.Mutex // 串行化安装，避免并发写同一目录
 }
 
-// NewInstaller 构造安装器；client 可空（使用带超时的默认客户端）。
+// NewInstaller 构造安装器；client 可空（使用官方源白名单客户端）。
 func NewInstaller(runtimeDir string, client *http.Client) *Installer {
 	if client == nil {
-		client = &http.Client{Timeout: defaultInstallTimeout}
+		client = newInstallHTTPClient()
 	}
 	return &Installer{
 		runtimeDir: strings.TrimSpace(runtimeDir),
@@ -308,6 +310,18 @@ func (in *Installer) downloadFile(ctx context.Context, rawURL, dest, wantSHA str
 	if err != nil {
 		return fmt.Errorf("构造下载请求失败：%w", err)
 	}
+	if req.URL == nil {
+		return fmt.Errorf("下载 URL 无效")
+	}
+	host := strings.ToLower(req.URL.Hostname())
+	isLoopback := host == "127.0.0.1" || host == "localhost" || host == "::1"
+	// 生产 catalog 仅 HTTPS 官方源；单测 httptest 允许 loopback HTTP。
+	if !isLoopback && !strings.EqualFold(req.URL.Scheme, "https") {
+		return fmt.Errorf("仅允许 HTTPS 下载预置包")
+	}
+	if !isLoopback && !allowedInstallHost(host) {
+		return fmt.Errorf("下载主机不在允许列表：%s", host)
+	}
 	req.Header.Set("User-Agent", "mcp-proxy-gateway-runtime-installer/1.0")
 
 	resp, err := in.client.Do(req)
@@ -368,13 +382,24 @@ func (in *Installer) placeNode(extractDir string) error {
 		binDir = root
 	}
 	target := filepath.Join(in.runtimeDir, RuntimeSubdirNode)
-	_ = os.RemoveAll(target)
+	staging := target + ".staging"
+	_ = os.RemoveAll(staging)
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return err
 	}
-	// 整棵树移入 node/，并保证 bin 路径符合 PathPrefixes。
-	if err := renameOrCopyTree(root, target); err != nil {
+	// 先落到 staging，成功后再原子替换，避免半安装状态。
+	if err := renameOrCopyTree(root, staging); err != nil {
+		_ = os.RemoveAll(staging)
 		return fmt.Errorf("安装 Node 失败：%w", err)
+	}
+	_ = os.RemoveAll(target)
+	if err := os.Rename(staging, target); err != nil {
+		// 跨卷时 fallback
+		if copyErr := copyTree(staging, target); copyErr != nil {
+			_ = os.RemoveAll(staging)
+			return fmt.Errorf("安装 Node 失败：%w", err)
+		}
+		_ = os.RemoveAll(staging)
 	}
 	// 若 Windows 结构没有 bin/，创建 bin 并链接/复制可执行文件。
 	finalBin := filepath.Join(target, "bin")
@@ -524,6 +549,7 @@ func extractTarGz(src, dest string) error {
 	}
 	defer gz.Close()
 	tr := tar.NewReader(gz)
+	var total int64
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
@@ -532,45 +558,65 @@ func extractTarGz(src, dest string) error {
 		if err != nil {
 			return err
 		}
-		if err := writeTarEntry(dest, hdr, tr); err != nil {
+		n, err := writeTarEntry(dest, hdr, tr, &total)
+		if err != nil {
 			return err
+		}
+		total += n
+		if total > maxExtractBytes {
+			return fmt.Errorf("解压内容超过大小上限（%d 字节）", maxExtractBytes)
 		}
 	}
 	return nil
 }
 
-func writeTarEntry(dest string, hdr *tar.Header, r io.Reader) error {
+func writeTarEntry(dest string, hdr *tar.Header, r io.Reader, total *int64) (int64, error) {
 	// 防止 zip-slip
 	target, err := safeJoin(dest, hdr.Name)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	switch hdr.Typeflag {
 	case tar.TypeDir:
-		return os.MkdirAll(target, 0o755)
+		return 0, os.MkdirAll(target, 0o755)
 	case tar.TypeReg, tar.TypeRegA:
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return err
+			return 0, err
 		}
 		mode := os.FileMode(hdr.Mode) & 0o777
 		if mode == 0 {
 			mode = 0o644
 		}
+		// 去掉 setuid/setgid/sticky 高位（已用 &0o777）
 		f, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
 		if err != nil {
-			return err
+			return 0, err
 		}
-		_, copyErr := io.Copy(f, r)
+		// 限制单文件与累计解压体积
+		remain := int64(maxExtractBytes)
+		if total != nil {
+			remain = int64(maxExtractBytes) - *total
+			if remain < 0 {
+				remain = 0
+			}
+		}
+		written, copyErr := io.Copy(f, io.LimitReader(r, remain+1))
 		closeErr := f.Close()
 		if copyErr != nil {
-			return copyErr
+			return written, copyErr
 		}
-		return closeErr
-	case tar.TypeSymlink:
-		// 跳过符号链接，降低攻击面；Node 发行版在非 link 情况下仍可用。
-		return nil
+		if closeErr != nil {
+			return written, closeErr
+		}
+		if written > remain {
+			return written, fmt.Errorf("解压内容超过大小上限（%d 字节）", maxExtractBytes)
+		}
+		return written, nil
+	case tar.TypeSymlink, tar.TypeLink, tar.TypeChar, tar.TypeBlock, tar.TypeFifo:
+		// 跳过链接与设备节点，降低攻击面。
+		return 0, nil
 	default:
-		return nil
+		return 0, nil
 	}
 }
 
@@ -580,40 +626,75 @@ func extractZip(src, dest string) error {
 		return err
 	}
 	defer r.Close()
+	var total int64
 	for _, f := range r.File {
-		if err := writeZipEntry(dest, f); err != nil {
+		n, err := writeZipEntry(dest, f, &total)
+		if err != nil {
 			return err
+		}
+		total += n
+		if total > maxExtractBytes {
+			return fmt.Errorf("解压内容超过大小上限（%d 字节）", maxExtractBytes)
 		}
 	}
 	return nil
 }
 
-func writeZipEntry(dest string, f *zip.File) error {
+func writeZipEntry(dest string, f *zip.File, total *int64) (int64, error) {
+	// 拒绝符号链接等特殊模式
+	mode := f.Mode()
+	if mode&os.ModeSymlink != 0 {
+		return 0, nil
+	}
+	if !mode.IsRegular() && !f.FileInfo().IsDir() {
+		// 非普通文件/目录跳过
+		if !f.FileInfo().IsDir() {
+			return 0, nil
+		}
+	}
 	target, err := safeJoin(dest, f.Name)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if f.FileInfo().IsDir() {
-		return os.MkdirAll(target, 0o755)
+		return 0, os.MkdirAll(target, 0o755)
 	}
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-		return err
+		return 0, err
 	}
 	rc, err := f.Open()
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer rc.Close()
-	out, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, f.Mode())
-	if err != nil {
-		return err
+	// 仅保留权限位，去掉 setuid 等
+	fileMode := mode.Perm()
+	if fileMode == 0 {
+		fileMode = 0o644
 	}
-	_, copyErr := io.Copy(out, rc)
+	out, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, fileMode)
+	if err != nil {
+		return 0, err
+	}
+	remain := int64(maxExtractBytes)
+	if total != nil {
+		remain = int64(maxExtractBytes) - *total
+		if remain < 0 {
+			remain = 0
+		}
+	}
+	written, copyErr := io.Copy(out, io.LimitReader(rc, remain+1))
 	closeErr := out.Close()
 	if copyErr != nil {
-		return copyErr
+		return written, copyErr
 	}
-	return closeErr
+	if closeErr != nil {
+		return written, closeErr
+	}
+	if written > remain {
+		return written, fmt.Errorf("解压内容超过大小上限（%d 字节）", maxExtractBytes)
+	}
+	return written, nil
 }
 
 func safeJoin(base, name string) (string, error) {

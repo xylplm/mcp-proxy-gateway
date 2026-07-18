@@ -14,8 +14,9 @@
    - 禁止任意 URL / 任意 npm 包名
    - 落盘 `runtime/`，状态 `runtime/state/installed.json`
 4. **进程加固（P2，Linux）**
-   - 独立进程组 + 父进程退出时 SIGTERM
-   - Windows/macOS 为策略层加固（no-op 进程属性），不阻断开发测试
+   - 独立进程组 + 父进程退出时 SIGTERM（`Pdeathsig`）
+   - 会话 Close 后按进程组 SIGTERM/SIGKILL，清理 `npx`/`uvx` 等孙进程
+   - Windows/macOS 为策略层加固 + `Process.Kill` 尽力清理，不阻断开发测试
 
 远程 SSE / HTTP / WebSocket / OpenAPI **不经过**上述本地执行路径。
 

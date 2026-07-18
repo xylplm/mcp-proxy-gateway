@@ -57,7 +57,6 @@ func (a *App) build(envCfg config.EnvConfig) error {
 			CommandAllowlist:          append([]string{}, rt.CommandAllowlist...),
 			ExtraSensitiveEnvPrefixes: append([]string{}, rt.ExtraSensitiveEnvPrefixes...),
 			ProcessHardening:          hardening,
-			PreferRuntimePath:         true,
 		}
 	}
 	transport.SetPolicyProvider(policyFromCfg)

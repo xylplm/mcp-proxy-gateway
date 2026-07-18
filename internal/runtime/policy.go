@@ -22,10 +22,8 @@ type Policy struct {
 	// ExtraSensitiveEnvPrefixes 为追加到内置敏感前缀的自定义前缀（大写比较）。
 	ExtraSensitiveEnvPrefixes []string
 	// ProcessHardening 为 true 时对 stdio 子进程应用平台可用的进程隔离（Linux: 进程组/父亡杀子等）。
-	// 默认 true；不影响远程传输。
+	// 默认 true；不影响远程传输。卷内 runtime PATH 优先解析始终开启（非策略开关）。
 	ProcessHardening bool
-	// PreferRuntimePath 为 true 时优先使用卷内 runtime 路径解析命令（默认 true）。
-	PreferRuntimePath bool
 }
 
 // DefaultCommandAllowlist 与模板市场常用 stdio 命令对齐。
@@ -71,10 +69,9 @@ func NormalizePolicy(p Policy) Policy {
 // DefaultPolicy 返回与网关出厂配置一致的策略（stdio 启用 + 默认白名单 + 进程加固）。
 func DefaultPolicy() Policy {
 	return NormalizePolicy(Policy{
-		StdioEnabled:      true,
-		CommandAllowlist:  DefaultCommandAllowlist(),
-		ProcessHardening:  true,
-		PreferRuntimePath: true,
+		StdioEnabled:     true,
+		CommandAllowlist: DefaultCommandAllowlist(),
+		ProcessHardening: true,
 	})
 }
 

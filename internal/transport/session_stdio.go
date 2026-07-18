@@ -2,6 +2,7 @@ package transport
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 
@@ -74,6 +75,45 @@ func (s *stdioSession) Connect(ctx context.Context) error {
 		// 进程级加固（Linux: 进程组 + Pdeathsig；其他平台 no-op）。
 		runtime.ApplySandbox(cmd, runtime.SandboxOptions{Enabled: policy.ProcessHardening})
 		transport := &mcp.CommandTransport{Command: cmd}
-		return connectWithTimeout(dialCtx, transport)
+		conn, err := connectWithTimeout(dialCtx, transport)
+		if err != nil {
+			// 连接失败时尽力清理可能已启动的子进程树。
+			if policy.ProcessHardening {
+				runtime.TerminateProcessTree(cmd)
+			}
+			return nil, err
+		}
+		// 包装 close：SDK 关闭后按进程组清理孙进程，避免 npx/uvx 残留。
+		return &stdioClientConn{
+			inner:     conn,
+			cmd:       cmd,
+			hardening: policy.ProcessHardening,
+		}, nil
 	})
+}
+
+// stdioClientConn 装饰 mcpClientConn，在 close 时清理进程树。
+type stdioClientConn struct {
+	inner     mcpClientConn
+	cmd       *exec.Cmd
+	hardening bool
+}
+
+func (c *stdioClientConn) listTools(ctx context.Context) ([]domain.ToolDef, error) {
+	return c.inner.listTools(ctx)
+}
+
+func (c *stdioClientConn) callTool(ctx context.Context, name string, args json.RawMessage) (domain.ToolResult, error) {
+	return c.inner.callTool(ctx, name, args)
+}
+
+func (c *stdioClientConn) close() error {
+	var err error
+	if c.inner != nil {
+		err = c.inner.close()
+	}
+	if c.hardening {
+		runtime.TerminateProcessTree(c.cmd)
+	}
+	return err
 }

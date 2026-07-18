@@ -137,11 +137,15 @@ func BuildSummary(
 }
 
 // Service 聚合策略读取、探测与受控安装，供 HTTP 与 transport 注入。
+//
+// 持有单一 Installer 实例，保证安装/卸载串行化，避免并发写卷。
 type Service struct {
-	mu           sync.RWMutex
 	policyFn     func() Policy
 	dataDirFn    func() string
 	runtimeDirFn func() string
+
+	instMu     sync.Mutex
+	installer_ *Installer
 }
 
 // NewService 构造运行时服务。
@@ -171,9 +175,7 @@ func (s *Service) Policy() Policy {
 	if s == nil {
 		return DefaultPolicy()
 	}
-	s.mu.RLock()
 	fn := s.policyFn
-	s.mu.RUnlock()
 	if fn == nil {
 		return DefaultPolicy()
 	}
@@ -185,24 +187,30 @@ func (s *Service) RuntimeDir() string {
 	if s == nil {
 		return ResolveRuntimeDir(os.Getenv("MPG_DATA_DIR"), os.Getenv("MPG_RUNTIME_DIR"))
 	}
-	s.mu.RLock()
-	fn := s.runtimeDirFn
-	dataFn := s.dataDirFn
-	s.mu.RUnlock()
-	if fn != nil {
-		if dir := strings.TrimSpace(fn()); dir != "" {
+	if s.runtimeDirFn != nil {
+		if dir := strings.TrimSpace(s.runtimeDirFn()); dir != "" {
 			return dir
 		}
 	}
 	dataDir := ""
-	if dataFn != nil {
-		dataDir = dataFn()
+	if s.dataDirFn != nil {
+		dataDir = s.dataDirFn()
 	}
 	return ResolveRuntimeDir(dataDir, os.Getenv("MPG_RUNTIME_DIR"))
 }
 
+// installer 返回绑定当前 runtimeDir 的共享 Installer（目录变更时重建）。
 func (s *Service) installer() *Installer {
-	return NewInstaller(s.RuntimeDir(), nil)
+	if s == nil {
+		return NewInstaller("", nil)
+	}
+	dir := s.RuntimeDir()
+	s.instMu.Lock()
+	defer s.instMu.Unlock()
+	if s.installer_ == nil || s.installer_.runtimeDir != dir {
+		s.installer_ = NewInstaller(dir, nil)
+	}
+	return s.installer_
 }
 
 // Summary 返回管理台摘要。
@@ -249,7 +257,7 @@ func (s *Service) PreviewInstall(packageID string) (CatalogPackage, error) {
 	return s.installer().PreviewInstall(packageID)
 }
 
-// InstallPackage 执行受控安装。
+// InstallPackage 执行受控安装（进程内串行）。
 func (s *Service) InstallPackage(ctx context.Context, packageID string) (InstallResult, error) {
 	if s == nil {
 		return InstallResult{}, fmtUnavailable("运行环境服务未就绪")
@@ -260,7 +268,7 @@ func (s *Service) InstallPackage(ctx context.Context, packageID string) (Install
 	return s.installer().Install(ctx, packageID)
 }
 
-// UninstallPackage 卸载预置包。
+// UninstallPackage 卸载预置包（进程内串行）。
 func (s *Service) UninstallPackage(packageID string) error {
 	if s == nil {
 		return fmtUnavailable("运行环境服务未就绪")
