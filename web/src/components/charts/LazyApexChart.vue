@@ -5,7 +5,15 @@
  * - 避免仪表盘等页面首包吞下 500KB+ 图表库
  * - 卸载时释放组件引用，降低长会话内存占用
  */
-import { markRaw, onMounted, onUnmounted, ref, shallowRef } from 'vue'
+import {
+  markRaw,
+  onMounted,
+  onUnmounted,
+  ref,
+  shallowRef,
+  type Component,
+  type ShallowRef,
+} from 'vue'
 
 const props = withDefaults(
   defineProps<{
@@ -24,8 +32,9 @@ const props = withDefaults(
 
 const hostRef = ref<HTMLElement | null>(null)
 const shouldLoad = ref(false)
-// 用 any 规避 vue3-apexcharts 组件类型与 shallowRef 泛型在 vue-tsc 下的冲突。
-const ChartComp = shallowRef<any>(null)
+// 显式注解避免 shallowRef(null) 被收窄为 ShallowRef<null>；
+// vue3-apexcharts 默认导出类型较松，统一按 Vue Component 持有懒加载实例。
+const ChartComp: ShallowRef<Component | null> = shallowRef(null)
 let observer: IntersectionObserver | null = null
 let loadPromise: Promise<void> | null = null
 
@@ -35,8 +44,8 @@ async function loadChart(): Promise<void> {
     return
   }
   loadPromise = import('vue3-apexcharts').then((mod) => {
-    const comp = (mod as { default?: unknown }).default ?? mod
-    ChartComp.value = markRaw(comp as object)
+    const comp = ((mod as { default?: Component }).default ?? mod) as Component
+    ChartComp.value = markRaw(comp)
   })
   await loadPromise
 }

@@ -29,6 +29,7 @@ type SandboxOptions struct {
 //   - 始终：独立进程组 + 父死亡信号；
 //   - 严格档且检测到 bubblewrap：包装 bwrap，按 FileRoots 绑定文件系统，
 //     NetworkMode=deny 时 --unshare-net。
+//
 // 其他平台：尽量保持 no-op 或仅进程组，避免影响 Windows 开发路径。
 func ApplySandbox(cmd *exec.Cmd, opts SandboxOptions) {
 	if cmd == nil || !opts.Enabled {
@@ -48,7 +49,7 @@ type SandboxCapabilities struct {
 	ProcessHardeningSupported    bool   `json:"processHardeningSupported"`
 	FilesystemIsolationSupported bool   `json:"filesystemIsolationSupported"`
 	NetworkIsolationSupported    bool   `json:"networkIsolationSupported"`
-	HostAllowlistEnforced        bool   `json:"hostAllowlistEnforced"` // 是否可内核级按主机过滤
+	HostAllowlistEnforced        bool   `json:"hostAllowlistEnforced"`      // 是否可内核级按主机过滤
 	IsolationBackend             string `json:"isolationBackend,omitempty"` // none | bwrap | ...
 	Platform                     string `json:"platform"`
 	Description                  string `json:"description"`

@@ -53,14 +53,14 @@ func TestValidateCommandAllowlistAndDisabled(t *testing.T) {
 func TestCommandBaseName(t *testing.T) {
 	t.Parallel()
 	cases := map[string]string{
-		"npx":                "npx",
-		"/usr/bin/python3":   "python3",
-		`C:\bin\node.exe`:    "node",
-		`C:\Tools\uvx.exe`:   "uvx",
-		`C:/Tools/uvx.EXE`:   "uvx",
+		"npx":                  "npx",
+		"/usr/bin/python3":     "python3",
+		`C:\bin\node.exe`:      "node",
+		`C:\Tools\uvx.exe`:     "uvx",
+		`C:/Tools/uvx.EXE`:     "uvx",
 		`\\server\share\a.bat`: "a",
-		"UVX.CMD":            "uvx",
-		"  ":                 "",
+		"UVX.CMD":              "uvx",
+		"  ":                   "",
 	}
 	for in, want := range cases {
 		if got := CommandBaseName(in); got != want {

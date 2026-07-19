@@ -324,8 +324,7 @@ const preflightBanner = computed(() => {
   }
 })
 const suggestedFromCommand = computed(() => inferToolsFromCommand(stdioCommandForPreflight()))
-const isUnrestrictedMode = computed(() => form.securityMode === 'unrestricted')
-const isStrictMode = computed(() => form.securityMode === 'strict')
+	const isStrictMode = computed(() => form.securityMode === 'strict')
 
 /** 路径选择器额外上下文：当前 cwd 与文件允许路径，便于在表单相关目录内浏览。 */
 const pathPickerContextRoots = computed(() => {
