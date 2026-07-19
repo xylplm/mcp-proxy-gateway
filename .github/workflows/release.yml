@@ -38,17 +38,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: 检出代码
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: 安装 Node 24
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v7
         with:
           node-version: "24"
           cache: npm
           cache-dependency-path: web/package-lock.json
 
       - name: 安装 Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -109,10 +109,10 @@ jobs:
       VERSION: ${{ needs.version.outputs.version }}
     steps:
       - name: 检出代码
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: 安装 Node 24
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v7
         with:
           node-version: "24"
           cache: npm
@@ -133,7 +133,7 @@ jobs:
           VITE_APP_VERSION: ${{ needs.version.outputs.version }}
 
       - name: 上传前端产物
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: web-dist
           path: web/dist/
@@ -153,16 +153,16 @@ jobs:
       VERSION: ${{ needs.version.outputs.version }}
     steps:
       - name: 检出代码
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: 下载前端产物
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: web-dist
           path: web/dist/
 
       - name: 安装 Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -180,7 +180,7 @@ jobs:
             -o ./bin/mpg-linux-${{ matrix.arch }} ./cmd/gateway
 
       - name: 上传后端二进制
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: bin-${{ matrix.arch }}
           path: bin/
@@ -195,16 +195,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: 检出代码
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: 下载 amd64 二进制
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: bin-amd64
           path: bin/
 
       - name: 下载 arm64 二进制
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: bin-arm64
           path: bin/
@@ -249,16 +249,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: 检出代码
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: 下载 amd64 二进制
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: bin-amd64
           path: bin/
 
       - name: 下载 arm64 二进制
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: bin-arm64
           path: bin/
@@ -269,7 +269,7 @@ jobs:
           ls -lh bin/
 
       - name: Docker Setup QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
 
       - name: Docker Setup Buildx
         uses: docker/setup-buildx-action@v4
@@ -307,7 +307,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: 检出代码
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: 打 git tag 并创建 GitHub Release
         uses: softprops/action-gh-release@v3
