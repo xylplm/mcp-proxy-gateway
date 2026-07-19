@@ -113,14 +113,19 @@ func DefaultPolicy() Policy {
 }
 
 // CommandBaseName 提取命令基名（去掉路径与 Windows 扩展名），小写。
+//
+// 同时识别 `/` 与 `\` 分隔符，确保 Linux 上处理 Windows 风格配置路径时
+// 仍能得到正确基名（如 `C:\Tools\uvx.exe` → `uvx`）。
 func CommandBaseName(command string) string {
 	raw := strings.TrimSpace(command)
 	if raw == "" {
 		return ""
 	}
+	// filepath.Base 仅按本机 Separator 切分；stdio 命令可能来自跨平台配置。
+	raw = strings.ReplaceAll(raw, "\\", "/")
 	base := filepath.Base(raw)
 	base = strings.TrimSpace(base)
-	if base == "" || base == "." || base == string(filepath.Separator) {
+	if base == "" || base == "." || base == "/" {
 		return ""
 	}
 	// Windows 可执行扩展：校验时按基名匹配 allowlist。
