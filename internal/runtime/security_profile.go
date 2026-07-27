@@ -353,7 +353,7 @@ func ResolveEffectiveSecurity(policy Policy, profile SecurityProfile, _ string) 
 		Mode:             mode,
 		Note:             profile.Note,
 		StrictPathOnly:   policy.StrictPathOnlyRuntime,
-		ProcessHardening: policy.ProcessHardening,
+		ProcessHardening: policy.ProcessHardening && DescribeSandbox().ProcessHardeningSupported,
 	}
 
 	// 文件策略
@@ -421,7 +421,7 @@ func ResolveEffectiveSecurity(policy Policy, profile SecurityProfile, _ string) 
 
 	// 严格档强制进程加固；StrictPathOnly 跟随全局开关（默认 true），不静默覆盖为恒 true。
 	if mode == SecurityModeStrict {
-		eff.ProcessHardening = true
+		eff.ProcessHardening = policy.ProcessHardening && DescribeSandbox().ProcessHardeningSupported
 		// 保持 policy.StrictPathOnlyRuntime（已写入 eff）；仅在缺省未配置时偏安全为 true。
 		if !policy.StrictPathOnlyRuntime {
 			eff.StrictPathOnly = false

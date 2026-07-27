@@ -6,9 +6,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"time"
-
-	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
 	"github.com/myGithub/mcp-proxy-gateway/internal/runtime"
@@ -154,10 +151,7 @@ func (s *stdioSession) Connect(ctx context.Context) error {
 			NetworkHosts: eff.Network.Hosts,
 			RuntimeDir:   currentRuntimeDir(),
 		})
-		transport := &mcp.CommandTransport{
-			Command:           cmd,
-			TerminateDuration: time.Second,
-		}
+		transport := newCommandTransport(cmd, hardening)
 		conn, err := connectWithTimeout(dialCtx, transport)
 		if err != nil {
 			// 仅发送进程组终止信号；SDK 的异步超时清理唯一负责 cmd.Wait。

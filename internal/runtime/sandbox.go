@@ -50,7 +50,7 @@ type SandboxCapabilities struct {
 	FilesystemIsolationSupported bool   `json:"filesystemIsolationSupported"`
 	NetworkIsolationSupported    bool   `json:"networkIsolationSupported"`
 	HostAllowlistEnforced        bool   `json:"hostAllowlistEnforced"`      // 是否可内核级按主机过滤
-	IsolationBackend             string `json:"isolationBackend,omitempty"` // none | bwrap | ...
+	IsolationBackend             string `json:"isolationBackend,omitempty"` // none | bwrap | job | ...
 	Platform                     string `json:"platform"`
 	Description                  string `json:"description"`
 }
