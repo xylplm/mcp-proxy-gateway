@@ -45,11 +45,11 @@ func resolveDirectoryLaunch(params map[string]any, policy runtime.Policy, declar
 	roots := append([]string{}, policy.GlobalFileRoots...)
 	roots = append(roots, declaredRoots...)
 	if len(roots) == 0 {
-		return "", nil, "", true, fmt.Errorf("目录启动根不在文件允许路径内")
+		return "", nil, "", true, fmt.Errorf("目录可浏览但不可启动：尚未配置文件允许根，请加入 global_file_roots 或本上游的文件允许路径")
 	}
 	resolvedRoot, allowed, resolveErr := runtime.ResolveExistingPathWithinRoots(ref.Root, roots)
 	if resolveErr != nil || !allowed {
-		return "", nil, "", true, fmt.Errorf("目录启动根真实位置不在允许路径内")
+		return "", nil, "", true, fmt.Errorf("目录 %q 不在文件允许路径内；可浏览的目录不等于可启动，请加入 global_file_roots 或本上游的文件允许路径", ref.Root)
 	}
 	entry, err := runtime.ResolveDirectoryLaunchEntry(resolvedRoot, ref.EntryID, policy)
 	if err != nil {

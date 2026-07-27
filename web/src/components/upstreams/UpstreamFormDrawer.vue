@@ -1003,7 +1003,7 @@ async function inspectDirectory(preferredEntryID = form.directoryEntryId): Promi
   directoryWarnings.value = []
   form.directoryEntryId = ''
   try {
-    const result = await inspectRuntimeDirectory(root)
+    const result = await inspectRuntimeDirectory(root, splitPathLines(form.filePathsText))
     if (seq !== directoryInspectSeq || !props.open || form.directoryRoot.trim() !== root) return
     form.directoryRoot = result.root
     directoryEntries.value = result.entries ?? []

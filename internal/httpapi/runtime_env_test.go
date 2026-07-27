@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	rtenv "github.com/myGithub/mcp-proxy-gateway/internal/runtime"
@@ -17,9 +18,15 @@ type fakeRuntimeEnv struct {
 	summary    rtenv.Summary
 	catalog    []rtenv.CatalogPackage
 	browseStat rtenv.BrowseStatResult
+	policy     rtenv.Policy
 }
 
-func (f *fakeRuntimeEnv) Policy() rtenv.Policy   { return rtenv.DefaultPolicy() }
+func (f *fakeRuntimeEnv) Policy() rtenv.Policy {
+	if f.policy.CommandAllowlist != nil || f.policy.GlobalFileRoots != nil {
+		return f.policy
+	}
+	return rtenv.DefaultPolicy()
+}
 func (f *fakeRuntimeEnv) Summary() rtenv.Summary { return f.summary }
 func (f *fakeRuntimeEnv) Catalog() []rtenv.CatalogPackage {
 	if f.catalog != nil {
@@ -117,12 +124,33 @@ func TestRuntimeDirectoryInspect(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "main.py"), []byte("print(1)"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	env := &fakeRuntimeEnv{policy: rtenv.Policy{
+		StdioEnabled:     true,
+		CommandAllowlist: rtenv.DefaultCommandAllowlist(),
+		GlobalFileRoots:  []string{dir},
+	}}
+	env.browseStat = rtenv.BrowseStatResult{Path: dir, Exists: true, Type: "dir", Allowed: true, Readable: true}
+	e := newTestEngine(Deps{RuntimeEnv: env})
+	w := doJSON(e, http.MethodPost, "/api/admin/runtime/directory/inspect", `{"path":`+strconv.Quote(dir)+`,"fileAccessRoots":[]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestRuntimeDirectoryInspectRejectsBrowseOnlyRoot(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.py"), []byte("print(1)"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	env := &fakeRuntimeEnv{}
 	env.browseStat = rtenv.BrowseStatResult{Path: dir, Exists: true, Type: "dir", Allowed: true, Readable: true}
 	e := newTestEngine(Deps{RuntimeEnv: env})
 	w := doJSON(e, http.MethodPost, "/api/admin/runtime/directory/inspect", `{"path":`+strconv.Quote(dir)+`}`)
-	if w.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("browse-only directory should be rejected early, status=%d body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "可浏览但不可启动") {
+		t.Fatalf("error should explain the browse/launch distinction: %s", w.Body.String())
 	}
 }
 

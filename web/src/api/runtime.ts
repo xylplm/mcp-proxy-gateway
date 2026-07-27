@@ -104,8 +104,14 @@ export interface DirectoryLaunchResult {
   warnings: string[]
 }
 
-export async function inspectRuntimeDirectory(path: string): Promise<DirectoryLaunchResult> {
-  const res = await request.post<DirectoryLaunchResult>('/runtime/directory/inspect', { path })
+export async function inspectRuntimeDirectory(
+  path: string,
+  fileAccessRoots?: string[],
+): Promise<DirectoryLaunchResult> {
+  const res = await request.post<DirectoryLaunchResult>('/runtime/directory/inspect', {
+    path,
+    ...(fileAccessRoots && fileAccessRoots.length > 0 ? { fileAccessRoots } : {}),
+  })
   return res.data
 }
 

@@ -73,7 +73,8 @@ func (r *Router) runtimeDirectoryInspect(c *gin.Context) {
 		return
 	}
 	var body struct {
-		Path string `json:"path"`
+		Path            string   `json:"path"`
+		FileAccessRoots []string `json:"fileAccessRoots"`
 	}
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 16*1024)
 	if !bindJSON(c, &body) {
@@ -90,7 +91,17 @@ func (r *Router) runtimeDirectoryInspect(c *gin.Context) {
 		respondError(c, domain.NewError(domain.CodeForbidden, "目录不在允许浏览范围内或不可访问"))
 		return
 	}
-	result, err := rtenv.InspectDirectoryLaunch(stat.Path, r.runtimeEnv.Policy())
+	policy := r.runtimeEnv.Policy()
+	launchRoots := append([]string{}, policy.GlobalFileRoots...)
+	launchRoots = append(launchRoots, body.FileAccessRoots...)
+	if _, allowed, resolveErr := rtenv.ResolveExistingPathWithinRoots(stat.Path, launchRoots); resolveErr != nil || !allowed {
+		respondError(c, domain.NewValidationError(
+			"目录可浏览但不可启动，请将其加入系统设置的 global_file_roots，或在本上游文件允许路径中声明该目录",
+			map[string]string{"path": "缺少可启动的文件允许根"},
+		))
+		return
+	}
+	result, err := rtenv.InspectDirectoryLaunch(stat.Path, policy)
 	if err != nil {
 		respondError(c, domain.NewValidationError(err.Error(), map[string]string{"path": err.Error()}))
 		return
