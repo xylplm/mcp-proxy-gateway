@@ -1,9 +1,36 @@
 package scripts
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestSoftDeleteReportsTrashMoveFailure(t *testing.T) {
+	dir := t.TempDir()
+	store := NewStore(dir)
+	detail, err := store.Create(CreateInput{Name: "move-failure", Language: LangPython, Content: "print(1)\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.rename = func(string, string) error { return errors.New("simulated rename failure") }
+	err = store.SoftDelete(detail.ID)
+	if !errors.Is(err, ErrTrashMoveFailed) {
+		t.Fatalf("error=%v, want ErrTrashMoveFailed", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(LibraryRoot(dir), detail.ID)); statErr != nil {
+		t.Fatalf("library directory should remain for cleanup retry: %v", statErr)
+	}
+	list, listErr := store.List()
+	if listErr != nil {
+		t.Fatal(listErr)
+	}
+	if len(list) != 0 {
+		t.Fatalf("trash script should not appear in active list: %+v", list)
+	}
+}
 
 func TestCreateListGetSaveVersion(t *testing.T) {
 	dir := t.TempDir()

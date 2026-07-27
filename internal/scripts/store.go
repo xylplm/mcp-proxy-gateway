@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -14,6 +15,10 @@ import (
 	"sync"
 	"time"
 )
+
+// ErrTrashMoveFailed indicates that a script was deactivated but its physical
+// directory could not be moved into the trash.
+var ErrTrashMoveFailed = errors.New("trash move failed")
 
 // LibraryRoot 返回脚本库根目录 {dataDir}/scripts/library。
 func LibraryRoot(dataDir string) string {
@@ -77,11 +82,12 @@ type versionMetaFile struct {
 type Store struct {
 	dataDir string
 	mu      sync.Mutex
+	rename  func(string, string) error
 }
 
 // NewStore 构造脚本仓储。
 func NewStore(dataDir string) *Store {
-	return &Store{dataDir: strings.TrimSpace(dataDir)}
+	return &Store{dataDir: strings.TrimSpace(dataDir), rename: os.Rename}
 }
 
 func (s *Store) root() string { return LibraryRoot(s.dataDir) }
@@ -336,10 +342,10 @@ func (s *Store) SoftDelete(id string) error {
 		return err
 	}
 	dst := filepath.Join(dstRoot, id+"-"+time.Now().UTC().Format("20060102T150405"))
-	if err := os.Rename(src, dst); err != nil {
+	if err := s.rename(src, dst); err != nil {
 		// rename 失败时仍保留 trash 状态：脚本已从列表消失，后续 Get 返回不存在。
 		// 不回滚为 active，避免「删除成功」后仍可被启动。
-		return nil
+		return fmt.Errorf("%w: 脚本已停用，但回收站移动失败，目录仍占用磁盘（%s）：%v", ErrTrashMoveFailed, src, err)
 	}
 	return nil
 }

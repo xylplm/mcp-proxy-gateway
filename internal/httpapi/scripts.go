@@ -168,6 +168,14 @@ func (r *Router) deleteScript(c *gin.Context) {
 		}
 	}
 	if err := r.scripts.Delete(id); err != nil {
+		if errors.Is(err, scripts.ErrTrashMoveFailed) {
+			r.recordDelete(c, audit.ResourceScript, id)
+			respondOK(c, gin.H{
+				"deleted": true,
+				"warning": err.Error(),
+			})
+			return
+		}
 		respondError(c, mapScriptErr(err))
 		return
 	}

@@ -3,12 +3,36 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"testing"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
 	"github.com/myGithub/mcp-proxy-gateway/internal/scripts"
 )
+
+type warningScriptService struct {
+	ScriptService
+}
+
+func (warningScriptService) Delete(string) error {
+	return fmt.Errorf("%w: simulated trash move failure", scripts.ErrTrashMoveFailed)
+}
+
+func TestDeleteScriptReturnsCleanupWarning(t *testing.T) {
+	e := newTestEngine(Deps{Scripts: warningScriptService{}})
+	w := doJSON(e, http.MethodDelete, "/api/admin/scripts/script-1", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	var data map[string]any
+	if err := json.Unmarshal(envelopeData(t, w), &data); err != nil {
+		t.Fatal(err)
+	}
+	if data["deleted"] != true || data["warning"] == "" {
+		t.Fatalf("response=%+v, want deleted=true with warning", data)
+	}
+}
 
 func TestScriptsCRUDFlow(t *testing.T) {
 	dir := t.TempDir()

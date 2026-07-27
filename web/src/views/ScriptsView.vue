@@ -272,8 +272,12 @@ async function remove(item: ScriptItem): Promise<void> {
   })
   if (!ok) return
   try {
-    await deleteScript(item.id)
-    toast.success('脚本已移至回收站')
+    const result = await deleteScript(item.id)
+    if (result.warning) {
+      toast.warning('脚本已停用，但磁盘清理未完成，请稍后重试或联系管理员')
+    } else {
+      toast.success('脚本已移至回收站')
+    }
     if (detail.value?.id === item.id) editorOpen.value = false
     await load()
   } catch (err) {

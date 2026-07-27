@@ -118,8 +118,14 @@ export async function saveScriptContent(
   return res.data
 }
 
-export async function deleteScript(id: string): Promise<void> {
-  await request.delete(`/scripts/${encodeURIComponent(id)}`)
+export interface DeleteScriptResult {
+  deleted?: boolean
+  warning?: string
+}
+
+export async function deleteScript(id: string): Promise<DeleteScriptResult> {
+  const res = await request.delete<DeleteScriptResult>(`/scripts/${encodeURIComponent(id)}`)
+  return res.data ?? {}
 }
 
 export async function listScriptVersions(id: string): Promise<ScriptVersion[]> {
