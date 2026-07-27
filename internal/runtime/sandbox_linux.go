@@ -9,20 +9,39 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 )
 
 var (
-	bwrapOnce sync.Once
-	bwrapPath string
+	bwrapCache struct {
+		sync.RWMutex
+		path string
+		at   time.Time
+	}
 )
 
+const bwrapCacheTTL = 30 * time.Second
+
 func lookPathBwrap() string {
-	bwrapOnce.Do(func() {
-		if p, err := exec.LookPath("bwrap"); err == nil {
-			bwrapPath = p
-		}
-	})
-	return bwrapPath
+	now := time.Now()
+	bwrapCache.RLock()
+	if now.Sub(bwrapCache.at) < bwrapCacheTTL {
+		path := bwrapCache.path
+		bwrapCache.RUnlock()
+		return path
+	}
+	bwrapCache.RUnlock()
+
+	bwrapCache.Lock()
+	defer bwrapCache.Unlock()
+	now = time.Now()
+	if now.Sub(bwrapCache.at) < bwrapCacheTTL {
+		return bwrapCache.path
+	}
+	path, _ := exec.LookPath("bwrap")
+	bwrapCache.path = path
+	bwrapCache.at = now
+	return path
 }
 
 func applySandboxPlatform(cmd *exec.Cmd, opts SandboxOptions) {
