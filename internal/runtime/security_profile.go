@@ -416,15 +416,9 @@ func ResolveEffectiveSecurity(policy Policy, profile SecurityProfile, _ string) 
 		eff.AllowSelfInstall = mode != SecurityModeStrict
 	}
 
-	// 严格档强制进程加固；StrictPathOnly 跟随全局开关（默认 true），不静默覆盖为恒 true。
+	// 严格档强制进程加固；StrictPathOnly 已在上方跟随全局开关赋值。
 	if mode == SecurityModeStrict {
 		eff.ProcessHardening = policy.ProcessHardening && DescribeSandbox().ProcessHardeningSupported
-		// 保持 policy.StrictPathOnlyRuntime（已写入 eff）；仅在缺省未配置时偏安全为 true。
-		if !policy.StrictPathOnlyRuntime {
-			eff.StrictPathOnly = false
-		} else {
-			eff.StrictPathOnly = true
-		}
 	}
 	// 仅当上游显式声明完全放行时要求确认备注；全局默认 unrestricted 不拦截存量未声明上游，避免主业务被一刀切。
 	if profile.Mode == SecurityModeUnrestricted {
