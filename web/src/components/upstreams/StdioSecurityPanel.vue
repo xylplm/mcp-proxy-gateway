@@ -299,9 +299,11 @@ function modeButtonClass(active: boolean, mode: StdioSecurityMode): string {
                 emit('update:allowSelfInstall', ($event.target as HTMLInputElement).checked)
               "
             />
-            允许脚本自装包（npm/pip 等）
+            允许常见自装包参数（npm/pip 等）
           </label>
-          <p :class="helpClass">严格模式默认关闭；开启后需声明网络允许主机。</p>
+          <p :class="helpClass">
+            严格模式默认关闭；关闭时会拒绝 install、-g、--with 等常见参数。此检查无法阻止脚本运行后自行调用包管理器，需要更强约束请同时拒绝出站网络或启用内核隔离。
+          </p>
         </div>
       </div>
       <div v-if="networkMode === 'allowlist'">

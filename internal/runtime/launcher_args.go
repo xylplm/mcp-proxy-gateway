@@ -154,8 +154,7 @@ func extractUvxTarget(args []string) (string, bool, error) {
 			fromPkg = strings.TrimSpace(a[len("--from="):])
 			continue
 		case al == "--with" || al == "--with-editable" || al == "--with-requirements":
-			skipNext = true
-			continue
+			return "", false, fmt.Errorf("严格安全模式禁止 uvx 使用 %s 附加依赖，请将依赖固化到目标包", a)
 		case al == "--python" || al == "-p" || al == "--index-url" || al == "--extra-index-url" ||
 			al == "--cache-dir" || al == "--directory" || al == "--project":
 			skipNext = true

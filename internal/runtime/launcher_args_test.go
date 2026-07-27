@@ -36,6 +36,11 @@ func TestExtractUvxTarget(t *testing.T) {
 	if _, _, err := ExtractLauncherTarget("uvx", []string{"install", "ruff"}); err == nil {
 		t.Fatal("uvx install subcommand must fail")
 	}
+	for _, flag := range []string{"--with", "--with-editable", "--with-requirements"} {
+		if _, _, err := ExtractLauncherTarget("uvx", []string{flag, "extra-dependency", "ruff"}); err == nil {
+			t.Fatalf("uvx %s must fail in strict mode", flag)
+		}
+	}
 }
 
 func TestValidateStrictLauncherTargetAllowlist(t *testing.T) {
