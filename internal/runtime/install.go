@@ -57,6 +57,14 @@ type InstallResult struct {
 	Reused     bool     `json:"reused"`
 }
 
+type InstallProgress struct {
+	PackageID string    `json:"packageId"`
+	Phase     string    `json:"phase"`
+	Bytes     int64     `json:"bytes"`
+	Total     int64     `json:"total"`
+	StartedAt time.Time `json:"startedAt"`
+}
+
 // Installer 负责受控预置包安装到 runtimeDir。
 type Installer struct {
 	runtimeDir string
@@ -66,7 +74,9 @@ type Installer struct {
 	// now 可注入时间。
 	now func() time.Time
 
-	mu sync.Mutex // 串行化安装，避免并发写同一目录
+	mu         sync.Mutex // 串行化安装，避免并发写同一目录
+	progressMu sync.RWMutex
+	progress   *InstallProgress
 }
 
 // NewInstaller 构造安装器；client 可空（使用官方源白名单客户端）。
@@ -116,6 +126,8 @@ func (in *Installer) PreviewInstall(packageID string) (CatalogPackage, error) {
 func (in *Installer) Install(ctx context.Context, packageID string) (InstallResult, error) {
 	in.mu.Lock()
 	defer in.mu.Unlock()
+	in.setProgress(&InstallProgress{PackageID: strings.TrimSpace(packageID), Phase: "preparing", StartedAt: time.Now().UTC()})
+	defer in.setProgress(nil)
 
 	if strings.TrimSpace(in.runtimeDir) == "" {
 		return InstallResult{}, fmt.Errorf("运行时目录未配置")
@@ -169,6 +181,7 @@ func (in *Installer) Install(ctx context.Context, packageID string) (InstallResu
 	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	archivePath := filepath.Join(tmpDir, "package"+extForFormat(asset.Format))
+	in.updateProgressPhase("downloading")
 	if err := in.downloadFile(ctx, asset.URL, archivePath, asset.SHA256); err != nil {
 		return InstallResult{}, err
 	}
@@ -179,10 +192,12 @@ func (in *Installer) Install(ctx context.Context, packageID string) (InstallResu
 	}
 	switch strings.ToLower(asset.Format) {
 	case "tar.gz", "tgz":
+		in.updateProgressPhase("extracting")
 		if err := extractTarGz(archivePath, extractDir); err != nil {
 			return InstallResult{}, fmt.Errorf("解压失败：%w", err)
 		}
 	case "zip":
+		in.updateProgressPhase("extracting")
 		if err := extractZip(archivePath, extractDir); err != nil {
 			return InstallResult{}, fmt.Errorf("解压失败：%w", err)
 		}
@@ -190,6 +205,7 @@ func (in *Installer) Install(ctx context.Context, packageID string) (InstallResu
 		return InstallResult{}, fmt.Errorf("不支持的包格式 %q", asset.Format)
 	}
 
+	in.updateProgressPhase("placing")
 	if err := in.placePackage(spec, extractDir); err != nil {
 		return InstallResult{}, err
 	}
@@ -217,6 +233,60 @@ func (in *Installer) Install(ctx context.Context, packageID string) (InstallResu
 		RuntimeDir: in.runtimeDir,
 		Reused:     false,
 	}, nil
+}
+
+func (in *Installer) setProgress(progress *InstallProgress) {
+	in.progressMu.Lock()
+	if progress == nil {
+		in.progress = nil
+	} else {
+		copy := *progress
+		in.progress = &copy
+	}
+	in.progressMu.Unlock()
+}
+
+func (in *Installer) updateProgressPhase(phase string) {
+	in.progressMu.Lock()
+	if in.progress != nil {
+		in.progress.Phase = phase
+	}
+	in.progressMu.Unlock()
+}
+
+func (in *Installer) updateProgressTotal(total int64) {
+	in.progressMu.Lock()
+	if in.progress != nil {
+		in.progress.Total = total
+	}
+	in.progressMu.Unlock()
+}
+
+func (in *Installer) addProgressBytes(n int64) {
+	in.progressMu.Lock()
+	if in.progress != nil {
+		in.progress.Bytes += n
+	}
+	in.progressMu.Unlock()
+}
+
+func (in *Installer) currentProgress() *InstallProgress {
+	in.progressMu.RLock()
+	defer in.progressMu.RUnlock()
+	if in.progress == nil {
+		return nil
+	}
+	copy := *in.progress
+	return &copy
+}
+
+type installProgressWriter struct {
+	installer *Installer
+}
+
+func (w installProgressWriter) Write(p []byte) (int, error) {
+	w.installer.addProgressBytes(int64(len(p)))
+	return len(p), nil
 }
 
 // Uninstall 移除预置包落盘内容并更新状态（仅允许 catalog 内 id）。
@@ -345,6 +415,7 @@ func (in *Installer) downloadFile(ctx context.Context, rawURL, dest, wantSHA str
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("下载失败：HTTP %d", resp.StatusCode)
 	}
+	in.updateProgressTotal(resp.ContentLength)
 
 	f, err := os.OpenFile(dest, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 	if err != nil {
@@ -354,13 +425,14 @@ func (in *Installer) downloadFile(ctx context.Context, rawURL, dest, wantSHA str
 
 	h := sha256.New()
 	limited := io.LimitReader(resp.Body, maxInstallBytes+1)
-	written, err := io.Copy(io.MultiWriter(f, h), limited)
+	written, err := io.Copy(io.MultiWriter(f, h, installProgressWriter{installer: in}), limited)
 	if err != nil {
 		return fmt.Errorf("写入下载文件失败：%w", err)
 	}
 	if written > maxInstallBytes {
 		return fmt.Errorf("下载文件超过大小上限（%d 字节）", maxInstallBytes)
 	}
+	in.updateProgressPhase("verifying")
 	sum := hex.EncodeToString(h.Sum(nil))
 	if sum != wantSHA {
 		return fmt.Errorf("校验和不匹配：期望 %s，实际 %s", wantSHA, sum)

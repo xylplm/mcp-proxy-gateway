@@ -37,6 +37,7 @@ type Summary struct {
 	Sandbox                  SandboxCapabilities `json:"sandbox"`
 	Catalog                  []CatalogPackage    `json:"catalog,omitempty"`
 	InstalledPackages        []InstallRecord     `json:"installedPackages,omitempty"`
+	InstallProgress          *InstallProgress    `json:"installProgress,omitempty"`
 	RiskNotes                []string            `json:"riskNotes"`
 }
 
@@ -101,6 +102,7 @@ func BuildSummary(
 	pathPrefixes []string,
 	catalog []CatalogPackage,
 	installed []InstallRecord,
+	installProgress *InstallProgress,
 ) Summary {
 	policy = NormalizePolicy(policy)
 	allowlist := policy.CommandAllowlist
@@ -165,6 +167,7 @@ func BuildSummary(
 		Sandbox:                  DescribeSandbox(),
 		Catalog:                  catalog,
 		InstalledPackages:        installed,
+		InstallProgress:          installProgress,
 		RiskNotes:                notes,
 	}
 }
@@ -254,7 +257,7 @@ func (s *Service) installer() *Installer {
 // Summary 返回管理台摘要。
 func (s *Service) Summary() Summary {
 	if s == nil {
-		return BuildSummary(DefaultPolicy(), nil, "", "", nil, nil, nil)
+		return BuildSummary(DefaultPolicy(), nil, "", "", nil, nil, nil, nil)
 	}
 	policy := s.Policy()
 	dataDir := ""
@@ -269,6 +272,7 @@ func (s *Service) Summary() Summary {
 	})
 	inst := s.installer()
 	state := inst.loadState()
+	progress := inst.currentProgress()
 	return BuildSummary(
 		policy,
 		doctor.Probe(),
@@ -277,6 +281,7 @@ func (s *Service) Summary() Summary {
 		prefixes,
 		inst.catalogWithState(state),
 		state.Packages,
+		progress,
 	)
 }
 

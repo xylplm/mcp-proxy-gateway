@@ -2,7 +2,7 @@
 /**
  * 运行环境页：策略摘要、卷路径、工具探测、受控预置安装与进程加固说明。
  */
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import AdminLayout from '@/components/layout/AdminLayout.vue'
 import PageBreadcrumb from '@/components/common/PageBreadcrumb.vue'
 import { BoxCubeIcon, RefreshIcon } from '@/icons'
@@ -36,6 +36,7 @@ const loading = ref(false)
 const loadError = ref('')
 const summary = ref<RuntimeSummary | null>(null)
 const busyPackageId = ref('')
+let installProgressTimer: ReturnType<typeof setInterval> | null = null
 
 const healthLabel = computed(() =>
   summary.value === null ? '—' : summarizeToolHealth(summary.value),
@@ -70,6 +71,45 @@ const guideSteps = computed(() => (summary.value === null ? [] : runtimeGuideSte
 const binDir = computed(() => (summary.value === null ? '' : runtimeBinDir(summary.value)))
 
 const catalog = computed(() => summary.value?.catalog ?? [])
+const activeInstallPackageId = computed(
+  () => busyPackageId.value || summary.value?.installProgress?.packageId || '',
+)
+
+const installProgressLabel = computed(() => {
+  const phase = summary.value?.installProgress?.phase
+  if (phase === 'downloading') return '正在下载'
+  if (phase === 'verifying') return '正在校验'
+  if (phase === 'extracting') return '正在解压'
+  if (phase === 'placing') return '正在安装'
+  if (phase === 'preparing') return '正在准备'
+  return '安装中'
+})
+
+const installProgressPercent = computed(() => {
+  const progress = summary.value?.installProgress
+  if (!progress || progress.total <= 0) return 0
+  return Math.min(100, Math.round((progress.bytes / progress.total) * 100))
+})
+
+function stopInstallProgressPolling(): void {
+  if (installProgressTimer !== null) {
+    clearInterval(installProgressTimer)
+    installProgressTimer = null
+  }
+}
+
+function startInstallProgressPolling(): void {
+  if (installProgressTimer !== null) return
+  installProgressTimer = setInterval(async () => {
+    try {
+      const next = await getRuntimeSummary()
+      summary.value = next
+      if (!next.installProgress) stopInstallProgressPolling()
+    } catch {
+      // 保留最近一次进度，下一轮继续尝试；安装请求本身负责报告最终错误。
+    }
+  }, 3000)
+}
 
 async function load(): Promise<void> {
   if (loading.value) return
@@ -107,7 +147,7 @@ function packageChipClass(pkg: RuntimeCatalogPackage): string {
 }
 
 async function onInstall(pkg: RuntimeCatalogPackage): Promise<void> {
-  if (busyPackageId.value !== '' || !pkg.supported) return
+  if (activeInstallPackageId.value !== '' || !pkg.supported) return
   const ok = await confirm({
     title: `安装 ${pkg.name} ${pkg.version}`,
     message: `将从官方源下载固定版本并安装到数据卷运行时目录（SHA256 校验）。仅允许内置目录中的包，不会执行任意脚本。是否继续？`,
@@ -116,6 +156,7 @@ async function onInstall(pkg: RuntimeCatalogPackage): Promise<void> {
   })
   if (!ok) return
   busyPackageId.value = pkg.id
+  startInstallProgressPolling()
   try {
     const result = await installRuntimePackage(pkg.id)
     toast.success(
@@ -128,6 +169,7 @@ async function onInstall(pkg: RuntimeCatalogPackage): Promise<void> {
     toast.error(err instanceof Error ? err.message : '安装失败')
   } finally {
     busyPackageId.value = ''
+    if (!summary.value?.installProgress) stopInstallProgressPolling()
   }
 }
 
@@ -152,7 +194,11 @@ async function onUninstall(pkg: RuntimeCatalogPackage): Promise<void> {
   }
 }
 
-onMounted(load)
+onMounted(async () => {
+  await load()
+  if (summary.value?.installProgress) startInstallProgressPolling()
+})
+onUnmounted(stopInstallProgressPolling)
 </script>
 
 <template>
@@ -370,12 +416,29 @@ onMounted(load)
               工具 {{ (pkg.tools || []).join(' · ') || '—' }}
               <span v-if="pkg.assetGoos"> · {{ pkg.assetGoos }}/{{ pkg.assetGoarch }}</span>
             </p>
+            <div
+              v-if="summary.installProgress?.packageId === pkg.id"
+              class="mt-3 rounded-lg bg-brand-50 px-3 py-2 text-xs text-brand-700 dark:bg-brand-500/10 dark:text-brand-300"
+            >
+              <div class="flex items-center justify-between gap-2">
+                <span>{{ installProgressLabel }}…</span>
+                <span v-if="summary.installProgress.total > 0">{{ installProgressPercent }}%</span>
+              </div>
+              <div class="mt-1.5 h-1.5 overflow-hidden rounded-full bg-brand-100 dark:bg-brand-500/20">
+                <div
+                  v-if="summary.installProgress.total > 0"
+                  class="h-full rounded-full bg-brand-500 transition-[width] duration-300"
+                  :style="{ width: String(installProgressPercent) + '%' }"
+                />
+                <div v-else class="h-full w-1/3 animate-pulse rounded-full bg-brand-500" />
+              </div>
+            </div>
             <div class="mt-4 flex flex-wrap gap-2">
               <button
                 v-if="!pkg.installed"
                 type="button"
                 class="bg-brand-500 hover:bg-brand-600 inline-flex h-9 items-center rounded-lg px-3.5 text-sm font-medium text-white transition disabled:cursor-not-allowed disabled:opacity-50"
-                :disabled="!pkg.supported || busyPackageId !== ''"
+                :disabled="!pkg.supported || activeInstallPackageId !== ''"
                 :aria-label="`安装 ${pkg.name}`"
                 @click="onInstall(pkg)"
               >
@@ -383,7 +446,7 @@ onMounted(load)
                   v-if="busyPackageId === pkg.id"
                   class="mr-1.5 inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white"
                 />
-                {{ busyPackageId === pkg.id ? '安装中…' : '安装' }}
+                {{ activeInstallPackageId === pkg.id ? '安装中…' : '安装' }}
               </button>
               <button
                 v-else

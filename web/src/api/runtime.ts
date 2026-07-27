@@ -66,6 +66,13 @@ export interface RuntimeSummary {
   sandbox?: SandboxCapabilities
   catalog?: RuntimeCatalogPackage[]
   installedPackages?: RuntimeInstallRecord[]
+  installProgress?: {
+    packageId: string
+    phase: string
+    bytes: number
+    total: number
+    startedAt: string
+  }
   riskNotes: string[]
 }
 

@@ -211,6 +211,23 @@ func TestCatalogWithStatus(t *testing.T) {
 	}
 }
 
+func TestInstallerProgressSnapshotIsCopied(t *testing.T) {
+	in := NewInstaller(t.TempDir(), nil)
+	in.setProgress(&InstallProgress{PackageID: "uv-0.6.14", Phase: "downloading", Bytes: 10, Total: 20})
+	progress := in.currentProgress()
+	if progress == nil || progress.PackageID != "uv-0.6.14" || progress.Bytes != 10 {
+		t.Fatalf("progress=%+v", progress)
+	}
+	progress.Bytes = 999
+	if got := in.currentProgress().Bytes; got != 10 {
+		t.Fatalf("progress snapshot is mutable: %d", got)
+	}
+	in.setProgress(nil)
+	if in.currentProgress() != nil {
+		t.Fatal("progress should clear after installation")
+	}
+}
+
 func TestPreviewUnknownPackage(t *testing.T) {
 	in := NewInstaller(t.TempDir(), nil)
 	_, err := in.PreviewInstall("not-exist")
