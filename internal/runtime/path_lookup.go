@@ -208,13 +208,6 @@ func findExecutableInDir(dir, name string) (string, bool) {
 		if err != nil || st.IsDir() {
 			continue
 		}
-		// Unix：尽量尊重可执行位；Windows 无统一 exec bit，存在即可。
-		if runtime.GOOS != "windows" {
-			if st.Mode()&0o111 == 0 {
-				// 卷内用户拷贝的二进制偶发无 +x，仍允许作为候选（由 OS 最终判定）。
-				// 保持发现能力，避免「文件在却探测不到」。
-			}
-		}
 		return c, true
 	}
 	return "", false

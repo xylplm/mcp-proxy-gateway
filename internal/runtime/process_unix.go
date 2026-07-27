@@ -4,7 +4,6 @@ package runtime
 
 import (
 	"errors"
-	"os"
 	"os/exec"
 	"syscall"
 	"time"
@@ -42,13 +41,4 @@ func TerminateProcessTree(cmd *exec.Cmd) {
 func processGroupAlive(pid int) bool {
 	err := syscall.Kill(-pid, syscall.Signal(0))
 	return err == nil || errors.Is(err, syscall.EPERM)
-}
-
-// ensureProcessStarted 供测试/兼容；unix 下无额外动作。
-func processAlive(p *os.Process) bool {
-	if p == nil {
-		return false
-	}
-	// Signal 0 探测是否仍存在。
-	return p.Signal(syscall.Signal(0)) == nil
 }

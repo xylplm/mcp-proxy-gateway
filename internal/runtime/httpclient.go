@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 )
 
 // newInstallHTTPClient 构造预置安装专用 HTTP 客户端：
@@ -40,6 +39,3 @@ func allowedInstallHost(host string) bool {
 		return strings.HasSuffix(host, ".githubusercontent.com")
 	}
 }
-
-// 编译期引用，避免未使用 time 在部分工具链下告警。
-var _ = time.Minute
