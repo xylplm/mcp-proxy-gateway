@@ -179,6 +179,8 @@ type Service struct {
 
 	instMu         sync.Mutex
 	installer_     *Installer
+	layoutMu       sync.Mutex
+	layoutDir      string
 	preflightMu    sync.Mutex
 	preflightCache map[string]preflightCacheEntry
 }
@@ -260,21 +262,37 @@ func (s *Service) Summary() Summary {
 		dataDir = s.dataDirFn()
 	}
 	runtimeDir := s.RuntimeDir()
-	_ = EnsureRuntimeLayout(runtimeDir)
+	s.ensureRuntimeLayout(runtimeDir)
 	prefixes := PathPrefixes(runtimeDir)
 	doctor := NewDoctor(func(file string) (string, error) {
 		return LookPathWithPrefixes(file, prefixes, exec.LookPath)
 	})
 	inst := s.installer()
+	state := inst.loadState()
 	return BuildSummary(
 		policy,
 		doctor.Probe(),
 		dataDir,
 		runtimeDir,
 		prefixes,
-		inst.CatalogWithStatus(),
-		inst.ListInstalled(),
+		inst.catalogWithState(state),
+		state.Packages,
 	)
+}
+
+func (s *Service) ensureRuntimeLayout(runtimeDir string) {
+	runtimeDir = strings.TrimSpace(runtimeDir)
+	if runtimeDir == "" {
+		return
+	}
+	s.layoutMu.Lock()
+	defer s.layoutMu.Unlock()
+	if s.layoutDir == runtimeDir {
+		return
+	}
+	if err := EnsureRuntimeLayout(runtimeDir); err == nil {
+		s.layoutDir = runtimeDir
+	}
 }
 
 // Catalog 返回预置包目录与安装状态。

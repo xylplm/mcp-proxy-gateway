@@ -252,7 +252,10 @@ func (in *Installer) ListInstalled() []InstallRecord {
 
 // CatalogWithStatus 合并目录与安装状态。
 func (in *Installer) CatalogWithStatus() []CatalogPackage {
-	state := in.loadState()
+	return in.catalogWithState(in.loadState())
+}
+
+func (in *Installer) catalogWithState(state InstallState) []CatalogPackage {
 	out := make([]CatalogPackage, 0, len(DefaultCatalog()))
 	list := DefaultCatalog()
 	if in.catalog != nil {

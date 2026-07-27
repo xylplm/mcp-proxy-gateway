@@ -98,3 +98,27 @@ func TestServiceSummaryCreatesLayout(t *testing.T) {
 		t.Fatal("catalog should be present")
 	}
 }
+
+func TestServiceSummaryReusesRuntimeLayoutAndInstallState(t *testing.T) {
+	root := t.TempDir()
+	data := filepath.Join(root, "data")
+	rt := filepath.Join(data, "runtime")
+	svc := NewService(
+		func() Policy { return DefaultPolicy() },
+		func() string { return data },
+		func() string { return rt },
+	)
+	if got := svc.Summary(); got.RuntimeDir != rt {
+		t.Fatalf("runtimeDir=%q", got.RuntimeDir)
+	}
+	if svc.layoutDir != rt {
+		t.Fatalf("layout marker=%q, want %q", svc.layoutDir, rt)
+	}
+	if err := os.Remove(filepath.Join(rt, RuntimeReadmeName)); err != nil {
+		t.Fatal(err)
+	}
+	_ = svc.Summary()
+	if _, err := os.Stat(filepath.Join(rt, RuntimeReadmeName)); !os.IsNotExist(err) {
+		t.Fatalf("summary should not repeat layout initialization, stat err=%v", err)
+	}
+}
