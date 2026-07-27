@@ -34,6 +34,33 @@ func TestBuildChildEnvScrubsParentSecretsKeepsPath(t *testing.T) {
 	}
 }
 
+func TestBuildChildEnvKeepsRuntimeConfigurationVariables(t *testing.T) {
+	t.Parallel()
+	parent := []string{
+		"PATH=/usr/bin",
+		"NPM_CONFIG_REGISTRY=https://registry.example.test/npm/",
+		"PGHOST=db.internal",
+		"PGPORT=5432",
+		"POSTGRES_HOST=db.internal",
+		"SECRETS_DIR=/var/lib/mcp/secrets",
+		"NO_SECRET_SCAN=1",
+	}
+	out := BuildChildEnv(parent, nil, Policy{StdioEnabled: true})
+	joined := strings.Join(out, "\n")
+	for _, want := range []string{
+		"NPM_CONFIG_REGISTRY=",
+		"PGHOST=",
+		"PGPORT=",
+		"POSTGRES_HOST=",
+		"SECRETS_DIR=",
+		"NO_SECRET_SCAN=",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("parent configuration %s must be preserved: %v", want, out)
+		}
+	}
+}
+
 func TestBuildChildEnvUserOverridesAndExplicitSecretsAllowed(t *testing.T) {
 	t.Parallel()
 	parent := []string{

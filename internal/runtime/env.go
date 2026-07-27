@@ -30,20 +30,31 @@ var sensitiveEnvExact = map[string]struct{}{
 var sensitiveEnvPrefixes = []string{
 	"MPG_",
 	"AWS_",
-	"POSTGRES",
-	"PG",
+	"PGPASS",
+	"PGSSL",
 	"REDIS_",
 	"OPENAI_",
 	"ANTHROPIC_",
 	"GITHUB_",
-	"GH_",
-	"NPM_",
 	"DOCKER_",
-	"KUBE",
 	"K8S_",
 	"AZURE_",
 	"GCP_",
 	"GOOGLE_APPLICATION_CREDENTIALS",
+}
+
+// 常见凭证键的精确后缀；配置路径、开关和服务连接参数不因名称中包含
+// PASSWORD/SECRET 等片段而被误删。
+var sensitiveEnvSuffixes = []string{
+	"_PASSWORD",
+	"_PASSWD",
+	"_SECRET",
+	"_TOKEN",
+	"_API_KEY",
+	"_APIKEY",
+	"_ACCESS_KEY",
+	"_PRIVATE_KEY",
+	"_CREDENTIALS",
 }
 
 // ChildEnvOptions 控制按安全档位构造子进程环境。
@@ -264,15 +275,16 @@ func isSensitiveEnvKey(key string, prefixes []string) bool {
 	if _, ok := sensitiveEnvExact[upper]; ok {
 		return true
 	}
-	// 通用密钥后缀启发：避免漏掉 CUSTOM_SECRET 一类。
-	if strings.Contains(upper, "PASSWORD") ||
-		strings.Contains(upper, "SECRET") ||
-		strings.HasSuffix(upper, "_TOKEN") ||
-		strings.HasSuffix(upper, "_API_KEY") ||
-		upper == "TOKEN" ||
-		upper == "API_KEY" {
-		// PATH 等系统变量不含这些模式；允许保留。
+	// 仅匹配完整凭证词或精确后缀，避免误删 SECRETS_DIR、NO_SECRET_SCAN
+	// 以及 NPM_CONFIG_REGISTRY、PGHOST 等业务配置。
+	switch upper {
+	case "TOKEN", "API_KEY", "PASSWORD", "SECRET":
 		return true
+	}
+	for _, suffix := range sensitiveEnvSuffixes {
+		if strings.HasSuffix(upper, suffix) {
+			return true
+		}
 	}
 	for _, p := range prefixes {
 		if p == "" {
