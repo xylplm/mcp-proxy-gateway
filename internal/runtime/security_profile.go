@@ -442,13 +442,14 @@ func ResolveEffectiveSecurity(policy Policy, profile SecurityProfile, _ string) 
 	}
 	eff.PackageAllowlist = MergePackageAllowlist(globalPkgs, profile.PackageAllowlist)
 
-	eff.RiskLevel = riskLevelFor(mode, eff)
 	// 有内核隔离后端时，严格档不再标记为仅策略；标准/完全放行仍是策略层。
 	if mode == SecurityModeStrict && IsolationAvailable() {
 		eff.PolicyOnlyIsolation = false
 	} else {
 		eff.PolicyOnlyIsolation = true
 	}
+	// 风险等级依赖真实的隔离能力，必须在 PolicyOnlyIsolation 计算后确定。
+	eff.RiskLevel = riskLevelFor(mode, eff)
 	return eff
 }
 
@@ -832,6 +833,10 @@ func riskLevelFor(mode StdioSecurityMode, eff EffectiveSecurity) string {
 	case SecurityModeUnrestricted:
 		return "critical"
 	case SecurityModeStrict:
+		if eff.PolicyOnlyIsolation {
+			// 严格档在无内核隔离时仍是策略约束，不能对外宣称低风险。
+			return "medium"
+		}
 		if eff.Network.Mode == NetworkAccessUnrestricted || eff.AllowSelfInstall {
 			return "medium"
 		}

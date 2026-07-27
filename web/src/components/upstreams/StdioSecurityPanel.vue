@@ -23,6 +23,8 @@ withDefaults(
     compact?: boolean
     fieldErrors?: Record<string, string>
     securityError?: string
+    /** 严格档未检测到内核隔离时为 true；此时仅有策略层约束。 */
+    policyOnlyIsolation?: boolean
     inputClass?: string
     textareaClass?: string
     labelClass?: string
@@ -34,6 +36,7 @@ withDefaults(
     compact: false,
     fieldErrors: () => ({}),
     securityError: '',
+    policyOnlyIsolation: false,
     inputClass:
       'h-11 w-full rounded-lg border border-gray-300 bg-transparent px-4 text-sm text-gray-800 shadow-sm placeholder:text-gray-400 focus:border-brand-300 focus:ring-3 focus:ring-brand-500/10 focus:outline-none dark:border-gray-700 dark:text-white/90 dark:placeholder:text-white/30',
     textareaClass:
@@ -93,10 +96,25 @@ function modeButtonClass(active: boolean, mode: StdioSecurityMode): string {
       </div>
       <span
         class="inline-flex rounded-full px-2.5 py-1 text-[11px] font-semibold"
-        :class="securityModeBadgeClass(securityMode)"
+        :class="
+          securityMode === 'strict' && policyOnlyIsolation
+            ? 'bg-warning-50 text-warning-700 ring-1 ring-warning-200 dark:bg-warning-500/10 dark:text-warning-400 dark:ring-warning-500/30'
+            : securityModeBadgeClass(securityMode)
+        "
       >
-        {{ securityModes.find((m) => m.value === securityMode)?.label || securityMode }}
+        {{
+          securityMode === 'strict' && policyOnlyIsolation
+            ? '严格安全 · 仅策略'
+            : securityModes.find((m) => m.value === securityMode)?.label || securityMode
+        }}
       </span>
+    </div>
+
+    <div
+      v-if="securityMode === 'strict' && policyOnlyIsolation"
+      class="border-warning-200 bg-warning-50/70 text-warning-800 dark:border-warning-500/25 dark:bg-warning-500/10 dark:text-warning-200 mt-3 rounded-lg border px-3 py-2 text-xs leading-5"
+    >
+      当前宿主未检测到 bubblewrap，严格档现在是命令、路径和网络策略校验，不是操作系统内核隔离。需要更强文件与网络隔离，请在 Linux 容器中安装 bubblewrap。
     </div>
 
     <div class="mt-3 grid gap-2 sm:grid-cols-3" role="radiogroup" aria-label="本地运行安全档位">

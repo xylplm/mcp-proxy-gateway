@@ -145,6 +145,15 @@ func TestValidateIsolationRequirement(t *testing.T) {
 	t.Parallel()
 	policy := DefaultPolicy()
 	eff := ResolveEffectiveSecurity(policy, SecurityProfile{Mode: SecurityModeStrict}, "")
+	if IsolationAvailable() {
+		if eff.PolicyOnlyIsolation || eff.RiskLevel != "low" {
+			t.Fatalf("strict with isolation should report low risk and real isolation: %+v", eff)
+		}
+	} else {
+		if !eff.PolicyOnlyIsolation || eff.RiskLevel != "medium" {
+			t.Fatalf("strict without isolation must report policy-only medium risk: %+v", eff)
+		}
+	}
 	if err := ValidateIsolationRequirement(policy, eff); err != nil {
 		t.Fatalf("default policy-only compatibility should pass: %v", err)
 	}
