@@ -30,6 +30,10 @@ type KnownTool struct {
 	Description string `json:"description"`
 	// PackageID 非空表示可通过预置安装补齐。
 	PackageID string `json:"packageId,omitempty"`
+	// InferFrom 与 TemplateRuntimes 供管理台做输入期间的乐观提示；
+	// 实际预检仍以本包的 InferToolsFromCommand 为准。
+	InferFrom        []string `json:"inferFrom,omitempty"`
+	TemplateRuntimes []string `json:"templateRuntimes,omitempty"`
 }
 
 // RuntimeRequirements 为上游声明的运行时依赖。
@@ -99,14 +103,14 @@ type PreflightResult struct {
 // KnownTools 返回可声明/可探测的工具字典（稳定顺序）。
 func KnownTools() []KnownTool {
 	return []KnownTool{
-		{Name: "node", Label: "Node.js", Description: "Node 运行时", PackageID: "node-22.14.0"},
-		{Name: "npx", Label: "npx", Description: "Node 包执行器", PackageID: "node-22.14.0"},
-		{Name: "npm", Label: "npm", Description: "Node 包管理器", PackageID: "node-22.14.0"},
-		{Name: "python", Label: "Python", Description: "Python 解释器"},
-		{Name: "python3", Label: "Python 3", Description: "Python 3 解释器"},
-		{Name: "uv", Label: "uv", Description: "Astral uv", PackageID: "uv-0.6.14"},
-		{Name: "uvx", Label: "uvx", Description: "uv 工具运行器", PackageID: "uv-0.6.14"},
-		{Name: "docker", Label: "Docker", Description: "容器运行时（需宿主机自行安装）"},
+		{Name: "node", Label: "Node.js", Description: "Node 运行时", PackageID: "node-22.14.0", InferFrom: []string{"node", "npx", "npm"}, TemplateRuntimes: []string{"node"}},
+		{Name: "npx", Label: "npx", Description: "Node 包执行器", PackageID: "node-22.14.0", InferFrom: []string{"npx"}, TemplateRuntimes: []string{"node"}},
+		{Name: "npm", Label: "npm", Description: "Node 包管理器", PackageID: "node-22.14.0", InferFrom: []string{"npm"}, TemplateRuntimes: []string{"node"}},
+		{Name: "python", Label: "Python", Description: "Python 解释器", InferFrom: []string{"python"}, TemplateRuntimes: []string{"python"}},
+		{Name: "python3", Label: "Python 3", Description: "Python 3 解释器", InferFrom: []string{"python3"}, TemplateRuntimes: []string{"python"}},
+		{Name: "uv", Label: "uv", Description: "Astral uv", PackageID: "uv-0.6.14", InferFrom: []string{"uv", "uvx"}, TemplateRuntimes: []string{"uv", "uvx"}},
+		{Name: "uvx", Label: "uvx", Description: "uv 工具运行器", PackageID: "uv-0.6.14", InferFrom: []string{"uvx"}, TemplateRuntimes: []string{"uv", "uvx"}},
+		{Name: "docker", Label: "Docker", Description: "容器运行时（需宿主机自行安装）", InferFrom: []string{"docker"}, TemplateRuntimes: []string{"docker"}},
 	}
 }
 
@@ -132,53 +136,42 @@ func IsKnownTool(name string) bool {
 // InferToolsFromCommand 根据 command 基名推断建议工具。
 func InferToolsFromCommand(command string) []string {
 	base := CommandBaseName(command)
-	switch base {
-	case "npx":
-		return []string{"node", "npx"}
-	case "npm":
-		return []string{"node", "npm"}
-	case "node":
-		return []string{"node"}
-	case "python":
-		return []string{"python"}
-	case "python3":
-		return []string{"python3"}
-	case "uv":
-		return []string{"uv"}
-	case "uvx":
-		return []string{"uv", "uvx"}
-	case "docker":
-		return []string{"docker"}
-	default:
+	if base == "" {
 		return nil
 	}
+	var out []string
+	for _, tool := range KnownTools() {
+		for _, source := range tool.InferFrom {
+			if source == base {
+				out = append(out, tool.Name)
+				break
+			}
+		}
+	}
+	return out
 }
 
 // InferToolsFromTemplateRuntimes 将模板 RuntimeTag 映射为工具名。
 func InferToolsFromTemplateRuntimes(tags []string) []string {
-	out := make([]string, 0, 4)
-	seen := map[string]struct{}{}
-	add := func(names ...string) {
-		for _, n := range names {
-			if _, ok := seen[n]; ok {
-				continue
+	set := map[string]struct{}{}
+	for _, raw := range tags {
+		runtime := strings.ToLower(strings.TrimSpace(raw))
+		if runtime == "" {
+			continue
+		}
+		for _, tool := range KnownTools() {
+			for _, source := range tool.TemplateRuntimes {
+				if source == runtime {
+					set[tool.Name] = struct{}{}
+					break
+				}
 			}
-			seen[n] = struct{}{}
-			out = append(out, n)
 		}
 	}
-	for _, raw := range tags {
-		switch strings.ToLower(strings.TrimSpace(raw)) {
-		case "node":
-			add("node", "npx")
-		case "python":
-			add("python3", "python")
-		case "uvx", "uv":
-			add("uv", "uvx")
-		case "docker":
-			add("docker")
-		case "remote", "local", "":
-			// skip
+	out := make([]string, 0, len(set))
+	for _, tool := range KnownTools() {
+		if _, ok := set[tool.Name]; ok {
+			out = append(out, tool.Name)
 		}
 	}
 	return out

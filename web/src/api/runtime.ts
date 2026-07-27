@@ -151,6 +151,8 @@ export interface RuntimeKnownTool {
   label: string
   description?: string
   packageId?: string
+  inferFrom?: string[]
+  templateRuntimes?: string[]
 }
 
 export interface RuntimePreflightItem {

@@ -15,34 +15,22 @@ export interface KnownToolOption {
   label: string
   description?: string
   packageId?: string
+  inferFrom?: string[]
+  templateRuntimes?: string[]
 }
 
-export function inferToolsFromCommand(command: string): string[] {
+export function inferToolsFromCommand(command: string, knownTools: KnownToolOption[] = []): string[] {
   const base = command.trim().split(/[/\\]/).pop()?.toLowerCase() ?? ''
   const name = base.replace(/\.(exe|cmd|bat|com)$/i, '')
-  switch (name) {
-    case 'npx':
-      return ['node', 'npx']
-    case 'npm':
-      return ['node', 'npm']
-    case 'node':
-      return ['node']
-    case 'python':
-      return ['python']
-    case 'python3':
-      return ['python3']
-    case 'uv':
-      return ['uv']
-    case 'uvx':
-      return ['uv', 'uvx']
-    case 'docker':
-      return ['docker']
-    default:
-      return []
-  }
+	return knownTools
+		.filter((tool) => tool.inferFrom?.some((candidate) => candidate.toLowerCase() === name))
+		.map((tool) => tool.name)
 }
 
-export function inferToolsFromTemplateRuntimes(tags: string[] | null | undefined): string[] {
+export function inferToolsFromTemplateRuntimes(
+	tags: string[] | null | undefined,
+	knownTools: KnownToolOption[] = [],
+): string[] {
   const out: string[] = []
   const seen = new Set<string>()
   const add = (...names: string[]) => {
@@ -52,24 +40,11 @@ export function inferToolsFromTemplateRuntimes(tags: string[] | null | undefined
       out.push(n)
     }
   }
-  for (const raw of tags ?? []) {
-    switch (String(raw).toLowerCase().trim()) {
-      case 'node':
-        add('node', 'npx')
-        break
-      case 'python':
-        add('python3', 'python')
-        break
-      case 'uv':
-      case 'uvx':
-        add('uv', 'uvx')
-        break
-      case 'docker':
-        add('docker')
-        break
-      default:
-        break
-    }
+	for (const raw of tags ?? []) {
+		const runtime = String(raw).toLowerCase().trim()
+		for (const tool of knownTools) {
+			if (tool.templateRuntimes?.some((candidate) => candidate.toLowerCase() === runtime)) add(tool.name)
+		}
   }
   return out
 }
@@ -88,13 +63,14 @@ export function normalizeRequirements(raw: unknown): RuntimeRequirements {
 }
 
 export function resolveEffectiveTools(
-  command: string,
-  req: RuntimeRequirements,
-  templateRuntimes?: string[],
+	command: string,
+	req: RuntimeRequirements,
+	templateRuntimes?: string[],
+	knownTools: KnownToolOption[] = [],
 ): { effective: string[]; suggested: string[] } {
-  const suggested = uniqueTools([
-    ...inferToolsFromCommand(command),
-    ...inferToolsFromTemplateRuntimes(templateRuntimes),
+	const suggested = uniqueTools([
+		...inferToolsFromCommand(command, knownTools),
+		...inferToolsFromTemplateRuntimes(templateRuntimes, knownTools),
   ])
   if (req.mode === 'manual') {
     return { effective: uniqueTools(req.tools), suggested }

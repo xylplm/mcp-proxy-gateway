@@ -323,7 +323,7 @@ const preflightBanner = computed(() => {
     mode: p.securityMode || form.securityMode,
   }
 })
-const suggestedFromCommand = computed(() => inferToolsFromCommand(stdioCommandForPreflight()))
+const suggestedFromCommand = computed(() => inferToolsFromCommand(stdioCommandForPreflight(), knownTools.value))
 	const isStrictMode = computed(() => form.securityMode === 'strict')
 
 /** 路径选择器额外上下文：当前 cwd 与文件允许路径，便于在表单相关目录内浏览。 */
@@ -606,7 +606,7 @@ function buildRuntimeRequirementsPayload(): NonNullable<ConnParams['runtimeRequi
       ? form.reqTools
       : form.reqTools.length > 0
         ? form.reqTools
-        : inferToolsFromCommand(stdioCommandForPreflight())
+        : inferToolsFromCommand(stdioCommandForPreflight(), knownTools.value)
   return {
     mode: form.reqMode,
     tools: [...tools],
@@ -774,7 +774,7 @@ function fillFromConfig(
   form.reqTools = [...rr.tools]
   form.reqNote = rr.note ?? ''
   if (form.reqMode === 'auto' && form.reqTools.length === 0 && form.command.trim() !== '') {
-    form.reqTools = inferToolsFromCommand(form.command)
+    form.reqTools = inferToolsFromCommand(form.command, knownTools.value)
   }
   const sp = normalizeSecurityProfile(connParams.securityProfile)
   form.securityMode = normalizeSecurityMode(sp.mode || 'standard')
@@ -851,7 +851,7 @@ function resetForm(): void {
   // 模板 stdio：用预设 command 初始化依赖建议并预检。
   if (form.transport === 'stdio') {
     form.reqMode = 'auto'
-    form.reqTools = inferToolsFromCommand(stdioCommandForPreflight())
+    form.reqTools = inferToolsFromCommand(stdioCommandForPreflight(), knownTools.value)
     void ensureManagedScripts()
     schedulePreflight()
   }
@@ -924,7 +924,7 @@ watch(
   () => [form.command, form.transport, fromTemplate.value, presetParams.value],
   () => {
     if (form.transport !== 'stdio' || form.reqMode !== 'auto') return
-    form.reqTools = inferToolsFromCommand(stdioCommandForPreflight())
+  form.reqTools = inferToolsFromCommand(stdioCommandForPreflight(), knownTools.value)
   },
 )
 
@@ -980,7 +980,7 @@ async function applyManagedScript(scriptId: string, version = ''): Promise<void>
     form.args = binding.args.join('\n')
     form.cwd = binding.cwd
     form.reqMode = 'auto'
-    form.reqTools = inferToolsFromCommand(binding.command)
+  form.reqTools = inferToolsFromCommand(binding.command, knownTools.value)
     if (form.securityMode === 'strict' && form.filePathsText.trim() === '') {
       form.filePathsText = binding.cwd
     }
@@ -1030,7 +1030,7 @@ function applyDirectoryEntry(entry: DirectoryLaunchEntry): void {
   form.args = (entry.args ?? []).join('\n')
   form.cwd = entry.cwd || form.directoryRoot
   form.reqMode = 'auto'
-  form.reqTools = inferToolsFromCommand(entry.command)
+  form.reqTools = inferToolsFromCommand(entry.command, knownTools.value)
   if (entry.recommendedMode === 'strict') form.securityMode = 'strict'
   if (form.filePathsText.trim() === '') form.filePathsText = form.directoryRoot
   schedulePreflight()
@@ -1042,14 +1042,14 @@ async function ensureKnownTools(): Promise<void> {
     knownTools.value = await getRuntimeKnownTools()
   } catch {
     knownTools.value = [
-      { name: 'node', label: 'Node.js', packageId: 'node-22.14.0' },
-      { name: 'npx', label: 'npx', packageId: 'node-22.14.0' },
-      { name: 'npm', label: 'npm', packageId: 'node-22.14.0' },
-      { name: 'python', label: 'Python' },
-      { name: 'python3', label: 'Python 3' },
-      { name: 'uv', label: 'uv', packageId: 'uv-0.6.14' },
-      { name: 'uvx', label: 'uvx', packageId: 'uv-0.6.14' },
-      { name: 'docker', label: 'Docker' },
+      { name: 'node', label: 'Node.js', packageId: 'node-22.14.0', inferFrom: ['node', 'npx', 'npm'], templateRuntimes: ['node'] },
+      { name: 'npx', label: 'npx', packageId: 'node-22.14.0', inferFrom: ['npx'], templateRuntimes: ['node'] },
+      { name: 'npm', label: 'npm', packageId: 'node-22.14.0', inferFrom: ['npm'], templateRuntimes: ['node'] },
+      { name: 'python', label: 'Python', inferFrom: ['python'], templateRuntimes: ['python'] },
+      { name: 'python3', label: 'Python 3', inferFrom: ['python3'], templateRuntimes: ['python'] },
+      { name: 'uv', label: 'uv', packageId: 'uv-0.6.14', inferFrom: ['uv', 'uvx'], templateRuntimes: ['uv', 'uvx'] },
+      { name: 'uvx', label: 'uvx', packageId: 'uv-0.6.14', inferFrom: ['uvx'], templateRuntimes: ['uv', 'uvx'] },
+      { name: 'docker', label: 'Docker', inferFrom: ['docker'], templateRuntimes: ['docker'] },
     ]
   }
 }
@@ -1115,7 +1115,7 @@ function toggleReqTool(name: string): void {
 
 function setReqMode(mode: RequirementsMode): void {
   form.reqMode = mode
-  if (mode === 'auto') form.reqTools = inferToolsFromCommand(stdioCommandForPreflight())
+  if (mode === 'auto') form.reqTools = inferToolsFromCommand(stdioCommandForPreflight(), knownTools.value)
   schedulePreflight()
 }
 

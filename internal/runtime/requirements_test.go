@@ -23,6 +23,37 @@ func TestInferToolsFromCommand(t *testing.T) {
 	}
 }
 
+func TestKnownToolsExposeInferenceMetadata(t *testing.T) {
+	tools := KnownTools()
+	var node, npx *KnownTool
+	for i := range tools {
+		switch tools[i].Name {
+		case "node":
+			node = &tools[i]
+		case "npx":
+			npx = &tools[i]
+		}
+	}
+	if node == nil || npx == nil {
+		t.Fatal("node and npx metadata required")
+	}
+	if !containsString(node.InferFrom, "npx") || !containsString(npx.InferFrom, "npx") {
+		t.Fatalf("npx inference metadata incomplete: node=%v npx=%v", node.InferFrom, npx.InferFrom)
+	}
+	if !containsString(node.TemplateRuntimes, "node") {
+		t.Fatalf("node template metadata missing: %v", node.TemplateRuntimes)
+	}
+}
+
+func containsString(items []string, want string) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestResolveEffectiveToolsManualAndAuto(t *testing.T) {
 	t.Parallel()
 	// auto from npx
