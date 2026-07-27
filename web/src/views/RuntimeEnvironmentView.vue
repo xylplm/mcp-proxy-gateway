@@ -19,7 +19,6 @@ import {
   packageStatusLabel,
   packageStatusTone,
   runtimeBinDir,
-  runtimeGuideSteps,
   sandboxHardeningLabel,
   shouldShowRuntimeGuide,
   stdioPolicyLabel,
@@ -66,11 +65,35 @@ const stdioToneClass = computed(() => {
 
 const showGuide = computed(() => summary.value !== null && shouldShowRuntimeGuide(summary.value))
 
-const guideSteps = computed(() => (summary.value === null ? [] : runtimeGuideSteps(summary.value)))
-
 const binDir = computed(() => (summary.value === null ? '' : runtimeBinDir(summary.value)))
 
 const catalog = computed(() => summary.value?.catalog ?? [])
+const environmentConclusion = computed(() => {
+  const current = summary.value
+  if (!current) return null
+  if (!current.stdioEnabled) {
+    return { tone: 'muted', message: '本地 stdio 已禁用，仅可使用远程与 OpenAPI 上游。', action: '去启用' }
+  }
+  if ((current.missingCount ?? 0) > 0) {
+    return {
+      tone: 'warning',
+      message: '缺少 ' + String(current.missingCount) + ' 个常用工具，部分 stdio 模板暂不可用。',
+      action: '查看补齐方案',
+    }
+  }
+  return { tone: 'success', message: '本地运行环境已就绪，可以创建 stdio 上游。', action: '管理上游' }
+})
+
+const conclusionClass = computed(() => {
+  const tone = environmentConclusion.value?.tone
+  if (tone === 'success') return 'border-success-200 bg-success-50 text-success-800 dark:border-success-500/30 dark:bg-success-500/10 dark:text-success-300'
+  if (tone === 'warning') return 'border-warning-200 bg-warning-50 text-warning-800 dark:border-warning-500/30 dark:bg-warning-500/10 dark:text-warning-300'
+  return 'border-gray-200 bg-gray-50 text-gray-700 dark:border-gray-700 dark:bg-white/[0.04] dark:text-gray-300'
+})
+
+const hasKernelIsolation = computed(
+  () => summary.value?.sandbox?.filesystemIsolationSupported || summary.value?.sandbox?.networkIsolationSupported,
+)
 const activeInstallPackageId = computed(
   () => busyPackageId.value || summary.value?.installProgress?.packageId || '',
 )
@@ -242,6 +265,12 @@ onUnmounted(stopInstallProgressPolling)
     </div>
 
     <template v-else-if="summary !== null">
+      <div class="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border px-4 py-3 text-sm" :class="conclusionClass">
+        <span>{{ environmentConclusion?.message }}</span>
+        <router-link v-if="environmentConclusion?.tone === 'muted'" to="/settings" class="shrink-0 font-medium underline underline-offset-2">{{ environmentConclusion?.action }}</router-link>
+        <a v-else-if="environmentConclusion?.tone === 'warning'" href="#runtime-install" class="shrink-0 font-medium underline underline-offset-2">{{ environmentConclusion?.action }}</a>
+        <router-link v-else to="/upstreams" class="shrink-0 font-medium underline underline-offset-2">{{ environmentConclusion?.action }}</router-link>
+      </div>
       <div class="mb-5 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <section
           class="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm transition duration-300 hover:shadow-md dark:border-gray-800 dark:bg-white/[0.03]"
@@ -313,7 +342,7 @@ onUnmounted(stopInstallProgressPolling)
           三档模式（标准 / 严格 / 完全放行）可在上游表单单独设置。Linux 安装 bubblewrap
           后，严格档将自动启用文件 bind 隔离；网络 deny 会 unshare 网络命名空间断网。
         </p>
-        <div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <div v-if="hasKernelIsolation" class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
           <div
             class="rounded-xl border border-gray-100 bg-gray-50 px-3 py-3 text-xs dark:border-white/5 dark:bg-white/[0.03]"
           >
@@ -349,10 +378,18 @@ onUnmounted(stopInstallProgressPolling)
             </p>
           </div>
         </div>
+        <div v-else class="mt-4 rounded-xl border border-gray-100 bg-gray-50 px-3 py-3 text-sm text-gray-600 dark:border-white/5 dark:bg-white/[0.03] dark:text-gray-300">
+          当前主机未提供 bubblewrap，文件和网络限制以策略校验为主。
+          <details class="mt-2 text-xs">
+            <summary class="cursor-pointer font-medium text-brand-600 dark:text-brand-300">如何启用内核隔离</summary>
+            <p class="mt-2 leading-5">在 Linux 容器中安装 bubblewrap（例如 Debian/Ubuntu：<code class="font-mono">apt-get install bubblewrap</code>），然后刷新探测。</p>
+          </details>
+        </div>
       </section>
 
       <section
         v-if="showGuide"
+        id="runtime-install"
         class="border-warning-200 bg-warning-50/60 dark:border-warning-500/20 dark:bg-warning-500/5 mb-5 rounded-2xl border p-5 shadow-sm"
       >
         <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">如何补齐缺失工具</h3>
@@ -360,11 +397,16 @@ onUnmounted(stopInstallProgressPolling)
           默认镜像不含 Node / Python / uv。推荐使用下方预置安装，或将工具放入数据卷。
           <span v-if="binDir" class="font-mono text-xs">优先路径：{{ binDir }}</span>
         </p>
-        <ol
-          class="mt-3 list-decimal space-y-1.5 pl-5 text-sm leading-6 text-gray-700 dark:text-gray-200"
-        >
-          <li v-for="(step, idx) in guideSteps" :key="idx">{{ step }}</li>
-        </ol>
+        <div class="mt-3 grid gap-3 text-sm leading-6 text-gray-700 dark:text-gray-200 sm:grid-cols-2">
+          <div class="rounded-xl border border-warning-200 bg-white/60 p-3 dark:border-warning-500/20 dark:bg-white/[0.03]">
+            <p class="font-medium">推荐：使用下方预置安装</p>
+            <p class="mt-1 text-xs text-gray-600 dark:text-gray-300">固定版本、官方源和 SHA256 校验，安装后自动刷新探测。</p>
+          </div>
+          <div class="rounded-xl border border-gray-200 bg-white/60 p-3 dark:border-gray-700 dark:bg-white/[0.03]">
+            <p class="font-medium">高级：手动放入 bin 目录</p>
+            <p class="mt-1 text-xs text-gray-600 dark:text-gray-300">将可执行文件放入 <code class="font-mono">{{ binDir }}</code>，也可使用 node/bin、python/bin、uv/bin 布局。</p>
+          </div>
+        </div>
       </section>
 
       <section
@@ -511,17 +553,21 @@ onUnmounted(stopInstallProgressPolling)
         </div>
       </section>
 
-      <section
-        class="mb-5 rounded-2xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-white/[0.03]"
+      <details
+        class="mb-5 rounded-2xl border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-white/[0.03]"
       >
-        <h3 class="mb-3 text-base font-semibold text-gray-800 dark:text-white/90">安全说明</h3>
-        <ul class="space-y-2 text-sm leading-6 text-gray-600 dark:text-gray-300">
-          <li v-for="(note, idx) in summary.riskNotes" :key="idx" class="flex gap-2">
-            <span class="bg-brand-500 mt-2 h-1.5 w-1.5 shrink-0 rounded-full"></span>
-            <span>{{ note }}</span>
-          </li>
-        </ul>
-        <div class="mt-5 flex flex-wrap gap-2">
+        <summary class="cursor-pointer list-none px-5 py-4 text-base font-semibold text-gray-800 marker:hidden dark:text-white/90">
+          安全说明（{{ summary.riskNotes.length }} 条）
+        </summary>
+        <div class="border-t border-gray-100 px-5 pb-5 pt-4 dark:border-white/5">
+          <ul class="space-y-2 text-sm leading-6 text-gray-600 dark:text-gray-300">
+            <li v-for="(note, idx) in summary.riskNotes" :key="idx" class="flex gap-2">
+              <span class="bg-brand-500 mt-2 h-1.5 w-1.5 shrink-0 rounded-full"></span>
+              <span>{{ note }}</span>
+            </li>
+          </ul>
+        </div>
+        <div class="flex flex-wrap gap-2 px-5 pb-5">
           <router-link
             to="/settings"
             class="rounded-lg border border-gray-300 px-3.5 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
@@ -535,7 +581,7 @@ onUnmounted(stopInstallProgressPolling)
             管理上游 MCP
           </router-link>
         </div>
-      </section>
+      </details>
     </template>
   </AdminLayout>
 </template>
