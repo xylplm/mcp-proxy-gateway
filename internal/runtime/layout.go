@@ -4,7 +4,18 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 )
+
+const pathPrefixesCacheTTL = 5 * time.Second
+
+var pathPrefixesCache struct {
+	sync.RWMutex
+	dir      string
+	at       time.Time
+	prefixes []string
+}
 
 // 卷内运行时目录子路径（稳定契约，供 entrypoint / 文档 / P1b 共用）。
 const (
@@ -98,6 +109,15 @@ func PathPrefixes(runtimeDir string) []string {
 	if runtimeDir == "" {
 		return nil
 	}
+	now := time.Now()
+	pathPrefixesCache.RLock()
+	if pathPrefixesCache.dir == runtimeDir && now.Sub(pathPrefixesCache.at) < pathPrefixesCacheTTL {
+		prefixes := append([]string{}, pathPrefixesCache.prefixes...)
+		pathPrefixesCache.RUnlock()
+		return prefixes
+	}
+	pathPrefixesCache.RUnlock()
+
 	candidates := []string{
 		filepath.Join(runtimeDir, RuntimeSubdirBin),
 		filepath.Join(runtimeDir, RuntimeSubdirNode, "bin"),
@@ -112,6 +132,11 @@ func PathPrefixes(runtimeDir string) []string {
 		}
 		out = append(out, dir)
 	}
+	pathPrefixesCache.Lock()
+	pathPrefixesCache.dir = runtimeDir
+	pathPrefixesCache.at = now
+	pathPrefixesCache.prefixes = append([]string{}, out...)
+	pathPrefixesCache.Unlock()
 	return out
 }
 

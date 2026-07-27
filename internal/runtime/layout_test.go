@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestResolveRuntimeDir(t *testing.T) {
@@ -64,9 +65,28 @@ func TestEnsureRuntimeLayoutAndPathPrefixes(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(rt, "node", "bin"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	pathPrefixesCache.Lock()
+	pathPrefixesCache.at = time.Time{}
+	pathPrefixesCache.Unlock()
 	prefs = PathPrefixes(rt)
 	if len(prefs) < 2 {
 		t.Fatalf("expected bin+node/bin, got %v", prefs)
+	}
+}
+
+func TestPathPrefixesReturnsCopyFromShortCache(t *testing.T) {
+	rt := filepath.Join(t.TempDir(), "runtime")
+	if err := os.MkdirAll(filepath.Join(rt, RuntimeSubdirBin), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	first := PathPrefixes(rt)
+	if len(first) != 1 {
+		t.Fatalf("prefixes=%v", first)
+	}
+	first[0] = "mutated"
+	second := PathPrefixes(rt)
+	if second[0] != filepath.Join(rt, RuntimeSubdirBin) {
+		t.Fatalf("cache returned mutable data: %v", second)
 	}
 }
 
