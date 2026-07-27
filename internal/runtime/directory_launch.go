@@ -85,13 +85,18 @@ func InspectDirectoryLaunch(root string, policy Policy) (DirectoryLaunchResult, 
 		for i, entry := range manifest.Entries {
 			normalized, err := normalizeDirectoryEntry(clean, entry, policy)
 			if err != nil {
-				return DirectoryLaunchResult{}, fmt.Errorf("entries[%d]：%w", i, err)
+				res.Warnings = append(res.Warnings, fmt.Sprintf("entries[%d] 已跳过：%v", i, err))
+				continue
 			}
 			if _, ok := seen[normalized.ID]; ok {
-				return DirectoryLaunchResult{}, fmt.Errorf("入口 ID 重复：%s", normalized.ID)
+				res.Warnings = append(res.Warnings, fmt.Sprintf("entries[%d] 入口 ID 重复已跳过：%s", i, normalized.ID))
+				continue
 			}
 			seen[normalized.ID] = struct{}{}
 			res.Entries = append(res.Entries, normalized)
+		}
+		if len(res.Entries) == 0 {
+			return DirectoryLaunchResult{}, fmt.Errorf("mpg.launch.json 中没有可用入口：%s", strings.Join(res.Warnings, "；"))
 		}
 		res.ManifestPath = manifestPath
 		return res, nil

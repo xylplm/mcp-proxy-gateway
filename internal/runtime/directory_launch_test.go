@@ -69,3 +69,24 @@ func TestInspectDirectoryLaunchRejectsShell(t *testing.T) {
 		t.Fatal("shell should fail")
 	}
 }
+
+func TestInspectDirectoryLaunchManifestSkipsInvalidEntries(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "index.js"), []byte("console.log(1)"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manifest := "{\"version\":1,\"entries\":[{\"id\":\"ok\",\"command\":\"node\",\"args\":[\"index.js\"]},{\"id\":\"bad\",\"command\":\"bash\",\"args\":[\"index.js\"]},{\"id\":\"duplicate\",\"command\":\"node\",\"args\":[\"index.js\"]},{\"id\":\"duplicate\",\"command\":\"node\",\"args\":[\"index.js\"]}]}"
+	if err := os.WriteFile(filepath.Join(root, DirectoryLaunchManifest), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res, err := InspectDirectoryLaunch(root, DefaultPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Entries) != 2 || res.Entries[0].ID != "ok" || res.Entries[1].ID != "duplicate" {
+		t.Fatalf("entries=%+v", res.Entries)
+	}
+	if len(res.Warnings) != 2 {
+		t.Fatalf("warnings=%v", res.Warnings)
+	}
+}
