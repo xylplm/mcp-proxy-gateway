@@ -28,6 +28,72 @@ func TestSafeJoinRejectsTraversal(t *testing.T) {
 	}
 }
 
+func TestReplaceStagedTreeKeepsPreviousTargetOnFailure(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "node")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	oldFile := filepath.Join(target, "version.txt")
+	if err := os.WriteFile(oldFile, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := replaceStagedTree(filepath.Join(root, "missing.staging"), target)
+	if err == nil {
+		t.Fatal("expected replacement failure")
+	}
+	got, readErr := os.ReadFile(oldFile)
+	if readErr != nil {
+		t.Fatalf("previous target should be restored: %v", readErr)
+	}
+	if string(got) != "old" {
+		t.Fatalf("previous target content=%q, want old", got)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, "missing.staging")); !os.IsNotExist(statErr) {
+		t.Fatalf("staging should be cleaned, stat err=%v", statErr)
+	}
+	matches, globErr := filepath.Glob(filepath.Join(root, "node.backup-*"))
+	if globErr != nil {
+		t.Fatal(globErr)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("backup should not remain after successful rollback: %v", matches)
+	}
+}
+
+func TestReplaceStagedTreeReplacesOnlyAfterStagingIsReady(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "uv")
+	staging := filepath.Join(root, "uv.staging")
+	if err := os.MkdirAll(filepath.Join(target, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "bin", "uv"), []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(staging, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staging, "bin", "uv"), []byte("new"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := replaceStagedTree(staging, target); err != nil {
+		t.Fatalf("replace staged tree: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(target, "bin", "uv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "new" {
+		t.Fatalf("target content=%q, want new", got)
+	}
+	if _, err := os.Stat(staging); !os.IsNotExist(err) {
+		t.Fatalf("staging should be removed after success, stat err=%v", err)
+	}
+}
+
 func TestInstallUVFromFakeServer(t *testing.T) {
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)

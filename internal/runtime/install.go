@@ -373,13 +373,25 @@ func (in *Installer) placeNode(extractDir string) error {
 		return err
 	}
 	// 需要 node/bin 或 Windows 根目录下 node.exe
-	binDir := filepath.Join(root, "bin")
-	if _, err := os.Stat(binDir); err != nil {
+	if _, err := os.Stat(filepath.Join(root, "bin")); err != nil {
 		// Windows zip: 可执行文件在根目录
 		if _, err2 := os.Stat(filepath.Join(root, "node.exe")); err2 != nil {
 			return fmt.Errorf("Node 发行包布局无法识别")
 		}
-		binDir = root
+		// Normalize the Windows layout while the package is still in the
+		// extraction directory, so a preparation failure cannot affect target.
+		binDir := filepath.Join(root, "bin")
+		if err := os.MkdirAll(binDir, 0o755); err != nil {
+			return fmt.Errorf("准备 Node bin 目录失败：%w", err)
+		}
+		for _, name := range []string{"node.exe", "npm.cmd", "npx.cmd", "node", "npm", "npx"} {
+			src := filepath.Join(root, name)
+			if st, statErr := os.Stat(src); statErr == nil && !st.IsDir() {
+				if copyErr := copyFile(src, filepath.Join(binDir, name), st.Mode()); copyErr != nil {
+					return fmt.Errorf("准备 Node 可执行文件失败：%w", copyErr)
+				}
+			}
+		}
 	}
 	target := filepath.Join(in.runtimeDir, RuntimeSubdirNode)
 	staging := target + ".staging"
@@ -392,27 +404,9 @@ func (in *Installer) placeNode(extractDir string) error {
 		_ = os.RemoveAll(staging)
 		return fmt.Errorf("安装 Node 失败：%w", err)
 	}
-	_ = os.RemoveAll(target)
-	if err := os.Rename(staging, target); err != nil {
-		// 跨卷时 fallback
-		if copyErr := copyTree(staging, target); copyErr != nil {
-			_ = os.RemoveAll(staging)
-			return fmt.Errorf("安装 Node 失败：%w", err)
-		}
-		_ = os.RemoveAll(staging)
+	if err := replaceStagedTree(staging, target); err != nil {
+		return fmt.Errorf("安装 Node 失败：%w", err)
 	}
-	// 若 Windows 结构没有 bin/，创建 bin 并链接/复制可执行文件。
-	finalBin := filepath.Join(target, "bin")
-	if _, err := os.Stat(finalBin); err != nil {
-		_ = os.MkdirAll(finalBin, 0o755)
-		for _, name := range []string{"node.exe", "npm.cmd", "npx.cmd", "node", "npm", "npx"} {
-			src := filepath.Join(target, name)
-			if st, err := os.Stat(src); err == nil && !st.IsDir() {
-				_ = copyFile(src, filepath.Join(finalBin, name), st.Mode())
-			}
-		}
-	}
-	_ = binDir
 	return nil
 }
 
@@ -423,27 +417,57 @@ func (in *Installer) placeUV(extractDir string) error {
 		return fmt.Errorf("uv 发行包中未找到可执行文件")
 	}
 	target := filepath.Join(in.runtimeDir, RuntimeSubdirUV)
-	_ = os.RemoveAll(target)
-	if err := os.MkdirAll(filepath.Join(target, "bin"), 0o755); err != nil {
+	staging := target + ".staging"
+	_ = os.RemoveAll(staging)
+	if err := os.MkdirAll(filepath.Join(staging, "bin"), 0o755); err != nil {
 		return err
 	}
 	binRoot := filepath.Join(in.runtimeDir, RuntimeSubdirBin)
-	_ = os.MkdirAll(binRoot, 0o755)
+	if err := os.MkdirAll(binRoot, 0o755); err != nil {
+		_ = os.RemoveAll(staging)
+		return fmt.Errorf("准备 uv 工具目录失败：%w", err)
+	}
+	shimStaging, err := os.MkdirTemp(filepath.Dir(binRoot), ".uv-bin-staging-")
+	if err != nil {
+		_ = os.RemoveAll(staging)
+		return fmt.Errorf("创建 uv shim 临时目录失败：%w", err)
+	}
+	defer os.RemoveAll(shimStaging)
 
 	for _, src := range candidates {
 		base := filepath.Base(src)
-		dst1 := filepath.Join(target, "bin", base)
-		dst2 := filepath.Join(binRoot, base)
+		dst := filepath.Join(staging, "bin", base)
 		st, _ := os.Stat(src)
 		mode := os.FileMode(0o755)
 		if st != nil {
 			mode = st.Mode()
 		}
-		if err := copyFile(src, dst1, mode); err != nil {
+		if err := copyFile(src, dst, mode); err != nil {
+			_ = os.RemoveAll(staging)
 			return err
 		}
-		if err := copyFile(src, dst2, mode); err != nil {
-			return err
+		if err := copyFile(src, filepath.Join(shimStaging, base), mode); err != nil {
+			_ = os.RemoveAll(staging)
+			return fmt.Errorf("准备 uv 工具 shim 失败：%w", err)
+		}
+	}
+	replacements := make([]fileReplacement, 0, len(candidates))
+	for _, src := range candidates {
+		base := filepath.Base(src)
+		replacement, err := replaceStagedFileWithBackup(filepath.Join(shimStaging, base), filepath.Join(binRoot, base))
+		if err != nil {
+			rollbackFileReplacements(replacements)
+			return fmt.Errorf("更新 uv 工具 shim 失败：%w", err)
+		}
+		replacements = append(replacements, replacement)
+	}
+	if err := replaceStagedTree(staging, target); err != nil {
+		rollbackFileReplacements(replacements)
+		return fmt.Errorf("安装 uv 运行时失败：%w", err)
+	}
+	for _, replacement := range replacements {
+		if replacement.backup != "" {
+			_ = os.Remove(replacement.backup)
 		}
 	}
 	return nil
@@ -782,6 +806,109 @@ func renameOrCopyTree(src, dst string) error {
 	}
 	// 跨卷时 fallback 复制
 	return copyTree(src, dst)
+}
+
+// replaceStagedTree replaces target only after staging is complete. The old
+// target is moved aside first so a failed replacement can restore it, which is
+// especially important on Windows where renaming over an existing directory
+// is not supported.
+func replaceStagedTree(staging, target string) error {
+	defer func() { _ = os.RemoveAll(staging) }()
+
+	if _, err := os.Lstat(target); err != nil {
+		if os.IsNotExist(err) {
+			if err := os.Rename(staging, target); err != nil {
+				return err
+			}
+			return nil
+		}
+		return err
+	}
+
+	backup, err := temporarySibling(target, "backup")
+	if err != nil {
+		return err
+	}
+	if err := os.Rename(target, backup); err != nil {
+		return fmt.Errorf("备份现有运行时失败：%w", err)
+	}
+
+	if err := os.Rename(staging, target); err != nil {
+		if restoreErr := os.Rename(backup, target); restoreErr != nil {
+			return fmt.Errorf("替换运行时失败：%w；恢复旧版本失败：%v", err, restoreErr)
+		}
+		return err
+	}
+	_ = os.RemoveAll(backup)
+	return nil
+}
+
+type fileReplacement struct {
+	target    string
+	backup    string
+	hadTarget bool
+}
+
+func replaceStagedFileWithBackup(staging, target string) (fileReplacement, error) {
+	replacement := fileReplacement{target: target}
+	defer func() { _ = os.Remove(staging) }()
+	backup, err := temporarySibling(target, "backup")
+	if err != nil {
+		return replacement, err
+	}
+	_, targetErr := os.Lstat(target)
+	hasTarget := targetErr == nil
+	if targetErr != nil && !os.IsNotExist(targetErr) {
+		_ = os.Remove(backup)
+		return replacement, targetErr
+	}
+	if hasTarget {
+		if err := os.Rename(target, backup); err != nil {
+			_ = os.Remove(backup)
+			return replacement, err
+		}
+		replacement.backup = backup
+		replacement.hadTarget = true
+	}
+	if err := os.Rename(staging, target); err != nil {
+		if hasTarget {
+			if restoreErr := os.Rename(backup, target); restoreErr != nil {
+				return replacement, fmt.Errorf("替换文件失败：%w；恢复旧文件失败：%v", err, restoreErr)
+			}
+		}
+		return fileReplacement{target: target}, err
+	}
+	return replacement, nil
+}
+
+func rollbackFileReplacements(replacements []fileReplacement) {
+	for i := len(replacements) - 1; i >= 0; i-- {
+		replacement := replacements[i]
+		_ = os.RemoveAll(replacement.target)
+		if replacement.hadTarget && replacement.backup != "" {
+			_ = os.Rename(replacement.backup, replacement.target)
+		}
+	}
+}
+
+func temporarySibling(target, suffix string) (string, error) {
+	parent := filepath.Dir(target)
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		return "", err
+	}
+	f, err := os.CreateTemp(parent, filepath.Base(target)+"."+suffix+"-")
+	if err != nil {
+		return "", err
+	}
+	name := f.Name()
+	if err := f.Close(); err != nil {
+		_ = os.Remove(name)
+		return "", err
+	}
+	if err := os.Remove(name); err != nil {
+		return "", err
+	}
+	return name, nil
 }
 
 func copyTree(src, dst string) error {
