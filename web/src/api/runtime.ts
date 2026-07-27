@@ -22,14 +22,6 @@ export interface SandboxCapabilities {
   description: string
 }
 
-export interface RuntimePackageAsset {
-  goos: string
-  goarch: string
-  url: string
-  sha256: string
-  format: string
-}
-
 export interface RuntimeCatalogPackage {
   id: string
   name: string
@@ -37,7 +29,6 @@ export interface RuntimeCatalogPackage {
   description: string
   kind: string
   tools: string[]
-  assets?: RuntimePackageAsset[]
   supported: boolean
   installed: boolean
   installedAt?: string

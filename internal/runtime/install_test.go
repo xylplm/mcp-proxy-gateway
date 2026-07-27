@@ -205,8 +205,8 @@ func TestCatalogWithStatus(t *testing.T) {
 		t.Fatal("empty catalog")
 	}
 	for _, p := range cat {
-		if p.ID == "" || p.Name == "" {
-			t.Fatalf("invalid item: %+v", p)
+		if p.ID == "" || p.Name == "" || len(p.Tools) == 0 {
+			t.Fatalf("catalog item missing public fields: %+v", p)
 		}
 	}
 }

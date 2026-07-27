@@ -35,13 +35,19 @@ type PackageSpec struct {
 }
 
 // CatalogPackage 为管理台展示用目录项（含当前平台是否可装、是否已装）。
+// 不嵌入 PackageSpec，避免把所有平台的下载 URL 与 SHA256 暴露到管理台响应。
 type CatalogPackage struct {
-	PackageSpec
-	Supported   bool   `json:"supported"`
-	Installed   bool   `json:"installed"`
-	InstalledAt string `json:"installedAt,omitempty"`
-	AssetGOOS   string `json:"assetGoos,omitempty"`
-	AssetGOARCH string `json:"assetGoarch,omitempty"`
+	ID          string      `json:"id"`
+	Name        string      `json:"name"`
+	Version     string      `json:"version"`
+	Description string      `json:"description"`
+	Kind        PackageKind `json:"kind"`
+	Tools       []string    `json:"tools"`
+	Supported   bool        `json:"supported"`
+	Installed   bool        `json:"installed"`
+	InstalledAt string      `json:"installedAt,omitempty"`
+	AssetGOOS   string      `json:"assetGoos,omitempty"`
+	AssetGOARCH string      `json:"assetGoarch,omitempty"`
 }
 
 // DefaultCatalog 返回内置受控预置清单（版本与校验和写死，升级需发版）。

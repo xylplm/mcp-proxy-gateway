@@ -44,7 +44,7 @@ func (f *fakeRuntimeEnv) PreviewInstall(packageID string) (rtenv.CatalogPackage,
 	if packageID == "bad" {
 		return rtenv.CatalogPackage{}, fmt.Errorf("未知预置包")
 	}
-	return rtenv.CatalogPackage{PackageSpec: rtenv.PackageSpec{ID: packageID, Name: "t"}, Supported: true}, nil
+	return rtenv.CatalogPackage{ID: packageID, Name: "t", Supported: true}, nil
 }
 func (f *fakeRuntimeEnv) InstallPackage(_ context.Context, packageID string) (rtenv.InstallResult, error) {
 	if packageID == "bad" {
@@ -176,7 +176,7 @@ func TestRuntimeInstallPreviewAndInstall(t *testing.T) {
 
 func TestRuntimeCatalogAndToolsAndPreflight(t *testing.T) {
 	e := newTestEngine(Deps{RuntimeEnv: &fakeRuntimeEnv{catalog: []rtenv.CatalogPackage{
-		{PackageSpec: rtenv.PackageSpec{ID: "node-22.14.0", Name: "Node.js"}, Supported: true},
+		{ID: "node-22.14.0", Name: "Node.js", Supported: true},
 	}}})
 	w := doJSON(e, http.MethodGet, "/api/admin/runtime/catalog", "")
 	if w.Code != http.StatusOK {

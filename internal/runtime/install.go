@@ -98,7 +98,12 @@ func (in *Installer) PreviewInstall(packageID string) (CatalogPackage, error) {
 	state := in.loadState()
 	installed, at := state.find(spec.ID)
 	return CatalogPackage{
-		PackageSpec: spec,
+		ID:          spec.ID,
+		Name:        spec.Name,
+		Version:     spec.Version,
+		Description: spec.Description,
+		Kind:        spec.Kind,
+		Tools:       append([]string{}, spec.Tools...),
 		Supported:   true,
 		Installed:   installed,
 		InstalledAt: at,
@@ -265,7 +270,12 @@ func (in *Installer) catalogWithState(state InstallState) []CatalogPackage {
 		asset, supported := SelectAsset(spec, runtime.GOOS, runtime.GOARCH)
 		installed, at := state.find(spec.ID)
 		item := CatalogPackage{
-			PackageSpec: spec,
+			ID:          spec.ID,
+			Name:        spec.Name,
+			Version:     spec.Version,
+			Description: spec.Description,
+			Kind:        spec.Kind,
+			Tools:       append([]string{}, spec.Tools...),
 			Supported:   supported,
 			Installed:   installed,
 			InstalledAt: at,
