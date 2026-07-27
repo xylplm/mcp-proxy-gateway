@@ -142,6 +142,38 @@ func TestEvaluatePreflightInstallActionsStableOrder(t *testing.T) {
 	}
 }
 
+func TestServicePreflightCacheIsInstanceScoped(t *testing.T) {
+	t.Parallel()
+	policy := func() Policy { return DefaultPolicy() }
+	dataDir := func() string { return "" }
+	runtimeDir := func() string { return "" }
+	req := PreflightRequest{Transport: "sse"}
+
+	firstService := NewService(policy, dataDir, runtimeDir)
+	if got := firstService.Preflight(req); got.Cached {
+		t.Fatal("first preflight on a service must not use a cache entry")
+	}
+	if got := firstService.Preflight(req); !got.Cached {
+		t.Fatal("second preflight on the same service should use its cache")
+	}
+
+	secondService := NewService(policy, dataDir, runtimeDir)
+	if got := secondService.Preflight(req); got.Cached {
+		t.Fatal("a different service must not observe another service's cache")
+	}
+}
+
+func TestPreflightCacheKeyIncludesIsolationCapability(t *testing.T) {
+	t.Parallel()
+	req := PreflightRequest{Transport: "stdio", Command: "node"}
+	policy := DefaultPolicy()
+	withIsolation := preflightCacheKey(req, "/data/runtime", policy, true)
+	withoutIsolation := preflightCacheKey(req, "/data/runtime", policy, false)
+	if withIsolation == withoutIsolation {
+		t.Fatal("preflight cache key must distinguish isolation capability")
+	}
+}
+
 type errNotFound string
 
 func (e errNotFound) Error() string { return string(e) }

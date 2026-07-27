@@ -164,8 +164,10 @@ type Service struct {
 	dataDirFn    func() string
 	runtimeDirFn func() string
 
-	instMu     sync.Mutex
-	installer_ *Installer
+	instMu         sync.Mutex
+	installer_     *Installer
+	preflightMu    sync.Mutex
+	preflightCache map[string]preflightCacheEntry
 }
 
 // NewService 构造运行时服务。
@@ -184,9 +186,10 @@ func NewService(policyFn func() Policy, dataDirFn func() string, runtimeDirFn fu
 		}
 	}
 	return &Service{
-		policyFn:     policyFn,
-		dataDirFn:    dataDirFn,
-		runtimeDirFn: runtimeDirFn,
+		policyFn:       policyFn,
+		dataDirFn:      dataDirFn,
+		runtimeDirFn:   runtimeDirFn,
+		preflightCache: make(map[string]preflightCacheEntry),
 	}
 }
 
@@ -287,7 +290,7 @@ func (s *Service) InstallPackage(ctx context.Context, packageID string) (Install
 	}
 	res, err := s.installer().Install(ctx, packageID)
 	if err == nil {
-		InvalidatePreflightCache()
+		s.InvalidatePreflightCache()
 	}
 	return res, err
 }
@@ -299,7 +302,7 @@ func (s *Service) UninstallPackage(packageID string) error {
 	}
 	err := s.installer().Uninstall(packageID)
 	if err == nil {
-		InvalidatePreflightCache()
+		s.InvalidatePreflightCache()
 	}
 	return err
 }

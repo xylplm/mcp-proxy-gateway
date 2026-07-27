@@ -4,9 +4,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -509,12 +509,7 @@ type preflightCacheEntry struct {
 
 const preflightCacheTTL = 15 * time.Second
 
-var (
-	preflightCacheMu sync.Mutex
-	preflightCache   = map[string]preflightCacheEntry{}
-)
-
-func preflightCacheKey(req PreflightRequest, runtimeDir string, policy Policy) string {
+func preflightCacheKey(req PreflightRequest, runtimeDir string, policy Policy, isolationAvailable bool) string {
 	tools := ""
 	if req.Requirements != nil {
 		tools = strings.Join(req.Requirements.Tools, ",")
@@ -543,6 +538,8 @@ func preflightCacheKey(req PreflightRequest, runtimeDir string, policy Policy) s
 		sec,
 		strings.Join(req.TemplateRuntimes, ","),
 		runtimeDir,
+		fmt.Sprintf("%v", isolationAvailable),
+		runtimeDirFingerprint(runtimeDir),
 		fmt.Sprintf("%v", policy.StdioEnabled),
 		string(policy.DefaultStdioSecurityMode),
 		strings.Join(policy.CommandAllowlist, ","),
@@ -556,6 +553,18 @@ func preflightCacheKey(req PreflightRequest, runtimeDir string, policy Policy) s
 	return hex.EncodeToString(sum[:])
 }
 
+// runtimeDirFingerprint 以 PATH 前缀目录的修改时间作为轻量目录状态指纹。
+// 目录新增/删除运行时工具时通常会更新目录 mtime，避免手动放置工具后继续命中旧缓存。
+func runtimeDirFingerprint(runtimeDir string) string {
+	var b strings.Builder
+	for _, dir := range PathPrefixes(runtimeDir) {
+		if st, err := os.Stat(dir); err == nil {
+			fmt.Fprintf(&b, "%s:%d;", dir, st.ModTime().UnixNano())
+		}
+	}
+	return b.String()
+}
+
 // Preflight 执行依赖预检（可缓存）。
 func (s *Service) Preflight(req PreflightRequest) PreflightResult {
 	if s == nil {
@@ -563,32 +572,38 @@ func (s *Service) Preflight(req PreflightRequest) PreflightResult {
 	}
 	policy := s.Policy()
 	runtimeDir := s.RuntimeDir()
-	key := preflightCacheKey(req, runtimeDir, policy)
-	preflightCacheMu.Lock()
-	if ent, ok := preflightCache[key]; ok && time.Since(ent.at) < preflightCacheTTL {
+	key := preflightCacheKey(req, runtimeDir, policy, IsolationAvailable())
+	s.preflightMu.Lock()
+	if s.preflightCache == nil {
+		s.preflightCache = make(map[string]preflightCacheEntry)
+	}
+	if ent, ok := s.preflightCache[key]; ok && time.Since(ent.at) < preflightCacheTTL {
 		res := ent.result
 		res.Cached = true
-		preflightCacheMu.Unlock()
+		s.preflightMu.Unlock()
 		return res
 	}
-	preflightCacheMu.Unlock()
+	s.preflightMu.Unlock()
 
 	// EvaluatePreflight 根据生效安全档位选择与真实启动一致的解析器。
 	res := EvaluatePreflight(req, policy, runtimeDir, nil)
 
-	preflightCacheMu.Lock()
+	s.preflightMu.Lock()
 	// 简单防膨胀
-	if len(preflightCache) > 256 {
-		preflightCache = map[string]preflightCacheEntry{}
+	if len(s.preflightCache) > 256 {
+		s.preflightCache = map[string]preflightCacheEntry{}
 	}
-	preflightCache[key] = preflightCacheEntry{at: time.Now(), result: res}
-	preflightCacheMu.Unlock()
+	s.preflightCache[key] = preflightCacheEntry{at: time.Now(), result: res}
+	s.preflightMu.Unlock()
 	return res
 }
 
-// InvalidatePreflightCache 安装/卸载后清除缓存。
-func InvalidatePreflightCache() {
-	preflightCacheMu.Lock()
-	preflightCache = map[string]preflightCacheEntry{}
-	preflightCacheMu.Unlock()
+// InvalidatePreflightCache 清除当前运行时服务的预检缓存。
+func (s *Service) InvalidatePreflightCache() {
+	if s == nil {
+		return
+	}
+	s.preflightMu.Lock()
+	s.preflightCache = make(map[string]preflightCacheEntry)
+	s.preflightMu.Unlock()
 }
