@@ -39,6 +39,16 @@ func LookPathWithPrefixes(file string, prefixes []string, lookPath LookPathFunc)
 	return lookPath(raw)
 }
 
+// LookPathWithPrefixesStatus 返回解析路径及可执行权限提示。
+// Windows 没有统一的 Unix 执行位，因此权限提示仅在其他平台产生。
+func LookPathWithPrefixesStatus(file string, prefixes []string, lookPath LookPathFunc) (string, string, error) {
+	path, err := LookPathWithPrefixes(file, prefixes, lookPath)
+	if err != nil {
+		return "", "", err
+	}
+	return path, executablePermissionWarning(path), nil
+}
+
 // ErrNotInRuntimePath 表示严格模式下命令不在 runtime 卷路径内。
 var ErrNotInRuntimePath = fmt.Errorf("严格安全模式仅允许运行时卷内的可执行文件")
 
@@ -94,6 +104,15 @@ func ResolveCommandStrictRuntime(command string, prefixes []string) (string, err
 		"严格模式下未在运行时目录找到 %q，请使用「运行环境」预置安装或将工具放入 runtime/bin",
 		base,
 	)
+}
+
+// ResolveCommandStrictRuntimeStatus 返回严格解析路径及可执行权限提示。
+func ResolveCommandStrictRuntimeStatus(command string, prefixes []string) (string, string, error) {
+	path, err := ResolveCommandStrictRuntime(command, prefixes)
+	if err != nil {
+		return "", "", err
+	}
+	return path, executablePermissionWarning(path), nil
 }
 
 // ResolveCommand 将 command 解析为可执行路径（仅系统 PATH，兼容旧调用）。
@@ -199,4 +218,15 @@ func findExecutableInDir(dir, name string) (string, bool) {
 		return c, true
 	}
 	return "", false
+}
+
+func executablePermissionWarning(path string) string {
+	if runtime.GOOS == "windows" || strings.TrimSpace(path) == "" {
+		return ""
+	}
+	st, err := os.Stat(path)
+	if err != nil || st.IsDir() || st.Mode()&0o111 != 0 {
+		return ""
+	}
+	return "已找到文件但缺少可执行权限，请执行 chmod +x " + path
 }

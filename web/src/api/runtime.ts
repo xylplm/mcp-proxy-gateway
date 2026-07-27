@@ -8,6 +8,7 @@ export interface RuntimeToolStatus {
   name: string
   available: boolean
   path?: string
+  warning?: string
 }
 
 export interface SandboxCapabilities {
@@ -164,6 +165,7 @@ export interface RuntimePreflightItem {
   fixable: boolean
   packageId?: string
   message?: string
+  warning?: string
 }
 
 export interface RuntimePreflightAction {

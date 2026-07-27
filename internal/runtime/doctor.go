@@ -14,6 +14,7 @@ type ToolStatus struct {
 	Name      string `json:"name"`
 	Available bool   `json:"available"`
 	Path      string `json:"path,omitempty"`
+	Warning   string `json:"warning,omitempty"`
 }
 
 // Summary 为管理台「运行环境」摘要。
@@ -70,14 +71,26 @@ func (d *Doctor) Probe() []ToolStatus {
 	}
 	out := make([]ToolStatus, 0, len(tools))
 	for _, name := range tools {
-		path, err := d.lookPath(name)
+		path, warning, err := lookPathWithWarning(name, d.lookPath)
 		st := ToolStatus{Name: name, Available: err == nil && path != ""}
-		if st.Available {
+		if path != "" {
 			st.Path = path
+		}
+		st.Warning = warning
+		if warning != "" {
+			st.Available = false
 		}
 		out = append(out, st)
 	}
 	return out
+}
+
+func lookPathWithWarning(name string, lookPath LookPathFunc) (string, string, error) {
+	path, err := lookPath(name)
+	if err != nil || path == "" {
+		return path, "", err
+	}
+	return path, executablePermissionWarning(path), nil
 }
 
 // BuildSummary 组合策略与探测结果。

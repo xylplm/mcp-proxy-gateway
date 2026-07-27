@@ -1,11 +1,12 @@
 import type { RuntimeCatalogPackage, RuntimeSummary, RuntimeToolStatus } from '../api/runtime'
 
 export function toolStatusLabel(tool: RuntimeToolStatus): string {
+  if (tool.warning) return '权限不足'
   return tool.available ? '可用' : '未检测到'
 }
 
 export function toolStatusTone(tool: RuntimeToolStatus): 'success' | 'warning' {
-  return tool.available ? 'success' : 'warning'
+  return tool.available && !tool.warning ? 'success' : 'warning'
 }
 
 export function summarizeToolHealth(

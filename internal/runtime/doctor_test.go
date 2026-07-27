@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -56,6 +57,21 @@ func TestDoctorProbeAndSummary(t *testing.T) {
 	}
 	if !foundGuide {
 		t.Fatalf("expected runtime guide in notes: %v", sum.RiskNotes)
+	}
+}
+
+func TestDoctorProbeReportsMissingExecutablePermission(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows 没有统一的 Unix 可执行位")
+	}
+	path := filepath.Join(t.TempDir(), "node")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\necho node\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	d := NewDoctor(func(string) (string, error) { return path, nil })
+	tools := d.Probe()
+	if len(tools) == 0 || tools[0].Available || tools[0].Warning == "" || tools[0].Path != path {
+		t.Fatalf("expected permission warning, got %+v", tools)
 	}
 }
 

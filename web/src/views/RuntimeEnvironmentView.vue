@@ -437,9 +437,11 @@ onMounted(load)
             </div>
             <p class="mt-2 text-xs leading-5 break-all text-gray-500 dark:text-gray-400">
               {{
-                tool.available
-                  ? tool.path || '已在 PATH 中找到'
-                  : '未在运行时目录或 PATH 中找到，stdio 使用该命令会失败'
+                tool.warning
+                  ? tool.warning
+                  : tool.available
+                    ? tool.path || '已在 PATH 中找到'
+                    : '未在运行时目录或 PATH 中找到，stdio 使用该命令会失败'
               }}
             </p>
           </article>

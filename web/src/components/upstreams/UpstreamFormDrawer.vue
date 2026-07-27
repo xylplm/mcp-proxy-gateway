@@ -2006,15 +2006,18 @@ const errorClass = 'mt-1.5 text-xs text-error-500'
                   class="flex flex-wrap items-center justify-between gap-2 text-xs"
                 >
                   <span class="font-mono text-gray-700 dark:text-gray-200">{{ item.label }}</span>
+                  <p v-if="item.warning" class="w-full text-[11px] leading-4 text-warning-700 dark:text-warning-400">
+                    {{ item.warning }}
+                  </p>
                   <span class="inline-flex items-center gap-2">
                     <span
                       class="rounded-full px-2 py-0.5 font-medium"
                       :class="itemStatusClass(item.available)"
                     >
-                      {{ item.available ? '可用' : '缺失' }}
+                      {{ item.warning ? '权限不足' : item.available ? '可用' : '缺失' }}
                     </span>
                     <button
-                      v-if="!item.available && item.fixable && item.packageId"
+                      v-if="!item.available && !item.warning && item.fixable && item.packageId"
                       type="button"
                       class="text-brand-600 dark:text-brand-400 font-medium hover:underline disabled:opacity-50"
                       :disabled="installingPackageId !== ''"
@@ -2217,19 +2220,22 @@ const errorClass = 'mt-1.5 text-xs text-error-500'
                           :key="item.name"
                           class="flex flex-wrap items-center justify-between gap-2 text-xs"
                         >
-                          <span class="font-mono text-gray-700 dark:text-gray-200">
+                  <span class="font-mono text-gray-700 dark:text-gray-200">
                             {{ item.label }}
                             <span class="text-gray-400">({{ item.name }})</span>
                           </span>
+                          <p v-if="item.warning" class="w-full text-[11px] leading-4 text-warning-700 dark:text-warning-400">
+                            {{ item.warning }}
+                          </p>
                           <span class="inline-flex items-center gap-2">
                             <span
                               class="rounded-full px-2 py-0.5 font-medium"
                               :class="itemStatusClass(item.available)"
                             >
-                              {{ item.available ? '可用' : '缺失' }}
+                              {{ item.warning ? '权限不足' : item.available ? '可用' : '缺失' }}
                             </span>
                             <button
-                              v-if="!item.available && item.fixable && item.packageId"
+                              v-if="!item.available && !item.warning && item.fixable && item.packageId"
                               type="button"
                               class="text-brand-600 dark:text-brand-400 font-medium hover:underline disabled:opacity-50"
                               :disabled="installingPackageId !== ''"

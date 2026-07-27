@@ -118,6 +118,27 @@ func TestLookPathWithPrefixesFindsFile(t *testing.T) {
 	}
 }
 
+func TestLookPathWithPrefixesStatusReportsMissingExecutablePermission(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows 没有统一的 Unix 可执行位")
+	}
+	root := t.TempDir()
+	bin := filepath.Join(root, "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(bin, "toolprobe")
+	if err := os.WriteFile(path, []byte("not executable"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, warning, err := LookPathWithPrefixesStatus("toolprobe", []string{bin}, func(string) (string, error) {
+		return "", os.ErrNotExist
+	})
+	if err != nil || got != path || warning == "" {
+		t.Fatalf("got path=%q warning=%q err=%v", got, warning, err)
+	}
+}
+
 func TestResolveCommandWithPrefixesMissing(t *testing.T) {
 	_, err := ResolveCommandWithPrefixes("definitely-not-a-binary-xyz", nil)
 	if err == nil {

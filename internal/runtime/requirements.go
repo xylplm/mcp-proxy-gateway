@@ -49,6 +49,7 @@ type PreflightItem struct {
 	Fixable   bool   `json:"fixable"`
 	PackageID string `json:"packageId,omitempty"`
 	Message   string `json:"message,omitempty"`
+	Warning   string `json:"warning,omitempty"`
 }
 
 // PreflightAction 为可行动补齐建议。
@@ -420,11 +421,19 @@ func EvaluatePreflight(req PreflightRequest, policy Policy, runtimeDir string, l
 		if eff.Mode == SecurityModeStrict && (eff.StrictPathOnly || policy.StrictPathOnlyRuntime) {
 			// 与真实启动复用相同的严格解析，包含真实路径/符号链接边界校验。
 			lookPath = func(file string) (string, error) {
-				return ResolveCommandStrictRuntime(file, prefixes)
+				path, warning, err := ResolveCommandStrictRuntimeStatus(file, prefixes)
+				if warning != "" {
+					return path, &permissionWarningError{warning: warning}
+				}
+				return path, err
 			}
 		} else {
 			lookPath = func(file string) (string, error) {
-				return LookPathWithPrefixes(file, prefixes, nil)
+				path, warning, err := LookPathWithPrefixesStatus(file, prefixes, nil)
+				if warning != "" {
+					return path, &permissionWarningError{warning: warning}
+				}
+				return path, err
 			}
 		}
 	}
@@ -445,6 +454,14 @@ func EvaluatePreflight(req PreflightRequest, policy Policy, runtimeDir string, l
 			item.Label = name
 		}
 		path, err := lookPath(name)
+		if warningErr, ok := err.(*permissionWarningError); ok {
+			item.Path = path
+			item.Warning = warningErr.warning
+			item.Message = warningErr.warning
+			allAvailable = false
+			result.Items = append(result.Items, item)
+			continue
+		}
 		if err == nil && path != "" {
 			item.Available = true
 			item.Path = path
@@ -499,6 +516,10 @@ func EvaluatePreflight(req PreflightRequest, policy Policy, runtimeDir string, l
 	}
 	return result
 }
+
+type permissionWarningError struct{ warning string }
+
+func (e *permissionWarningError) Error() string { return e.warning }
 
 // --- Service 级 preflight 缓存（短 TTL，减轻 LookPath 压力）---
 
