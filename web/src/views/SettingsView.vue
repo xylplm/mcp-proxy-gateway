@@ -357,9 +357,16 @@ async function saveSettings(): Promise<void> {
     return
   }
   const restart = settingsChangesRequireRestart(changes)
+  const enteringUnrestrictedDefault =
+    (before.runtime?.default_stdio_security_mode ?? 'standard') !== 'unrestricted' &&
+    draft.runtime?.default_stdio_security_mode === 'unrestricted'
   const ok = await confirm({
     title: '确认保存系统设置',
-    message: settingsConfirmMessage(changes),
+    message:
+      settingsConfirmMessage(changes) +
+      (enteringUnrestrictedDefault
+        ? '\n\n高风险确认：未单独声明安全档位的所有本地 stdio 上游将默认与网关同权限执行。请仅在明确受信环境中启用。'
+        : ''),
     confirmText: restart ? '保存并重启' : '保存',
     cancelText: '取消',
     tone: 'warning',
@@ -369,7 +376,10 @@ async function saveSettings(): Promise<void> {
   clearErrors()
   saving.value = true
   try {
-    config.value = await updateSettings(draft, { restart })
+    config.value = await updateSettings(draft, {
+      restart,
+      acknowledgeUnrestrictedDefault: enteringUnrestrictedDefault,
+    })
     savedConfig.value = cloneSettingsConfig(config.value)
     adminPort.value = addrToPort(config.value.server.admin_addr)
     publicMCPPort.value = addrToPort(config.value.server.public_mcp_addr)

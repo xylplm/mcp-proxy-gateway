@@ -202,6 +202,8 @@ export interface SettingsSnapshot {
 
 export interface UpdateSettingsOptions {
   restart?: boolean
+  /** 将全局默认切换为完全放行时的一次性风险确认。 */
+  acknowledgeUnrestrictedDefault?: boolean
 }
 
 interface SettingsResponse {
@@ -263,7 +265,13 @@ export async function updateSettings(
   payload: YAMLConfig,
   options?: UpdateSettingsOptions,
 ): Promise<YAMLConfig> {
-  const res = await request.put<SettingsResponse>('/settings', payload, {
+  const body = {
+    ...payload,
+    ...(options?.acknowledgeUnrestrictedDefault
+      ? { acknowledgeUnrestrictedDefault: true }
+      : {}),
+  }
+  const res = await request.put<SettingsResponse>('/settings', body, {
     params: options?.restart ? { restart: 'true' } : undefined,
   })
   return res.data.settings

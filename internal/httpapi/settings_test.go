@@ -138,6 +138,35 @@ func TestUpdateSettingsValidCron(t *testing.T) {
 	}
 }
 
+func TestUpdateSettingsRequiresAckWhenEnablingUnrestrictedDefault(t *testing.T) {
+	base := config.DefaultYAMLConfig()
+	base.Runtime.DefaultStdioSecurityMode = "standard"
+	s := &fakeSettings{cfg: base}
+	e := newTestEngine(Deps{Settings: s})
+
+	body := `{"runtime":{"default_stdio_security_mode":"unrestricted"}}`
+	w := doJSON(e, http.MethodPut, "/api/admin/settings", body)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("切换完全放行默认未确认应返回 HTTP 400，实际 %d：%s", w.Code, w.Body.String())
+	}
+	if s.saved.Runtime.DefaultStdioSecurityMode != "" {
+		t.Fatalf("未确认的高风险默认不应持久化：%q", s.saved.Runtime.DefaultStdioSecurityMode)
+	}
+	code, _, fields := parseErrorEnvelope(t, w)
+	if code != 40000 || fields["runtime.default_stdio_security_mode"] == "" {
+		t.Fatalf("应返回字段级确认错误，实际 code=%d fields=%+v", code, fields)
+	}
+
+	body = `{"runtime":{"default_stdio_security_mode":"unrestricted"},"acknowledgeUnrestrictedDefault":true}`
+	w = doJSON(e, http.MethodPut, "/api/admin/settings", body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("带确认切换完全放行默认应成功，实际 %d：%s", w.Code, w.Body.String())
+	}
+	if s.saved.Runtime.DefaultStdioSecurityMode != "unrestricted" {
+		t.Fatalf("确认后的高风险默认应持久化：%q", s.saved.Runtime.DefaultStdioSecurityMode)
+	}
+}
+
 func TestUpdateSettingsRollsBackWhenRuntimeApplyFails(t *testing.T) {
 	old := config.DefaultYAMLConfig()
 	old.Server.LogLevel = "info"

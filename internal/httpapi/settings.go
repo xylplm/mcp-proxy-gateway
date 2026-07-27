@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -37,6 +38,13 @@ type settingsRuntimeResponse struct {
 	Server config.ServerConfig `json:"server"`
 }
 
+// updateSettingsRequest 在完整配置之外携带一次性安全确认；该字段只用于本次请求，
+// 不会写入 YAML 配置或返回给前端。
+type updateSettingsRequest struct {
+	config.YAMLConfig
+	AcknowledgeUnrestrictedDefault bool `json:"acknowledgeUnrestrictedDefault"`
+}
+
 // registerSettingsRoutes 在管理分组下注册系统设置读写端点（Req 18.4）。
 func (r *Router) registerSettingsRoutes(g *gin.RouterGroup) {
 	g.GET("/settings", r.getSettings)
@@ -69,14 +77,26 @@ func (r *Router) updateSettings(c *gin.Context) {
 	}
 	restartRequested := c.Query("restart") == "true"
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 2*1024*1024)
-	var req config.YAMLConfig
+	var req updateSettingsRequest
 	if !bindJSON(c, &req) {
 		return
 	}
 	// 沿用既有管理员凭证与 JWT 签名密钥，本端点不参与改密或密钥轮换，杜绝敏感配置经设置写入被篡改。
 	current := r.settings.Config()
+	currentDefaultMode := strings.TrimSpace(current.Runtime.DefaultStdioSecurityMode)
+	if currentDefaultMode == "" {
+		currentDefaultMode = "standard"
+	}
 	req.Admin = current.Admin
 	req.JWTSecret = current.JWTSecret
+	if !strings.EqualFold(currentDefaultMode, "unrestricted") &&
+		strings.EqualFold(strings.TrimSpace(req.Runtime.DefaultStdioSecurityMode), "unrestricted") &&
+		!req.AcknowledgeUnrestrictedDefault {
+		respondError(c, domain.NewValidationError("切换默认本地安全档位前需要确认风险", map[string]string{
+			"runtime.default_stdio_security_mode": "将所有未单独声明的 stdio 上游切换为完全放行，请确认已了解同权限执行风险",
+		}))
+		return
+	}
 
 	// 同步 cron 专项校验：非法表达式返回字段级 VALIDATION 且不持久化（Req 7.3、7.4）。
 	if r.validateCron != nil {
@@ -86,12 +106,12 @@ func (r *Router) updateSettings(c *gin.Context) {
 		}
 	}
 
-	if err := r.settings.Save(req); err != nil {
+	if err := r.settings.Save(req.YAMLConfig); err != nil {
 		respondError(c, err)
 		return
 	}
 	if r.settingsRuntime != nil {
-		if err := r.settingsRuntime.ApplySettings(req); err != nil {
+		if err := r.settingsRuntime.ApplySettings(req.YAMLConfig); err != nil {
 			// 保存与运行态应用必须呈现一致结果；失败时尽力恢复旧快照和旧运行态。
 			rollbackSaveErr := r.settings.Save(current)
 			rollbackApplyErr := r.settingsRuntime.ApplySettings(current)
