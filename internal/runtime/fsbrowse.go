@@ -352,16 +352,23 @@ func ListBrowseDir(path string, roots []string, mode string, limit int) (BrowseL
 	}
 	defer f.Close()
 
-	// 先按模式筛选再计算页面上限，避免大量文件把后面的目录永久截掉。
-	// 分批读取，不把超大目录一次性加载进内存。
-	entries := make([]BrowseEntry, 0, limit)
-	truncated := false
-	for len(entries) <= limit {
+	// 先按模式筛选、排序，再计算页面上限，确保目录优先的排序不会被
+	// 文件系统返回顺序影响。扫描上限防止异常大的目录耗尽内存。
+	const hardScanCap = 5000
+	entries := make([]BrowseEntry, 0, min(limit, hardScanCap))
+	scanned := 0
+	scanCapped := false
+	for {
 		names, readErr := f.Readdirnames(256)
 		if readErr != nil && readErr != io.EOF {
 			return BrowseListResult{}, fmt.Errorf("读取目录失败")
 		}
 		for _, name := range names {
+			scanned++
+			if scanned > hardScanCap {
+				scanCapped = true
+				break
+			}
 			if name == "" || name == "." || name == ".." {
 				continue
 			}
@@ -393,17 +400,10 @@ func ListBrowseDir(path string, roots []string, mode string, limit int) (BrowseL
 				item.ModTime = mt.UTC().Format(time.RFC3339)
 			}
 			entries = append(entries, item)
-			if len(entries) > limit {
-				truncated = true
-				break
-			}
 		}
-		if truncated || readErr == io.EOF || len(names) == 0 {
+		if scanCapped || readErr == io.EOF || len(names) == 0 {
 			break
 		}
-	}
-	if truncated {
-		entries = entries[:limit]
 	}
 
 	sort.SliceStable(entries, func(i, j int) bool {
@@ -413,6 +413,10 @@ func ListBrowseDir(path string, roots []string, mode string, limit int) (BrowseL
 		}
 		return strings.ToLower(entries[i].Name) < strings.ToLower(entries[j].Name)
 	})
+	truncated := scanCapped || len(entries) > limit
+	if len(entries) > limit {
+		entries = entries[:limit]
+	}
 
 	parent := browseParent(clean, roots)
 	return BrowseListResult{

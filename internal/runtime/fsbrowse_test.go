@@ -226,6 +226,26 @@ func TestListBrowseDirFiltersAndLimit(t *testing.T) {
 	}
 }
 
+func TestListBrowseDirSortsBeforeLimit(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "z-directory"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "a-file"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res, err := ListBrowseDir(root, []string{root}, BrowseModeAny, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Entries) != 1 || res.Entries[0].Type != "dir" || res.Entries[0].Name != "z-directory" {
+		t.Fatalf("entries=%+v, want directory after sort-before-limit", res.Entries)
+	}
+	if !res.Truncated {
+		t.Fatal("expected truncation when two entries are limited to one")
+	}
+}
+
 func TestListBrowseDirFiltersBeforeLimit(t *testing.T) {
 	root := t.TempDir()
 	for i := 0; i < 250; i++ {
