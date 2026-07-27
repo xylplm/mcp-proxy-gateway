@@ -330,9 +330,6 @@ func ValidateSecurityProfile(raw any) (SecurityProfile, error) {
 			return SecurityProfile{}, fmt.Errorf("包白名单项无效：%v", err)
 		}
 	}
-	if p.Mode == SecurityModeUnrestricted && p.Note == "" {
-		// 不强制 note（前端二次确认）；保留可写。
-	}
 	return p, nil
 }
 
@@ -778,28 +775,6 @@ func normalizeHostList(items []string) []string {
 		out = append(out, h)
 	}
 	return out
-}
-
-func parseStringSlice(raw any) []string {
-	if raw == nil {
-		return nil
-	}
-	switch v := raw.(type) {
-	case []string:
-		return append([]string{}, v...)
-	case []any:
-		out := make([]string, 0, len(v))
-		for _, item := range v {
-			s, ok := item.(string)
-			if !ok {
-				continue
-			}
-			out = append(out, s)
-		}
-		return out
-	default:
-		return nil
-	}
 }
 
 func intersectNames(a, b []string) []string {
