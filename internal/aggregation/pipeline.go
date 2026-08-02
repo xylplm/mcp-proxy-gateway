@@ -25,6 +25,12 @@ type ToolCandidate struct {
 	Compatible bool
 	// SchemaConflict 表示同名来源之间存在 schema 不一致。
 	SchemaConflict bool
+	// deferQuotaReservation 仅用于“调用前按需恢复”内部路径：来源暂不可用时不应
+	// 在工具尚未实际分发前消耗额度，恢复成功且即将发送时再由调用器回调预占。
+	deferQuotaReservation bool
+	// recoveryFallbacks 是同名的后续恢复候选。仅当前候选确认未分发工具请求时
+	// 才可继续尝试，确保有副作用调用不会被透明重放。
+	recoveryFallbacks []ToolCandidate
 }
 
 // ReverseEntry 是「对外名称 → 候选来源集合」反向映射的值。

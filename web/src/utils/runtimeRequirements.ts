@@ -19,10 +19,26 @@ export interface KnownToolOption {
   templateRuntimes?: string[]
 }
 
+// 在运行时目录元数据尚未加载时，表单与预检仍应给出稳定、可解释的基础建议。
+// 服务端返回目录后会显式传入完整列表，不会丢失可安装包等扩展信息。
+const DEFAULT_KNOWN_TOOLS: KnownToolOption[] = [
+  { name: 'node', label: 'Node.js', inferFrom: ['node', 'npx'], templateRuntimes: ['node'] },
+  { name: 'npx', label: 'npx', inferFrom: ['npx'], templateRuntimes: ['node'] },
+  { name: 'python3', label: 'Python 3', inferFrom: ['python', 'python3'], templateRuntimes: ['python'] },
+  { name: 'uv', label: 'uv', inferFrom: ['uv', 'uvx'], templateRuntimes: ['python', 'uv'] },
+  { name: 'uvx', label: 'uvx', inferFrom: ['uvx'], templateRuntimes: ['python', 'uv'] },
+  { name: 'docker', label: 'Docker', inferFrom: ['docker'], templateRuntimes: ['docker'] },
+]
+
+function effectiveKnownTools(knownTools: KnownToolOption[]): KnownToolOption[] {
+  return knownTools.length > 0 ? knownTools : DEFAULT_KNOWN_TOOLS
+}
+
 export function inferToolsFromCommand(command: string, knownTools: KnownToolOption[] = []): string[] {
+  const tools = effectiveKnownTools(knownTools)
   const base = command.trim().split(/[/\\]/).pop()?.toLowerCase() ?? ''
   const name = base.replace(/\.(exe|cmd|bat|com)$/i, '')
-	return knownTools
+	return tools
 		.filter((tool) => tool.inferFrom?.some((candidate) => candidate.toLowerCase() === name))
 		.map((tool) => tool.name)
 }
@@ -31,6 +47,7 @@ export function inferToolsFromTemplateRuntimes(
 	tags: string[] | null | undefined,
 	knownTools: KnownToolOption[] = [],
 ): string[] {
+  const tools = effectiveKnownTools(knownTools)
   const out: string[] = []
   const seen = new Set<string>()
   const add = (...names: string[]) => {
@@ -42,7 +59,7 @@ export function inferToolsFromTemplateRuntimes(
   }
 	for (const raw of tags ?? []) {
 		const runtime = String(raw).toLowerCase().trim()
-		for (const tool of knownTools) {
+		for (const tool of tools) {
 			if (tool.templateRuntimes?.some((candidate) => candidate.toLowerCase() === runtime)) add(tool.name)
 		}
   }

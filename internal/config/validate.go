@@ -67,8 +67,12 @@ func ValidateYAMLConfig(cfg YAMLConfig) error {
 	}
 	// connection.retry_max_backoff_s 范围 1-86400（Req 5.3）。
 	rangeCheck(fields, "connection.retry_max_backoff_s", cfg.Connection.RetryMaxBackoffS, 1, 86400)
-	// connection.failure_threshold 范围 1-100（Req 5.6）。
+	// connection.failure_threshold 范围 1-100（达到后降频持续探测）。
 	rangeCheck(fields, "connection.failure_threshold", cfg.Connection.FailureThreshold, 1, 100)
+	// 按需重连冷却时间与调用等待时间分别限制在合理范围，防止高频调用触发连接风暴
+	// 或把请求长期堆积在等待队列中。
+	rangeCheck(fields, "connection.demand_reconnect_cooldown_s", cfg.Connection.DemandReconnectCooldownS, 1, 300)
+	rangeCheck(fields, "connection.demand_reconnect_wait_s", cfg.Connection.DemandReconnectWaitS, 1, 30)
 
 	// aggregation.upstream_call_timeout_s 范围 1-600（Req 10.8）。
 	rangeCheck(fields, "aggregation.upstream_call_timeout_s", cfg.Aggregation.UpstreamCallTimeoutS, 1, 600)

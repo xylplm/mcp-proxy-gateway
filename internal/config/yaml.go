@@ -113,12 +113,19 @@ type ConnectionConfig struct {
 	ConnectTimeoutS int `yaml:"connect_timeout_s" json:"connect_timeout_s"`
 	// RetryInitialBackoffS 为初始退避秒数，范围 1 至 60，默认 5（Req 5.1）。
 	RetryInitialBackoffS int `yaml:"retry_initial_backoff_s" json:"retry_initial_backoff_s"`
-	// RetryMultiplier 为退避倍数，需大于等于 1，默认 5（Req 5.1）。
+	// RetryMultiplier 为退避倍数，需大于等于 1，默认 2（Req 5.1）。
 	RetryMultiplier int `yaml:"retry_multiplier" json:"retry_multiplier"`
-	// RetryMaxBackoffS 为退避上限秒数，范围 1 至 86400，默认 3600（Req 5.3）。
+	// RetryMaxBackoffS 为退避上限秒数，范围 1 至 86400，默认 300（5 分钟，Req 5.3）。
 	RetryMaxBackoffS int `yaml:"retry_max_backoff_s" json:"retry_max_backoff_s"`
-	// FailureThreshold 为连续失败阈值，范围 1 至 100，默认 10（Req 5.6）。
+	// FailureThreshold 为连续失败阈值，范围 1 至 100，默认 10。达到阈值后进入
+	// 降频持续探测状态，而非永久停止重试。
 	FailureThreshold int `yaml:"failure_threshold" json:"failure_threshold"`
+	// DemandReconnectCooldownS 为真实工具调用触发提前探测的最小间隔，默认 5 秒。
+	// 同一上游在冷却窗口内只会合并等待既有连接尝试，避免调用高峰造成重连风暴。
+	DemandReconnectCooldownS int `yaml:"demand_reconnect_cooldown_s" json:"demand_reconnect_cooldown_s"`
+	// DemandReconnectWaitS 为工具调用等待共享重连结果的最长时间，默认 8 秒。
+	// 实际等待仍受调用总超时约束。
+	DemandReconnectWaitS int `yaml:"demand_reconnect_wait_s" json:"demand_reconnect_wait_s"`
 }
 
 // AggregationConfig 为聚合调用配置（Req 10）。
@@ -317,11 +324,13 @@ func DefaultYAMLConfig() YAMLConfig {
 			TimeoutS: 30,
 		},
 		Connection: ConnectionConfig{
-			ConnectTimeoutS:      30,
-			RetryInitialBackoffS: 5,
-			RetryMultiplier:      5,
-			RetryMaxBackoffS:     3600,
-			FailureThreshold:     10,
+			ConnectTimeoutS:          30,
+			RetryInitialBackoffS:     5,
+			RetryMultiplier:          2,
+			RetryMaxBackoffS:         300,
+			FailureThreshold:         10,
+			DemandReconnectCooldownS: 5,
+			DemandReconnectWaitS:     8,
 		},
 		Aggregation: AggregationConfig{
 			UpstreamCallTimeoutS: 30,
@@ -351,6 +360,13 @@ func DefaultYAMLConfig() YAMLConfig {
 
 // NormalizeYAMLConfig 补齐旧配置文件中可能缺省的枚举类字段，同时保留显式合法取值。
 func NormalizeYAMLConfig(cfg YAMLConfig) YAMLConfig {
+	// 兼容已有 YAML：新增的连接自愈字段缺省时写入安全默认值，避免升级后因零值校验失败。
+	if cfg.Connection.DemandReconnectCooldownS == 0 {
+		cfg.Connection.DemandReconnectCooldownS = 5
+	}
+	if cfg.Connection.DemandReconnectWaitS == 0 {
+		cfg.Connection.DemandReconnectWaitS = 8
+	}
 	cfg.Aggregation.ToolRoutingStrategy = domain.NormalizeToolRoutingStrategy(cfg.Aggregation.ToolRoutingStrategy)
 	if cfg.MCPAPI.RequestBodyLimitMiB == 0 {
 		cfg.MCPAPI.RequestBodyLimitMiB = DefaultMCPRequestBodyLimitMiB

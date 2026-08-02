@@ -77,6 +77,11 @@ func (a *App) build(envCfg config.EnvConfig) error {
 		}
 	}
 	transport.SetPolicyProvider(policyFromCfg)
+	// 远程与本地上游建立连接时热读取全局连接超时；保存后重启时新会话会使用新值，
+	// 避免连接管理策略与真实握手超时不一致。
+	transport.SetConnectTimeoutProvider(func() time.Duration {
+		return time.Duration(a.cfg.Config().Connection.ConnectTimeoutS) * time.Second
+	})
 	// 卷内运行时目录：优先 MPG_RUNTIME_DIR，否则 {DataDir}/runtime。
 	runtimeDirFn := func() string {
 		env := a.cfg.Env()
@@ -282,11 +287,13 @@ func (a *App) build(envCfg config.EnvConfig) error {
 // retryPolicyFromConfig 把连接配置映射为连接管理器的退避策略（Req 5）。
 func retryPolicyFromConfig(c config.ConnectionConfig) manager.RetryPolicy {
 	return manager.RetryPolicy{
-		ConnectTimeout:   time.Duration(c.ConnectTimeoutS) * time.Second,
-		InitialBackoff:   time.Duration(c.RetryInitialBackoffS) * time.Second,
-		MaxBackoff:       time.Duration(c.RetryMaxBackoffS) * time.Second,
-		Multiplier:       c.RetryMultiplier,
-		FailureThreshold: c.FailureThreshold,
+		ConnectTimeout:          time.Duration(c.ConnectTimeoutS) * time.Second,
+		InitialBackoff:          time.Duration(c.RetryInitialBackoffS) * time.Second,
+		MaxBackoff:              time.Duration(c.RetryMaxBackoffS) * time.Second,
+		Multiplier:              c.RetryMultiplier,
+		FailureThreshold:        c.FailureThreshold,
+		DemandReconnectCooldown: time.Duration(c.DemandReconnectCooldownS) * time.Second,
+		DemandReconnectWait:     time.Duration(c.DemandReconnectWaitS) * time.Second,
 	}
 }
 

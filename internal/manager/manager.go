@@ -375,12 +375,9 @@ func (m *Manager) GetState(id string) (domain.ConnState, string) {
 	return state, lastErr
 }
 
-// Reconnect 由管理员手动发起重连（Req 5.6）。
-//
-// 行为：按连接持有的最新配置停止旧循环并重新启动，使可用、退避中、挂起中的连接
-// 都能真正重新拨号，而不是仅修改状态或唤醒等待。
-//
-// 标识不存在返回 NOT_FOUND。
+// Reconnect 由管理员手动发起重连。处于退避或降频状态时只提前唤醒既有循环，
+// 从而不与按需恢复竞争；可用或正在建立连接时按管理员的明确意图主动替换会话。
+// 标识不存在时从持久化配置恢复；停用上游保持停用状态，不会被手动按钮意外启用。
 func (m *Manager) Reconnect(ctx context.Context, id string) error {
 	m.connsMu.Lock()
 	c := m.conns[id]
@@ -388,9 +385,15 @@ func (m *Manager) Reconnect(ctx context.Context, id string) error {
 	if c == nil {
 		return m.restoreConnectionFromStore(ctx, id, true)
 	}
-
 	cfg := c.config()
-	cfg.Enabled = true
+	if !cfg.Enabled {
+		return domain.NewError(domain.CodeValidation, "上游 MCP 已停用，请先启用后再重连")
+	}
+	state, _, _ := c.snapshot()
+	if state == domain.ConnUnavailable || state == domain.ConnSuspended {
+		c.signalWake()
+		return nil
+	}
 	m.rebuildConnection(id, cfg)
 	return nil
 }
@@ -505,9 +508,11 @@ func normalizeTags(tags []string) ([]string, error) {
 // 连接状态与最近失败原因（由连接生命周期状态机维护，Req 5.4）。
 func (m *Manager) toUpstream(row *store.UpstreamRow) domain.Upstream {
 	up := row.Upstream
-	state, lastErr := m.GetState(row.ID)
-	up.State = state
-	up.LastError = lastErr
+	status := m.ConnStatus(row.ID)
+	up.State = status.State
+	up.LastError = status.LastError
+	up.FailureCount = status.FailureCount
+	up.NextRetryAt = status.NextRetryAt
 	return up
 }
 

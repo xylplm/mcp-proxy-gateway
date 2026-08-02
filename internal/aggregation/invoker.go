@@ -37,3 +37,52 @@ type UpstreamInvoker interface {
 type UpstreamAvailability interface {
 	UpstreamAvailable(upstreamID string) bool
 }
+
+// RecoveryAwareInvoker 标记调用器能够在真正分发工具请求前协调按需恢复。聚合路由
+// 仅在没有健康候选时选择一个兼容来源交给该调用器，避免绕过多来源健康回退策略。
+type RecoveryAwareInvoker interface {
+	SupportsOnDemandRecovery() bool
+}
+
+// PreDispatchInvoker 在确认上游会话可用、但尚未发送 tools/call 时执行回调。它让
+// 聚合层把额度预占放在真实分发边界，避免连接恢复失败的请求消耗来源额度。
+type PreDispatchInvoker interface {
+	CallUpstreamWithPreDispatch(
+		ctx context.Context,
+		upstreamID, originalName string,
+		args json.RawMessage,
+		beforeDispatch func(context.Context) error,
+	) (domain.ToolResult, error)
+}
+
+// PreDispatchToolCaller 由受管会话实现：它在会话仍被固定、且实际 CallTool 即将
+// 发出时执行回调，避免连接恢复后的额度预占与真正分发之间出现关闭竞态。
+type PreDispatchToolCaller interface {
+	ToolCaller
+	CallToolWithPreDispatch(
+		ctx context.Context,
+		name string,
+		args json.RawMessage,
+		beforeDispatch func(context.Context) error,
+	) (domain.ToolResult, error)
+}
+
+// PreDispatchError 表示工具尚未发往上游时就结束的恢复/预占错误。聚合层可安全
+// 尝试下一个恢复候选；该错误绝不能出现在已经调用 CallTool 的路径中。
+type PreDispatchError struct {
+	Err error
+}
+
+func (e *PreDispatchError) Error() string {
+	if e == nil || e.Err == nil {
+		return "调用前准备失败"
+	}
+	return e.Err.Error()
+}
+
+func (e *PreDispatchError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}

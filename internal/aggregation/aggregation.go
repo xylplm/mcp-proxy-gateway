@@ -465,7 +465,40 @@ func (s *Service) InvokeTool(ctx context.Context, apiKeyID, exposedName string, 
 	// 调用前记录起点，用于计算响应耗时（毫秒，Req 16.1）。统计写入绝不影响调用结果。
 	log.Debug("工具调用转发上游", "exposedName", exposedName, "upstreamID", candidate.UpstreamID, "originalName", candidate.OriginalName, "apiKeyID", apiKeyID, "mode", mode)
 	startedAt := time.Now()
-	result, callErr := s.invoker.CallUpstream(ctx, candidate.UpstreamID, candidate.OriginalName, args)
+	var result domain.ToolResult
+	var callErr error
+	for {
+		if candidate.deferQuotaReservation {
+			preDispatch, ok := s.invoker.(PreDispatchInvoker)
+			if !ok {
+				return domain.ToolResult{}, domain.NewError(domain.CodeUpstreamUnavailable, "上游 MCP 恢复协调器未就绪")
+			}
+			result, callErr = preDispatch.CallUpstreamWithPreDispatch(
+				ctx,
+				candidate.UpstreamID,
+				candidate.OriginalName,
+				args,
+				func(reserveCtx context.Context) error {
+					return s.reserveCandidateQuota(reserveCtx, candidate)
+				},
+			)
+		} else {
+			result, callErr = s.invoker.CallUpstream(ctx, candidate.UpstreamID, candidate.OriginalName, args)
+		}
+
+		var pending *PreDispatchError
+		if errors.As(callErr, &pending) {
+			if len(candidate.recoveryFallbacks) > 0 {
+				next := candidate.recoveryFallbacks[0]
+				next.recoveryFallbacks = append([]ToolCandidate(nil), candidate.recoveryFallbacks[1:]...)
+				candidate = next
+				continue
+			}
+			// 未发送工具请求的恢复/额度失败：不记录来源故障或调用统计。
+			return domain.ToolResult{}, pending.Err
+		}
+		break
+	}
 	s.recordSourceResult(candidate, callErr)
 
 	// 步骤 5：异步采集调用统计（Req 16.1、16.8、16.9）。
@@ -508,6 +541,14 @@ func (s *Service) selectCandidate(ctx context.Context, entry ReverseEntry, polic
 	}
 	var lastReason string
 	availability, hasAvailability := s.invoker.(UpstreamAvailability)
+	// recoveryCapable 表示调用器能在“尚未把工具请求发往上游”时协调一次安全的
+	// 按需恢复。没有可用来源时可挑选一个兼容候选交由它等待恢复；若存在健康来源，
+	// 仍优先使用健康来源，避免为恢复中的来源增加无谓等待。
+	recovery, recoveryCapable := s.invoker.(RecoveryAwareInvoker)
+	recoveryCapable = recoveryCapable && recovery.SupportsOnDemandRecovery()
+	// 保留全部恢复候选，后续仍要逐个通过配额校验；不能因为首个离线来源已超额
+	// 就错过另一个可以立即恢复并执行的同名来源。
+	recoveryCandidates := make([]ToolCandidate, 0, len(candidates))
 	sawAvailable := false
 	sawQuotaLimited := false
 	sawFailureDegraded := false
@@ -521,11 +562,16 @@ func (s *Service) selectCandidate(ctx context.Context, entry ReverseEntry, polic
 			if degraded, reason := s.sourceTemporarilyDegraded(c); degraded {
 				sawFailureDegraded = true
 				lastReason = reason
+				// 短暂失败降级属于调用结果的保护窗口，不等同于连接不可用；即使
+				// 其它来源不可用也不绕过它，避免把真实失败放大为重试风暴。
 				continue
 			}
 		}
 		if hasAvailability && !availability.UpstreamAvailable(c.UpstreamID) {
 			lastReason = "所有上游来源当前均不可用"
+			if recoveryCapable {
+				recoveryCandidates = append(recoveryCandidates, c)
+			}
 			continue
 		}
 		sawAvailable = true
@@ -545,6 +591,21 @@ func (s *Service) selectCandidate(ctx context.Context, entry ReverseEntry, polic
 	}
 	if lastReason == "" {
 		lastReason = "所有上游来源均已达到限流或额度上限"
+	}
+	// 存在暂不可用但可恢复的兼容来源时，将其交给具备恢复能力的调用器。在已有
+	// 健康来源受额度限制时，这也允许恢复后的其它来源承接请求。额度不在这里预占：
+	// 连接恢复失败时工具从未发往上游，待会话恢复且即将首次分发时才原子预占。
+	if hasAvailability && len(recoveryCandidates) > 0 {
+		candidate := recoveryCandidates[0]
+		candidate.deferQuotaReservation = true
+		if len(recoveryCandidates) > 1 {
+			candidate.recoveryFallbacks = make([]ToolCandidate, 0, len(recoveryCandidates)-1)
+			for _, fallback := range recoveryCandidates[1:] {
+				fallback.deferQuotaReservation = true
+				candidate.recoveryFallbacks = append(candidate.recoveryFallbacks, fallback)
+			}
+		}
+		return candidate, nil
 	}
 	if hasAvailability && !sawAvailable {
 		return ToolCandidate{}, domain.NewError(domain.CodeUpstreamUnavailable, lastReason)
@@ -1000,4 +1061,16 @@ func (s *Service) buildToolSetWithReverseMap(ctx context.Context, apiKeyID strin
 	// 阶段 2-6：交由确定性纯函数管线处理。
 	tools, reverse := runPipeline(s.engine, bundles, apiKeyFilters)
 	return tools, reverse, nil
+}
+
+func (s *Service) reserveCandidateQuota(ctx context.Context, candidate ToolCandidate) error {
+	cfg, ok := s.upstreamConfig(candidate.UpstreamID)
+	if !ok || s.quota == nil {
+		return nil
+	}
+	allowed, reason := s.quota.Allow(ctx, candidate.UpstreamID, cfg.RateLimits)
+	if allowed {
+		return nil
+	}
+	return domain.NewError(domain.CodeRateLimited, reason)
 }

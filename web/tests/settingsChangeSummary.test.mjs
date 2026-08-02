@@ -23,9 +23,11 @@ function baseConfig() {
     connection: {
       connect_timeout_s: 30,
       retry_initial_backoff_s: 5,
-      retry_multiplier: 5,
-      retry_max_backoff_s: 3600,
+      retry_multiplier: 2,
+      retry_max_backoff_s: 300,
       failure_threshold: 10,
+      demand_reconnect_cooldown_s: 5,
+      demand_reconnect_wait_s: 8,
     },
     aggregation: {
       upstream_call_timeout_s: 30,

@@ -250,3 +250,101 @@ func TestSessionInvokerRecoversSessionPanic(t *testing.T) {
 		t.Fatalf("panic 兜底不应返回部分结果：got=%+v", got)
 	}
 }
+
+// siRecoveryStates 同时提供状态与按需恢复协调，验证调用在尚未发往上游时可共享等待
+// 一次恢复结果；真实连接构造仍应由 Manager 等外部协调器唯一负责。
+type siRecoveryStates struct {
+	state     domain.ConnState
+	lastErr   string
+	waitCalls atomic.Int32
+	onWait    func()
+}
+
+func (s *siRecoveryStates) GetState(_ string) (domain.ConnState, string) {
+	return s.state, s.lastErr
+}
+
+func (s *siRecoveryStates) WaitForAvailable(ctx context.Context, _ string) error {
+	s.waitCalls.Add(1)
+	if s.onWait != nil {
+		s.onWait()
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		return nil
+	}
+}
+
+func TestSessionInvokerWaitsForRecoveryBeforeFirstDispatch(t *testing.T) {
+	session := &siFakeSession{result: domain.ToolResult{Content: json.RawMessage(`[]`)}}
+	states := &siRecoveryStates{state: domain.ConnUnavailable, lastErr: "暂不可用"}
+	sessions := &siFakeSessions{ok: false}
+	states.onWait = func() {
+		states.state = domain.ConnAvailable
+		sessions.session = session
+		sessions.ok = true
+	}
+	invoker := NewSessionInvoker(states, sessions, time.Second, nil)
+
+	if _, err := invoker.CallUpstream(context.Background(), "up-a", "read_file", json.RawMessage(`{}`)); err != nil {
+		t.Fatalf("恢复成功后首次安全分发不应失败：%v", err)
+	}
+	if got := states.waitCalls.Load(); got != 1 {
+		t.Fatalf("不可用时应等待一次共享恢复，实际 %d", got)
+	}
+	if !session.called.Load() {
+		t.Fatal("连接恢复后应执行尚未发送的工具调用")
+	}
+}
+
+func TestSessionInvokerDoesNotReplayDispatchedCallAfterTransportFailure(t *testing.T) {
+	session := &siFakeSession{err: domain.NewError(domain.CodeUpstreamUnavailable, "connection closed")}
+	states := &siRecoveryStates{state: domain.ConnAvailable}
+	invoker := NewSessionInvoker(states, &siFakeSessions{session: session, ok: true}, time.Second, nil)
+
+	_, err := invoker.CallUpstream(context.Background(), "up-a", "write_file", json.RawMessage(`{}`))
+	assertUpstreamErrorCode(t, err, domain.CodeUpstreamUnavailable)
+	if got := states.waitCalls.Load(); got != 0 {
+		t.Fatalf("已分发后失败的调用不应透明重放或再次等待重连，got=%d", got)
+	}
+	if !session.called.Load() {
+		t.Fatal("工具调用应仅分发一次")
+	}
+}
+
+func TestSessionInvokerRecoveryDeadlineIsNormalized(t *testing.T) {
+	states := &siRecoveryStates{state: domain.ConnUnavailable}
+	states.onWait = func() {
+		// 保持不可用；由外层调用总预算先到期。
+		<-time.After(30 * time.Millisecond)
+	}
+	invoker := NewSessionInvoker(states, &siFakeSessions{}, 5*time.Millisecond, nil)
+
+	_, err := invoker.CallUpstream(context.Background(), "up-a", "read_file", json.RawMessage(`{}`))
+	assertUpstreamErrorCode(t, err, domain.CodeUpstreamTimeout)
+}
+
+func TestSessionInvokerPreDispatchRunsOnlyAfterRecovery(t *testing.T) {
+	session := &siFakeSession{result: domain.ToolResult{Content: json.RawMessage(`[]`)}}
+	states := &siRecoveryStates{state: domain.ConnUnavailable}
+	sessions := &siFakeSessions{ok: false}
+	states.onWait = func() {
+		states.state = domain.ConnAvailable
+		sessions.session = session
+		sessions.ok = true
+	}
+	invoker := NewSessionInvoker(states, sessions, time.Second, nil)
+	called := false
+
+	if _, err := invoker.CallUpstreamWithPreDispatch(
+		context.Background(), "up-a", "read_file", json.RawMessage(`{}`),
+		func(context.Context) error { called = true; return nil },
+	); err != nil {
+		t.Fatalf("恢复并预占后调用不应失败：%v", err)
+	}
+	if !called || !session.called.Load() {
+		t.Fatal("预占应只在恢复成功、真实分发前执行")
+	}
+}

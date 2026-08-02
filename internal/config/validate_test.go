@@ -270,3 +270,40 @@ func TestValidateXiaoZhiEndpoint(t *testing.T) {
 		})
 	}
 }
+
+func TestConnectionSelfHealingConfigValidationAndNormalization(t *testing.T) {
+	cfg := DefaultYAMLConfig()
+	if cfg.Connection.RetryMultiplier != 2 || cfg.Connection.RetryMaxBackoffS != 300 {
+		t.Fatalf("默认退避策略错误：%+v", cfg.Connection)
+	}
+	if cfg.Connection.DemandReconnectCooldownS != 5 || cfg.Connection.DemandReconnectWaitS != 8 {
+		t.Fatalf("自愈配置默认值错误：%+v", cfg.Connection)
+	}
+	if err := ValidateYAMLConfig(cfg); err != nil {
+		t.Fatalf("默认自愈配置应通过校验：%v", err)
+	}
+
+	cfg.Connection.DemandReconnectCooldownS = 0
+	cfg.Connection.DemandReconnectWaitS = 31
+	err := ValidateYAMLConfig(cfg)
+	var apiErr *domain.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("非法自愈配置应返回字段校验错误，got=%v", err)
+	}
+	for _, field := range []string{
+		"connection.demand_reconnect_cooldown_s",
+		"connection.demand_reconnect_wait_s",
+	} {
+		if apiErr.Fields[field] == "" {
+			t.Fatalf("应返回 %s 字段错误，实际=%v", field, apiErr.Fields)
+		}
+	}
+
+	legacy := DefaultYAMLConfig()
+	legacy.Connection.DemandReconnectCooldownS = 0
+	legacy.Connection.DemandReconnectWaitS = 0
+	normalized := NormalizeYAMLConfig(legacy)
+	if normalized.Connection.DemandReconnectCooldownS != 5 || normalized.Connection.DemandReconnectWaitS != 8 {
+		t.Fatalf("旧配置应补齐自愈默认值，got=%+v", normalized.Connection)
+	}
+}

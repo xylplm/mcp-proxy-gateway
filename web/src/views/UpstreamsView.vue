@@ -237,8 +237,8 @@ const pagedUpstreams = computed(() => {
 const nextSortOrder = computed(
   () => upstreams.value.reduce((max, up) => Math.max(max, up.config.sortOrder), -1) + 1,
 )
-const hasConnectingUpstream = computed(() =>
-  upstreams.value.some((up) => up.state === 'connecting'),
+const hasRecoveringUpstream = computed(() =>
+  upstreams.value.some((up) => up.state === 'connecting' || up.nextRetryAt != null),
 )
 const normalizedToolModalSearchKeyword = computed(() =>
   toolModalSearchKeyword.value.trim().toLowerCase(),
@@ -564,7 +564,7 @@ async function loadUpstreams(showLoading = true): Promise<void> {
     upstreams.value = list
     await loadToolCounts(list)
     if (currentPage.value > totalPages.value) currentPage.value = totalPages.value
-    if (hasConnectingUpstream.value) ensureStatusPolling(60_000)
+    if (hasRecoveringUpstream.value) ensureStatusPolling(60_000)
   } catch (err) {
     errorMessage.value = err instanceof Error ? err.message : '加载上游列表失败'
   } finally {
@@ -594,11 +594,13 @@ function ensureStatusPolling(durationMs: number): void {
   statusPollingUntil = Math.max(statusPollingUntil, Date.now() + durationMs)
   if (statusPollTimer !== undefined) return
   statusPollTimer = window.setInterval(() => {
-    if (!hasConnectingUpstream.value && Date.now() > statusPollingUntil) {
+    // 处于低频恢复中的上游会长期存在；页面可见时保持轻量轮询，离开或恢复完成后
+    // 自动停止，避免为每张卡片创建独立定时器。
+    if (!hasRecoveringUpstream.value && Date.now() > statusPollingUntil) {
       stopStatusPolling()
       return
     }
-    void loadUpstreams(false)
+    if (document.visibilityState === 'visible') void loadUpstreams(false)
   }, 3000)
 }
 
@@ -842,8 +844,8 @@ async function reconnect(up: Upstream): Promise<void> {
   if (busy.value.has(key)) return
   setBusy(key, true)
   try {
-    await reconnectUpstream(up.id)
-    toast.success(`已触发「${up.config.name}」重连`)
+    const result = await reconnectUpstream(up.id)
+    toast.success(result.message ?? `已请求「${up.config.name}」立即探测`)
     await loadUpstreams()
     ensureStatusPolling(60_000)
   } catch (err) {
@@ -851,6 +853,18 @@ async function reconnect(up: Upstream): Promise<void> {
   } finally {
     setBusy(key, false)
   }
+}
+
+function recoveryHint(up: Upstream): string {
+  if (up.state === 'available') return ''
+  if (up.state === 'connecting') return '正在建立连接…'
+  if (up.nextRetryAt) {
+    const next = new Date(up.nextRetryAt)
+    if (!Number.isNaN(next.getTime())) {
+      return `后台将在 ${next.toLocaleTimeString('zh-CN', { hour12: false })} 再次探测`
+    }
+  }
+  return up.state === 'suspended' ? '正在低频自动恢复' : '等待自动恢复'
 }
 
 function formatToolUpdatedAt(value: string | null): string {
@@ -1402,13 +1416,25 @@ function goPage(p: number): void {
               </button>
             </div>
 
-            <AppTooltip v-if="up.lastError" :content="up.lastError" placement="bottom-start">
-              <p
-                class="bg-error-50 text-error-600 dark:bg-error-500/10 dark:text-error-400 mb-3 truncate rounded-lg px-3 py-1.5 text-xs"
-              >
-                {{ up.lastError }}
-              </p>
-            </AppTooltip>
+            <div v-if="up.state !== 'available'" class="mb-3 rounded-xl border border-gray-100 bg-gray-50/80 px-3 py-2 dark:border-gray-800 dark:bg-white/[0.03]">
+              <div class="flex items-center justify-between gap-2">
+                <p class="min-w-0 truncate text-xs font-medium text-gray-600 dark:text-gray-300">
+                  {{ recoveryHint(up) }}
+                </p>
+                <span
+                  v-if="(up.failureCount ?? 0) > 0"
+                  class="shrink-0 rounded-full bg-warning-50 px-2 py-0.5 text-[10px] font-medium text-warning-700 dark:bg-warning-500/10 dark:text-warning-400"
+                >
+                  连续失败 {{ up.failureCount }} 次
+                </span>
+              </div>
+              <div v-if="up.state === 'connecting' || up.nextRetryAt" class="mt-2 h-1 overflow-hidden rounded-full bg-brand-100 dark:bg-brand-500/15">
+                <span class="upstream-recovery-pulse block h-full w-2/3 rounded-full bg-brand-500"></span>
+              </div>
+              <AppTooltip v-if="up.lastError" :content="up.lastError" placement="bottom-start">
+                <p class="mt-2 truncate text-xs text-error-600 dark:text-error-400">{{ up.lastError }}</p>
+              </AppTooltip>
+            </div>
 
             <div
               class="mt-auto flex flex-wrap items-center justify-between gap-2 border-t border-gray-100 pt-3 dark:border-gray-800"
@@ -1619,13 +1645,25 @@ function goPage(p: number): void {
                 </button>
               </div>
 
-              <AppTooltip v-if="up.lastError" :content="up.lastError" placement="bottom-start">
-                <p
-                  class="bg-error-50 text-error-600 dark:bg-error-500/10 dark:text-error-400 mb-3 truncate rounded-lg px-3 py-1.5 text-xs"
-                >
-                  {{ up.lastError }}
-                </p>
-              </AppTooltip>
+              <div v-if="up.state !== 'available'" class="mb-3 rounded-xl border border-gray-100 bg-gray-50/80 px-3 py-2 dark:border-gray-800 dark:bg-white/[0.03]">
+                <div class="flex items-center justify-between gap-2">
+                  <p class="min-w-0 truncate text-xs font-medium text-gray-600 dark:text-gray-300">
+                    {{ recoveryHint(up) }}
+                  </p>
+                  <span
+                    v-if="(up.failureCount ?? 0) > 0"
+                    class="shrink-0 rounded-full bg-warning-50 px-2 py-0.5 text-[10px] font-medium text-warning-700 dark:bg-warning-500/10 dark:text-warning-400"
+                  >
+                    连续失败 {{ up.failureCount }} 次
+                  </span>
+                </div>
+                <div v-if="up.state === 'connecting' || up.nextRetryAt" class="mt-2 h-1 overflow-hidden rounded-full bg-brand-100 dark:bg-brand-500/15">
+                  <span class="upstream-recovery-pulse block h-full w-2/3 rounded-full bg-brand-500"></span>
+                </div>
+                <AppTooltip v-if="up.lastError" :content="up.lastError" placement="bottom-start">
+                  <p class="mt-2 truncate text-xs text-error-600 dark:text-error-400">{{ up.lastError }}</p>
+                </AppTooltip>
+              </div>
 
               <div
                 class="mt-auto flex flex-wrap items-center justify-between gap-2 border-t border-gray-100 pt-3 dark:border-gray-800"
@@ -2595,6 +2633,32 @@ function goPage(p: number): void {
 </template>
 
 <style scoped>
+.upstream-recovery-pulse {
+  animation: upstream-recovery-progress 1.8s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  transform-origin: left center;
+}
+
+@keyframes upstream-recovery-progress {
+  0% {
+    opacity: 0.45;
+    transform: scaleX(0.35);
+  }
+  50% {
+    opacity: 1;
+    transform: scaleX(1);
+  }
+  100% {
+    opacity: 0.45;
+    transform: scaleX(0.35);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .upstream-recovery-pulse {
+    animation: none;
+  }
+}
+
 .fade-enter-active,
 .fade-leave-active {
   transition: opacity 0.2s ease;

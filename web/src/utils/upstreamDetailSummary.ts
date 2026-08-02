@@ -39,6 +39,8 @@ export function buildUpstreamDetailSummary(
     runtimeItems: compactItems([
       { label: '启用状态', value: upstream.config.enabled ? '已启用' : '已停用' },
       { label: '连接状态', value: stateLabel(upstream.state) },
+      { label: '连续失败', value: failureCountLabel(upstream) },
+      { label: '下次探测', value: nextRetryLabel(upstream.nextRetryAt) },
       { label: '自动同步', value: upstream.config.autoSync ? '已开启' : '未开启' },
       { label: '排序位置', value: String(upstream.config.sortOrder + 1) },
       { label: '创建时间', value: formatDateTime(upstream.createdAt) },
@@ -112,9 +114,15 @@ function healthDescription(upstream: Upstream): string {
     case 'connecting':
       return '正在建立连接或刷新状态，稍后会自动更新。'
     case 'suspended':
-      return withLastError(upstream, '连续失败后已暂停自动重试，可手动重连恢复探测。')
+      return withLastError(
+        upstream,
+        `连续失败后已进入低频自动恢复，${nextRetryDescription(upstream.nextRetryAt)}。`,
+      )
     case 'unavailable':
-      return withLastError(upstream, '当前连接不可用，可检查配置后重连。')
+      return withLastError(
+        upstream,
+        `当前连接不可用，${nextRetryDescription(upstream.nextRetryAt)}。工具调用也会尝试提前恢复。`,
+      )
     default:
       return '当前状态未知，可刷新列表重新获取运行状态。'
   }
@@ -128,6 +136,23 @@ function syncDescription(upstream: Upstream, snapshot?: ToolCountSnapshot): stri
       : '尚未同步到工具缓存，可手动刷新工具列表。'
   }
   return `当前缓存中有 ${snapshot.count.toLocaleString('zh-CN')} 个工具。`
+}
+
+function failureCountLabel(upstream: Upstream): string {
+  const count = upstream.failureCount ?? 0
+  return count > 0 ? `${count} 次` : ''
+}
+
+function nextRetryLabel(value: string | null | undefined): string {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  return date.toLocaleString('zh-CN', { hour12: false })
+}
+
+function nextRetryDescription(value: string | null | undefined): string {
+  const label = nextRetryLabel(value)
+  return label === '' ? '后台将持续尝试恢复' : `预计下次探测：${label}`
 }
 
 function withLastError(upstream: Upstream, fallback: string): string {
@@ -172,7 +197,7 @@ function stateLabel(value: ConnState): string {
     case 'unavailable':
       return '不可用'
     case 'suspended':
-      return '已暂停'
+      return '低频恢复'
     default:
       return value
   }

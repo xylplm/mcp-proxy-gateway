@@ -175,6 +175,22 @@ export function collectSettingsChanges(before: YAMLConfig, after: YAMLConfig): S
   )
   addChange(
     changes,
+    '按需探测冷却',
+    before.connection.demand_reconnect_cooldown_s,
+    after.connection.demand_reconnect_cooldown_s,
+    needsRestart,
+    secondsLabel,
+  )
+  addChange(
+    changes,
+    '按需等待上限',
+    before.connection.demand_reconnect_wait_s,
+    after.connection.demand_reconnect_wait_s,
+    needsRestart,
+    secondsLabel,
+  )
+  addChange(
+    changes,
     '上游调用超时',
     before.aggregation.upstream_call_timeout_s,
     after.aggregation.upstream_call_timeout_s,

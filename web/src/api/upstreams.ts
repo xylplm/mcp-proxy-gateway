@@ -46,7 +46,7 @@ export const CONN_STATE_LABELS: Record<ConnState, string> = {
   connecting: '连接中',
   available: '可用',
   unavailable: '不可用',
-  suspended: '已暂停',
+  suspended: '低频恢复',
 }
 
 /**
@@ -177,6 +177,10 @@ export interface Upstream {
   state: ConnState
   /** 最近一次连接失败原因（如有）。 */
   lastError?: string
+  /** 当前连续连接失败次数；连接成功后清零。 */
+  failureCount?: number
+  /** 后台下一次自动探测时间（RFC3339）；连接中或可用时为空。 */
+  nextRetryAt?: string | null
   /** 创建时间（RFC3339）。 */
   createdAt: string
   /** 最近更新时间（RFC3339）。 */
@@ -319,9 +323,22 @@ export async function reorderUpstreams(orderedIds: string[]): Promise<void> {
   await request.post('/upstreams/reorder', { orderedIds })
 }
 
-/** 手动重连指定上游 MCP（Req 5.6）。 */
-export async function reconnectUpstream(id: string): Promise<void> {
-  await request.post(`/upstreams/${encodeURIComponent(id)}/reconnect`)
+export interface ReconnectUpstreamResult {
+  id: string
+  status: 'reconnecting'
+  message?: string
+}
+
+/** 手动请求立即探测指定上游；后台连接循环负责单飞重连并更新最终状态。 */
+export async function reconnectUpstream(id: string): Promise<ReconnectUpstreamResult> {
+  const res = await request.post<ReconnectUpstreamResult>(
+    `/upstreams/${encodeURIComponent(id)}/reconnect`,
+  )
+  return {
+    id: res.data?.id ?? id,
+    status: res.data?.status ?? 'reconnecting',
+    message: res.data?.message,
+  }
 }
 
 /** 手动刷新指定上游 MCP 的工具列表，返回刷新后的工具数量（Req 6.4、6.5）。 */

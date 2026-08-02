@@ -18,6 +18,8 @@ function upstream(overrides = {}) {
     },
     state: 'available',
     lastError: '',
+    failureCount: 0,
+    nextRetryAt: null,
     createdAt: '2026-06-24T08:00:00Z',
     updatedAt: '2026-06-24T09:00:00Z',
     ...overrides,
@@ -87,4 +89,20 @@ test('summarizes stdio command and unsynced cache', () => {
   assert.match(summary.healthDescription, /最近错误：connect failed/)
   assert.equal(summary.connectionItems.find((item) => item.label === '限流额度')?.value, '每分钟 30')
   assert.equal(summary.connectionItems.find((item) => item.label === '命令参数')?.value, 'server.js')
+})
+
+test('describes sustained automatic recovery with retry metadata', () => {
+  const summary = buildUpstreamDetailSummary(
+    upstream({
+      state: 'suspended',
+      lastError: 'connection refused',
+      failureCount: 12,
+      nextRetryAt: '2026-08-01T16:00:00Z',
+    }),
+  )
+
+  assert.match(summary.healthDescription, /低频自动恢复/)
+  assert.match(summary.healthDescription, /最近错误：connection refused/)
+  assert.equal(summary.runtimeItems.find((item) => item.label === '连续失败')?.value, '12 次')
+  assert.notEqual(summary.runtimeItems.find((item) => item.label === '下次探测')?.value, '')
 })

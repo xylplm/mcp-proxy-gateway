@@ -189,6 +189,19 @@ func (c *stdioClientConn) callTool(ctx context.Context, name string, args json.R
 	return c.inner.callTool(ctx, name, args)
 }
 
+// WaitClosed 透传底层 SDK 会话的终止通知。stdio 子进程在空闲期退出时，Manager
+// 因此也能发现连接已死、注销旧会话并进入统一的退避重连流程。
+func (c *stdioClientConn) WaitClosed(ctx context.Context) error {
+	if c == nil || c.inner == nil {
+		return ErrSessionLost
+	}
+	waiter, ok := c.inner.(SessionWaiter)
+	if !ok {
+		return ErrLifecycleWaitUnsupported
+	}
+	return waiter.WaitClosed(ctx)
+}
+
 func (c *stdioClientConn) close() error {
 	var err error
 	if c.inner != nil {

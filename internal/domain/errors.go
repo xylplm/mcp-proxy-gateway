@@ -38,6 +38,8 @@ type APIError struct {
 	Message string `json:"message"`
 	// Fields 为字段级校验错误，键为字段名、值为错误说明。
 	Fields map[string]string `json:"fields,omitempty"`
+	// cause 仅供进程内错误分类使用，不参与 JSON 响应，避免泄露底层网络与 SDK 细节。
+	cause error
 }
 
 // Error 实现 error 接口。
@@ -48,9 +50,23 @@ func (e *APIError) Error() string {
 	return fmt.Sprintf("%s: %s", e.Code, e.Message)
 }
 
+// Unwrap 保留进程内的根因链，供连接生命周期精确识别网络/会话终态错误；对外响应
+// 始终只使用 Code 和 Message，不会暴露 cause。
+func (e *APIError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.cause
+}
+
 // NewError 构造一个不含字段级错误的 APIError。
 func NewError(code ErrorCode, message string) *APIError {
 	return &APIError{Code: code, Message: message}
+}
+
+// WrapError 构造统一错误并保留根因，供内部以 errors.Is/errors.As 做安全分类。
+func WrapError(code ErrorCode, message string, cause error) *APIError {
+	return &APIError{Code: code, Message: message, cause: cause}
 }
 
 // NewValidationError 构造一个携带字段级错误的校验类 APIError。

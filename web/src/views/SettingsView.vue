@@ -766,7 +766,7 @@ const errClass = 'mt-1 text-xs text-error-500'
                 min="1"
                 :class="inputClass"
               />
-              <p :class="hintClass">需大于等于 1，默认 5。</p>
+              <p :class="hintClass">需大于等于 1，默认 2。</p>
               <p v-if="fieldErrors['connection.retry_multiplier']" :class="errClass">
                 {{ fieldErrors['connection.retry_multiplier'] }}
               </p>
@@ -784,7 +784,7 @@ const errClass = 'mt-1 text-xs text-error-500'
                 max="86400"
                 :class="inputClass"
               />
-              <p :class="hintClass">范围 1 – 86400，默认 3600。</p>
+              <p :class="hintClass">范围 1 – 86400，默认 300（5 分钟）。</p>
               <p v-if="fieldErrors['connection.retry_max_backoff_s']" :class="errClass">
                 {{ fieldErrors['connection.retry_max_backoff_s'] }}
               </p>
@@ -793,7 +793,7 @@ const errClass = 'mt-1 text-xs text-error-500'
               <FieldLabel
                 label="连续失败阈值"
                 required
-                tooltip="达到该失败次数后暂停该上游自动重试。"
+                tooltip="达到该次数后转为低频持续探测；不会永久停止自动恢复。"
               />
               <input
                 v-model.number="config.connection.failure_threshold"
@@ -802,9 +802,45 @@ const errClass = 'mt-1 text-xs text-error-500'
                 max="100"
                 :class="inputClass"
               />
-              <p :class="hintClass">范围 1 – 100，默认 10；达到阈值后熔断暂停。</p>
+              <p :class="hintClass">范围 1 – 100，默认 10；达到阈值后降频探测，恢复后自动上线。</p>
               <p v-if="fieldErrors['connection.failure_threshold']" :class="errClass">
                 {{ fieldErrors['connection.failure_threshold'] }}
+              </p>
+            </div>
+            <div>
+              <FieldLabel
+                label="按需探测冷却（秒）"
+                required
+                tooltip="工具调用发现上游不可用时会提前唤醒一次共享重连；冷却期间的并发调用只等待，不重复拨号。"
+              />
+              <input
+                v-model.number="config.connection.demand_reconnect_cooldown_s"
+                type="number"
+                min="1"
+                max="300"
+                :class="inputClass"
+              />
+              <p :class="hintClass">范围 1 – 300，默认 5；较高流量建议保持 3 – 10 秒。</p>
+              <p v-if="fieldErrors['connection.demand_reconnect_cooldown_s']" :class="errClass">
+                {{ fieldErrors['connection.demand_reconnect_cooldown_s'] }}
+              </p>
+            </div>
+            <div>
+              <FieldLabel
+                label="按需等待上限（秒）"
+                required
+                tooltip="调用会在自身总超时预算内等待共享重连结果；未发送的请求恢复后可继续执行，已发送的请求不会自动重放。"
+              />
+              <input
+                v-model.number="config.connection.demand_reconnect_wait_s"
+                type="number"
+                min="1"
+                max="30"
+                :class="inputClass"
+              />
+              <p :class="hintClass">范围 1 – 30，默认 8；建议小于上游调用超时。</p>
+              <p v-if="fieldErrors['connection.demand_reconnect_wait_s']" :class="errClass">
+                {{ fieldErrors['connection.demand_reconnect_wait_s'] }}
               </p>
             </div>
             <div>

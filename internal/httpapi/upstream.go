@@ -241,7 +241,11 @@ func (r *Router) reconnectUpstream(c *gin.Context) {
 		return
 	}
 	r.recordUpdate(c, audit.ResourceUpstream, c.Param("id"))
-	respondOK(c, gin.H{"id": c.Param("id"), "status": "reconnecting"})
+	respondOK(c, gin.H{
+		"id":      c.Param("id"),
+		"status":  "reconnecting",
+		"message": "已请求立即探测上游，连接结果会自动更新",
+	})
 }
 
 // refreshUpstream 手动刷新某上游 MCP 的工具列表（Req 6.4、6.5）。

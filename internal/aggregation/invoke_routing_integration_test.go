@@ -269,3 +269,127 @@ func TestInvokeRoutingFilteredToolNotForwarded(t *testing.T) {
 		t.Fatalf("调用被 API Key 屏蔽的工具不应转发到上游")
 	}
 }
+
+// irRecoveryStates 模拟 Manager 的按需恢复：selectCandidate 应在没有健康来源时保留
+// 一个兼容候选给 SessionInvoker，而不是在可用性筛选阶段直接返回不可用。
+type irRecoveryStates struct {
+	irFakeStates
+	waitCalls atomic.Int32
+	onWait    func()
+}
+
+func (s *irRecoveryStates) WaitForAvailable(ctx context.Context, _ string) error {
+	s.waitCalls.Add(1)
+	if s.onWait != nil {
+		s.onWait()
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		return nil
+	}
+}
+
+func TestInvokeRoutingUnavailableCandidateTriggersOnDemandRecovery(t *testing.T) {
+	cache := &invFakeCache{tools: map[string][]domain.ToolDef{
+		"up-a": {{OriginalName: "recoverable", Name: "recoverable"}},
+	}}
+	upstreams := &invFakeUpstreams{upstreams: []domain.Upstream{invEnabledUpstream("up-a", 0)}}
+	aliases := &invFakeAliases{byUpstream: map[string][]domain.AliasRule{}}
+	mcpFilters := &invFakeMCPFilters{byUpstream: map[string][]domain.FilterRule{}}
+	apiKeyFilters := &invFakeAPIKeyFilters{byAPIKey: map[string][]domain.FilterRule{}}
+	caller := &irFakeCaller{result: domain.ToolResult{Content: json.RawMessage(`[]`)}}
+	sessions := &irFakeSessions{sessions: map[string]ToolCaller{}}
+	states := &irRecoveryStates{irFakeStates: irFakeStates{
+		states: map[string]domain.ConnState{"up-a": domain.ConnUnavailable},
+		errs:   map[string]string{"up-a": "连接已关闭"},
+	}}
+	states.onWait = func() {
+		states.states["up-a"] = domain.ConnAvailable
+		sessions.sessions["up-a"] = caller
+	}
+
+	invoker := NewSessionInvoker(states, sessions, time.Second, nil)
+	svc := NewService(cache, domain.NewRuleEngine(), upstreams, aliases, mcpFilters, apiKeyFilters, &invFakeToolPolicies{}).SetInvoker(invoker)
+
+	if _, err := svc.InvokeTool(context.Background(), "", "recoverable", json.RawMessage(`{}`)); err != nil {
+		t.Fatalf("不可用的唯一来源恢复后应完成首次调用：%v", err)
+	}
+	if got := states.waitCalls.Load(); got != 1 {
+		t.Fatalf("应触发一次按需恢复，got=%d", got)
+	}
+	if !caller.called.Load() {
+		t.Fatal("恢复成功后应仅分发一次工具调用")
+	}
+}
+
+func TestInvokeRoutingRecoveryFailureDoesNotReserveQuota(t *testing.T) {
+	cache := &invFakeCache{tools: map[string][]domain.ToolDef{
+		"up-a": {{OriginalName: "recover_with_quota", Name: "recover_with_quota"}},
+	}}
+	limits := domain.UpstreamRateLimits{Enabled: true, PerMinute: 1, Timezone: "UTC"}
+	upstreams := &invFakeUpstreams{upstreams: []domain.Upstream{routeEnabledUpstream("up-a", 0, limits)}}
+	aliases := &invFakeAliases{byUpstream: map[string][]domain.AliasRule{}}
+	mcpFilters := &invFakeMCPFilters{byUpstream: map[string][]domain.FilterRule{}}
+	apiKeyFilters := &invFakeAPIKeyFilters{byAPIKey: map[string][]domain.FilterRule{}}
+	states := &irRecoveryStates{irFakeStates: irFakeStates{
+		states: map[string]domain.ConnState{"up-a": domain.ConnUnavailable},
+		errs:   map[string]string{"up-a": "仍不可用"},
+	}}
+	states.onWait = func() {}
+	sessions := &irFakeSessions{sessions: map[string]ToolCaller{}}
+	invoker := NewSessionInvoker(states, sessions, 20*time.Millisecond, nil)
+	counter := &memoryQuotaCounter{}
+	svc := NewService(cache, domain.NewRuleEngine(), upstreams, aliases, mcpFilters, apiKeyFilters, &invFakeToolPolicies{}).
+		SetInvoker(invoker).
+		SetQuotaManager(NewQuotaManager(counter, nil))
+
+	_, err := svc.InvokeTool(context.Background(), "", "recover_with_quota", json.RawMessage(`{}`))
+	assertUpstreamErrorCode(t, err, domain.CodeUpstreamUnavailable)
+	if got := counter.totalForWindow("minute"); got != 0 {
+		t.Fatalf("恢复失败且未分发 tools/call 时不应预占额度，got=%d", got)
+	}
+}
+
+func TestInvokeRoutingFallsBackToSecondRecoverableSource(t *testing.T) {
+	cache := &invFakeCache{tools: map[string][]domain.ToolDef{
+		"up-a": {{OriginalName: "recover_fallback", Name: "recover_fallback"}},
+		"up-b": {{OriginalName: "recover_fallback", Name: "recover_fallback"}},
+	}}
+	upstreams := &invFakeUpstreams{upstreams: []domain.Upstream{
+		invEnabledUpstream("up-a", 0),
+		invEnabledUpstream("up-b", 1),
+	}}
+	aliases := &invFakeAliases{byUpstream: map[string][]domain.AliasRule{}}
+	mcpFilters := &invFakeMCPFilters{byUpstream: map[string][]domain.FilterRule{}}
+	apiKeyFilters := &invFakeAPIKeyFilters{byAPIKey: map[string][]domain.FilterRule{}}
+	caller := &irFakeCaller{result: domain.ToolResult{Content: json.RawMessage(`[]`)}}
+	sessions := &irFakeSessions{sessions: map[string]ToolCaller{}}
+	states := &irRecoveryStates{irFakeStates: irFakeStates{
+		states: map[string]domain.ConnState{
+			"up-a": domain.ConnUnavailable,
+			"up-b": domain.ConnUnavailable,
+		},
+		errs: map[string]string{"up-a": "仍不可用", "up-b": "刚恢复"},
+	}}
+	states.onWait = func() {
+		// 第一个来源保持不可用；第二次协调到第二个来源时才恢复并提供会话。
+		if states.waitCalls.Load() == 2 {
+			states.states["up-b"] = domain.ConnAvailable
+			sessions.sessions["up-b"] = caller
+		}
+	}
+
+	invoker := NewSessionInvoker(states, sessions, time.Second, nil)
+	svc := NewService(cache, domain.NewRuleEngine(), upstreams, aliases, mcpFilters, apiKeyFilters, &invFakeToolPolicies{}).SetInvoker(invoker)
+	if _, err := svc.InvokeTool(context.Background(), "", "recover_fallback", json.RawMessage(`{}`)); err != nil {
+		t.Fatalf("首个恢复候选失败后应回退第二个候选：%v", err)
+	}
+	if !caller.called.Load() || caller.gotName != "recover_fallback" {
+		t.Fatal("第二个恢复候选成功后应仅分发一次工具调用")
+	}
+	if got := states.waitCalls.Load(); got != 2 {
+		t.Fatalf("两个恢复候选应分别协调一次，got=%d", got)
+	}
+}

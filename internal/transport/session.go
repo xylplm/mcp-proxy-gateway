@@ -35,10 +35,16 @@ const DefaultConnectTimeout = 30 * time.Second
 
 // 会话生命周期共享错误。均为统一错误模型（domain.APIError），便于上层按错误码分类处理。
 var (
+	// ErrSessionLost 表示当前底层连接已进入不可继续使用的终态。它是会话层向连接
+	// 管理器传达运行期断连的稳定哨兵错误，不对调用方泄露 SDK 的具体错误文本。
+	ErrSessionLost = errors.New("上游 MCP 会话连接已失效")
+	// ErrLifecycleWaitUnsupported 表示当前传输无法在空闲期主动报告远端断连；调用层
+	// 仍会通过 ListTools/CallTool 的连接级错误触发恢复，避免把不支持的传输误判为断开。
+	ErrLifecycleWaitUnsupported = errors.New("上游 MCP 会话不支持运行期关闭通知")
 	// ErrSessionNotConnected 表示在会话尚未成功建立连接时调用了 ListTools/CallTool。
-	ErrSessionNotConnected = domain.NewError(domain.CodeUpstreamUnavailable, "上游 MCP 会话尚未建立连接")
+	ErrSessionNotConnected = domain.WrapError(domain.CodeUpstreamUnavailable, "上游 MCP 会话尚未建立连接", ErrSessionLost)
 	// ErrSessionClosed 表示会话已关闭，不能再建立连接或收发消息。
-	ErrSessionClosed = domain.NewError(domain.CodeUpstreamUnavailable, "上游 MCP 会话已关闭")
+	ErrSessionClosed = domain.WrapError(domain.CodeUpstreamUnavailable, "上游 MCP 会话已关闭", ErrSessionLost)
 	// ErrSessionBusy 表示会话已处于已连接或正在连接状态，不能重复发起连接。
 	ErrSessionBusy = domain.NewError(domain.CodeUpstreamUnavailable, "上游 MCP 会话已建立或正在建立连接")
 	// ErrConnectTimeout 表示连接建立在配置的超时时长内未完成 MCP 初始化握手（Req 4.9）。
@@ -269,6 +275,17 @@ type mcpClientConn interface {
 	close() error
 }
 
+// SessionWaiter 是底层连接可选暴露的运行期关闭通知。SDK ClientSession 的 Wait
+// 能感知空闲 SSE/WS 等长连接被远端关闭，Manager 使用它驱动自动重连。
+type SessionWaiter interface {
+	WaitClosed(ctx context.Context) error
+}
+
+// LifecycleWaiter 是对外会话可选暴露的运行期关闭等待接口。
+type LifecycleWaiter interface {
+	WaitClosed(ctx context.Context) error
+}
+
 // baseSession 是各具体传输会话共享的基础实现，封装连接参数、凭证、超时与状态机。
 //
 // 它已实现 UpstreamSession 的 ListTools/CallTool/Close 三个方法（委托给底层 mcpClientConn），
@@ -428,6 +445,20 @@ func (s *baseSession) CallTool(ctx context.Context, name string, args json.RawMe
 		return domain.ToolResult{}, err
 	}
 	return conn.callTool(ctx, name, args)
+}
+
+// WaitClosed 转发底层可选生命周期等待能力。具体传输不支持时返回一个明确哨兵，
+// 让调用方只保留 RPC 失效检测而非错误地把会话视为已断开。
+func (s *baseSession) WaitClosed(ctx context.Context) error {
+	conn, err := s.connected()
+	if err != nil {
+		return err
+	}
+	waiter, ok := conn.(SessionWaiter)
+	if !ok {
+		return ErrLifecycleWaitUnsupported
+	}
+	return waiter.WaitClosed(ctx)
 }
 
 // Close 关闭会话：置为终态并关闭底层连接（若已建立）。重复调用安全（幂等）。

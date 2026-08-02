@@ -37,3 +37,9 @@ Thumbs.db
 __debug_bin.exe*
 /.cache
 /.zcode/plans
+
+# 本地测试运行时的独立 Go 缓存。
+/.tmp-gocache/
+/.tmp-gotmp/
+/.tmp-gocache-race/
+/.tmp-gotmp-race/

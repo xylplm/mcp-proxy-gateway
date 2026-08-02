@@ -5,7 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
+	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -39,13 +44,10 @@ func newMCPClient() *mcp.Client {
 	return mcp.NewClient(&mcp.Implementation{Name: clientName, Version: clientVersion}, nil)
 }
 
-// connectTimeoutOf 返回为给定上游应施加的连接建立超时（Req 4.9）。
-//
-// 连接建立超时（connect_timeout_s，默认 30s）属于全局连接配置，当前不随单个
-// domain.UpstreamConfig 下发，故此处返回 0，由 newBaseSession 回退到 DefaultConnectTimeout。
-// 保留该函数作为统一接入点：后续若工厂获得连接配置，仅需在此处改为读取配置值即可。
+// connectTimeoutOf 返回当前全局连接建立超时。超时由 app 层的提供器注入，传输层
+// 不直接依赖 config 包；读取时仅用于创建新会话，不会中断已有稳定连接。
 func connectTimeoutOf(_ domain.UpstreamConfig) time.Duration {
-	return 0
+	return currentConnectTimeout()
 }
 
 // connectWithTimeout 使用给定的 mcp.Transport 建立连接并完成 initialize 握手，
@@ -91,7 +93,9 @@ func connectWithTimeout(ctx context.Context, transport mcp.Transport) (mcpClient
 			cancel()
 			return nil, res.err
 		}
-		return &sdkClientConn{session: res.session, cancel: cancel}, nil
+		conn := &sdkClientConn{session: res.session, cancel: cancel, done: make(chan struct{})}
+		conn.watchSession()
+		return conn, nil
 	case <-ctx.Done():
 		// 连接建立超时或被取消：中止仍在进行的握手。
 		cancel()
@@ -116,6 +120,54 @@ func connectWithTimeout(ctx context.Context, transport mcp.Transport) (mcpClient
 type sdkClientConn struct {
 	session *mcp.ClientSession
 	cancel  context.CancelFunc
+
+	// done 在 SDK 会话因远端关闭、传输终止或显式 Close 结束时关闭；waitErr 保存
+	// Session.Wait 的最终原因。baseSession 将其作为可选生命周期事件暴露给 Manager。
+	done      chan struct{}
+	waitErr   error
+	waitMu    sync.RWMutex
+	closeOnce sync.Once
+}
+
+// watchSession 在独立协程中等待 SDK 会话终止。它不参与每次 RPC，因而能感知空闲期
+// 的 SSE/WS 远端断连；done 只关闭一次，Close 与远端断开并发时也不会发生双关闭。
+func (c *sdkClientConn) watchSession() {
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				safego.LogRecovered(nil, "上游 MCP SDK 会话等待 panic 已恢复", recovered)
+				c.waitMu.Lock()
+				c.waitErr = fmt.Errorf("上游 MCP 会话等待异常：%v", recovered)
+				c.waitMu.Unlock()
+				close(c.done)
+			}
+		}()
+		err := c.session.Wait()
+		c.waitMu.Lock()
+		c.waitErr = err
+		c.waitMu.Unlock()
+		close(c.done)
+	}()
+}
+
+// WaitClosed 等待底层 SDK 会话结束。对 Manager 而言，显式 Close 导致的取消由其
+// 自身 ctx 优先处理；远端断开则返回稳定的会话失效语义。
+func (c *sdkClientConn) WaitClosed(ctx context.Context) error {
+	if c == nil || c.done == nil {
+		return ErrSessionLost
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-c.done:
+		c.waitMu.RLock()
+		err := c.waitErr
+		c.waitMu.RUnlock()
+		if err == nil {
+			return ErrSessionLost
+		}
+		return fmt.Errorf("%w: %v", ErrSessionLost, err)
+	}
 }
 
 // listTools 拉取上游工具列表，按需翻页汇总，并将每个 mcp.Tool 映射为 domain.ToolDef（Req 6）。
@@ -167,12 +219,16 @@ func (c *sdkClientConn) callTool(ctx context.Context, name string, args json.Raw
 	return domain.ToolResult{IsError: res.IsError, Content: content}, nil
 }
 
-// close 关闭底层会话并取消连接生命周期上下文。重复调用安全（由 SDK 会话与 cancel 自身保证幂等）。
+// close 关闭底层会话并取消连接生命周期上下文。Close 会让 Session.Wait 返回，
+// 由 watchSession 统一关闭 done；closeOnce 确保重复关闭不会与 SDK 会话争用。
 func (c *sdkClientConn) close() error {
-	err := c.session.Close()
-	if c.cancel != nil {
-		c.cancel()
-	}
+	var err error
+	c.closeOnce.Do(func() {
+		err = c.session.Close()
+		if c.cancel != nil {
+			c.cancel()
+		}
+	})
 	return err
 }
 
@@ -214,16 +270,50 @@ func marshalContent(content []mcp.Content) (json.RawMessage, error) {
 	return json.Marshal(content)
 }
 
-// wrapUpstreamError 将 SDK 调用过程中的错误归一化为统一错误模型：
-// 因上下文超时导致的映射为上游调用超时，其余映射为上游不可用。
+// IsSessionLost 判断错误是否意味着当前底层会话不可继续使用。它只识别稳定的
+// 网络连接终态、会话终态和 SDK 的关闭/重连耗尽语义；普通业务错误、MCP IsError
+// 结果和调用超时不会触发会话淘汰，避免错误地中断仍可使用的连接。
+func IsSessionLost(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrSessionLost) || errors.Is(err, mcp.ErrSessionMissing) || errors.Is(err, io.EOF) ||
+		errors.Is(err, net.ErrClosed) || errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.EPIPE) {
+		return true
+	}
+	// 不将裸 *net.OpError 一律视为终态：Streamable HTTP 的单次请求可能临时被
+	// 代理拒绝，但服务端逻辑会话和独立 SSE 流依然健康。明确的系统终态已在上方
+	// 通过 errors.Is 识别；其余情况交给本次调用返回，不主动拆掉会话。
+	// 当前 MCP SDK 没有导出 standalone SSE stream 的具体错误类型；此处只把 SDK
+	// 明确表述的会话关闭或重连耗尽作为兼容兜底，避免把任意上游业务文本误判为断线。
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "client is closing") ||
+		strings.Contains(message, "connection closed") ||
+		strings.Contains(message, "failed to reconnect") ||
+		strings.Contains(message, "connection reset by peer") ||
+		strings.Contains(message, "broken pipe")
+}
+
+// wrapUpstreamError 将 SDK 调用过程中的错误归一化为统一错误模型，并保留根因。
+// 因调用上下文超时导致的映射为上游调用超时；确认会话终态时附加 ErrSessionLost，
+// 供连接管理器安全地淘汰失效 session。
 func wrapUpstreamError(err error) error {
 	if err == nil {
 		return nil
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		return domain.NewError(domain.CodeUpstreamTimeout, fmt.Sprintf("上游 MCP 调用超时：%v", err))
+		return domain.WrapError(domain.CodeUpstreamTimeout, fmt.Sprintf("上游 MCP 调用超时：%v", err), err)
 	}
-	return domain.NewError(domain.CodeUpstreamUnavailable, fmt.Sprintf("上游 MCP 调用失败：%v", err))
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return domain.WrapError(domain.CodeUpstreamTimeout, fmt.Sprintf("上游 MCP 调用超时：%v", err), err)
+	}
+	cause := err
+	if IsSessionLost(err) {
+		cause = fmt.Errorf("%w: %v", ErrSessionLost, err)
+	}
+	return domain.WrapError(domain.CodeUpstreamUnavailable, fmt.Sprintf("上游 MCP 调用失败：%v", err), cause)
 }
 
 // newAuthHTTPClient 构造一个在每个请求上附带自定义请求头与鉴权凭证的 HTTP 客户端（Req 4.7）。

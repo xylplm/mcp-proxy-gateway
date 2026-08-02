@@ -142,7 +142,7 @@ func (f *fakeToolSession) Close() error { f.closed = true; return nil }
 
 // fakeFactory 构造预置的 fakeToolSession。
 type fakeFactory struct {
-	sess *fakeToolSession
+	sess transport.UpstreamSession
 	err  error
 }
 
@@ -236,5 +236,109 @@ func TestUpstreamTesterReturnsStructuredFailure(t *testing.T) {
 	}
 	if !sess.closed {
 		t.Fatal("连接失败后也应关闭临时会话")
+	}
+}
+
+func TestSessionDialerBrokenOldConnectionDoesNotRemoveReplacement(t *testing.T) {
+	oldSession := &fakeToolSession{}
+	newSession := &fakeToolSession{}
+	d := newSessionDialer(fakeFactory{sess: oldSession})
+
+	oldRaw, err := d.Dial(context.Background(), "u-generation", domain.UpstreamConfig{})
+	if err != nil {
+		t.Fatalf("首次拨号失败：%v", err)
+	}
+	old := oldRaw.(*dialedConn)
+	d.register("u-generation", newDialedConn(d, "u-generation", newSession))
+
+	old.markBroken(transport.ErrSessionLost)
+	caller, ok := d.Session("u-generation")
+	if !ok || caller == nil {
+		t.Fatal("旧连接迟到失效不应注销已替换的新会话")
+	}
+	if err := old.Close(); err != nil {
+		t.Fatalf("关闭旧连接失败：%v", err)
+	}
+	caller, ok = d.Session("u-generation")
+	if !ok || caller == nil {
+		t.Fatal("旧连接关闭不应删除已替换的新会话")
+	}
+}
+
+type lostSession struct {
+	fakeToolSession
+}
+
+func (s *lostSession) CallTool(context.Context, string, json.RawMessage) (domain.ToolResult, error) {
+	return domain.ToolResult{}, transport.ErrSessionLost
+}
+
+func TestSessionDialerReportsRuntimeSessionLossOnce(t *testing.T) {
+	sess := &lostSession{}
+	d := newSessionDialer(fakeFactory{sess: &sess.fakeToolSession})
+	// 使用直接构造，确保 CallTool 返回明确的会话失效错误。
+	conn := newDialedConn(d, "u-lost", sess)
+	d.register("u-lost", conn)
+
+	if _, err := conn.CallTool(context.Background(), "tool", json.RawMessage(`{}`)); err == nil {
+		t.Fatal("会话失效调用应返回错误")
+	}
+	if _, ok := d.Session("u-lost"); ok {
+		t.Fatal("运行期会话失效后应立即从注册表移除")
+	}
+	waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := conn.Wait(waitCtx); !errors.Is(err, transport.ErrSessionLost) {
+		t.Fatalf("Wait 应收到会话失效原因，got=%v", err)
+	}
+}
+
+type lifecycleFakeSession struct {
+	fakeToolSession
+	closed chan error
+}
+
+func (s *lifecycleFakeSession) WaitClosed(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case err := <-s.closed:
+		return err
+	}
+}
+
+func TestSessionDialerDetectsIdleLifecycleClosure(t *testing.T) {
+	sess := &lifecycleFakeSession{closed: make(chan error, 1)}
+	d := newSessionDialer(fakeFactory{sess: &sess.fakeToolSession})
+	conn := newDialedConn(d, "u-idle-close", sess)
+	d.register("u-idle-close", conn)
+
+	// 模拟没有任何 tools/list 或 tools/call 时，底层长连接被远端关闭。
+	sess.closed <- transport.ErrSessionLost
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := conn.Wait(ctx); !errors.Is(err, transport.ErrSessionLost) {
+		t.Fatalf("空闲期关闭应反馈给 Manager 等待器，got=%v", err)
+	}
+}
+
+func TestSessionDialerPreDispatchRejectsBrokenSessionBeforeQuota(t *testing.T) {
+	sess := &fakeToolSession{}
+	d := newSessionDialer(fakeFactory{sess: sess})
+	conn := newDialedConn(d, "u-pre-dispatch", sess)
+	d.register("u-pre-dispatch", conn)
+	conn.markBroken(transport.ErrSessionLost)
+
+	reserved := false
+	_, err := conn.CallToolWithPreDispatch(context.Background(), "write", json.RawMessage(`{}`), func(context.Context) error {
+		reserved = true
+		return nil
+	})
+	var preErr *aggregation.PreDispatchError
+	if !errors.As(err, &preErr) {
+		t.Fatalf("失效连接应在预占前返回可回退错误，got=%v", err)
+	}
+	if reserved {
+		t.Fatal("已失效会话不得执行额度预占")
 	}
 }

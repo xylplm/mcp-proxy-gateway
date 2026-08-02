@@ -1106,3 +1106,179 @@ func TestConnectionLoopRecoversDialPanic(t *testing.T) {
 		t.Fatalf("panic 应记录为连接失败原因，实际=%q", lastErr)
 	}
 }
+
+// recoveryDialer 可先按失败序列拨号，随后成功创建受控连接；用于验证长期不可用
+// 时仍低频探测，以及多个调用等待同一连接循环的单飞语义。
+type recoveryDialer struct {
+	mu       sync.Mutex
+	failures int
+	calls    int
+	dialCh   chan struct{}
+	conn     *reconnectTestConn
+}
+
+func newRecoveryDialer(failures int) *recoveryDialer {
+	return &recoveryDialer{failures: failures, dialCh: make(chan struct{}, 32)}
+}
+
+func (d *recoveryDialer) Dial(ctx context.Context, _ string, _ domain.UpstreamConfig) (Conn, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	d.mu.Lock()
+	d.calls++
+	call := d.calls
+	if d.failures > 0 {
+		d.failures--
+		d.mu.Unlock()
+		d.dialCh <- struct{}{}
+		return nil, errors.New("上游暂不可用")
+	}
+	conn := &reconnectTestConn{closed: make(chan struct{})}
+	d.conn = conn
+	d.mu.Unlock()
+	d.dialCh <- struct{}{}
+	_ = call
+	return conn, nil
+}
+
+func (d *recoveryDialer) callCount() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.calls
+}
+
+func TestSuspendedConnectionKeepsLowFrequencyProbing(t *testing.T) {
+	cfg := testValidConfig()
+	row := testUpstreamRowWithID("up-sustained-recovery")
+	row.Config = cfg
+	repo := &testUpstreamRepo{listRows: []store.UpstreamRow{row}}
+	dialer := newRecoveryDialer(2)
+	m := New(repo, &testToolCacheCleaner{}, nil, nil,
+		WithDialer(dialer),
+		WithRetryPolicy(RetryPolicy{
+			InitialBackoff:          10 * time.Millisecond,
+			MaxBackoff:              20 * time.Millisecond,
+			Multiplier:              2,
+			FailureThreshold:        1,
+			DemandReconnectCooldown: time.Second,
+			DemandReconnectWait:     50 * time.Millisecond,
+		}),
+	)
+	defer m.Shutdown()
+
+	if err := m.RestoreConnections(context.Background()); err != nil {
+		t.Fatalf("恢复连接不应失败：%v", err)
+	}
+	waitManagerState(t, m, "up-sustained-recovery", domain.ConnSuspended)
+
+	// 阈值为 1 后仍会在 MaxBackoff 到期时继续第二次探测，而不是永久等待人工重连。
+	select {
+	case <-dialer.dialCh:
+	case <-time.After(time.Second):
+		t.Fatal("等待首次失败拨号超时")
+	}
+	select {
+	case <-dialer.dialCh:
+	case <-time.After(time.Second):
+		t.Fatal("suspended 状态应在最大退避后继续低频探测")
+	}
+	waitManagerState(t, m, "up-sustained-recovery", domain.ConnSuspended)
+
+	// 第三轮拨号成功，上游无需任何人工操作即可恢复可用。
+	select {
+	case <-dialer.dialCh:
+	case <-time.After(time.Second):
+		t.Fatal("等待自动恢复拨号超时")
+	}
+	waitManagerState(t, m, "up-sustained-recovery", domain.ConnAvailable)
+	if got := dialer.callCount(); got != 3 {
+		t.Fatalf("期望持续探测共拨号 3 次，实际 %d", got)
+	}
+}
+
+func TestWaitForAvailableCoalescesConcurrentDemandReconnect(t *testing.T) {
+	cfg := testValidConfig()
+	row := testUpstreamRowWithID("up-demand-singleflight")
+	row.Config = cfg
+	repo := &testUpstreamRepo{listRows: []store.UpstreamRow{row}}
+	dialer := newRecoveryDialer(1)
+	m := New(repo, &testToolCacheCleaner{}, nil, nil,
+		WithDialer(dialer),
+		WithRetryPolicy(RetryPolicy{
+			InitialBackoff:          time.Hour,
+			MaxBackoff:              time.Hour,
+			Multiplier:              2,
+			FailureThreshold:        10,
+			DemandReconnectCooldown: time.Second,
+			DemandReconnectWait:     time.Second,
+		}),
+	)
+	defer m.Shutdown()
+
+	if err := m.RestoreConnections(context.Background()); err != nil {
+		t.Fatalf("恢复连接不应失败：%v", err)
+	}
+	select {
+	case <-dialer.dialCh:
+	case <-time.After(time.Second):
+		t.Fatal("等待首次失败拨号超时")
+	}
+	waitManagerState(t, m, "up-demand-singleflight", domain.ConnUnavailable)
+
+	const waiters = 32
+	results := make(chan error, waiters)
+	for i := 0; i < waiters; i++ {
+		go func() {
+			results <- m.WaitForAvailable(context.Background(), "up-demand-singleflight")
+		}()
+	}
+	for i := 0; i < waiters; i++ {
+		if err := <-results; err != nil {
+			t.Fatalf("并发等待自动恢复不应失败：%v", err)
+		}
+	}
+	waitManagerState(t, m, "up-demand-singleflight", domain.ConnAvailable)
+	if got := dialer.callCount(); got != 2 {
+		t.Fatalf("并发按需恢复应合并为一次额外拨号，实际拨号 %d 次", got)
+	}
+}
+
+func TestWaitForAvailableRespectsWaitBudget(t *testing.T) {
+	cfg := testValidConfig()
+	row := testUpstreamRowWithID("up-demand-timeout")
+	row.Config = cfg
+	repo := &testUpstreamRepo{listRows: []store.UpstreamRow{row}}
+	dialer := newRecoveryDialer(100)
+	m := New(repo, &testToolCacheCleaner{}, nil, nil,
+		WithDialer(dialer),
+		WithRetryPolicy(RetryPolicy{
+			InitialBackoff:          time.Hour,
+			MaxBackoff:              time.Hour,
+			Multiplier:              2,
+			FailureThreshold:        10,
+			DemandReconnectCooldown: time.Second,
+			DemandReconnectWait:     20 * time.Millisecond,
+		}),
+	)
+	defer m.Shutdown()
+
+	if err := m.RestoreConnections(context.Background()); err != nil {
+		t.Fatalf("恢复连接不应失败：%v", err)
+	}
+	select {
+	case <-dialer.dialCh:
+	case <-time.After(time.Second):
+		t.Fatal("等待首次失败拨号超时")
+	}
+	waitManagerState(t, m, "up-demand-timeout", domain.ConnUnavailable)
+
+	started := time.Now()
+	err := m.WaitForAvailable(context.Background(), "up-demand-timeout")
+	if err == nil {
+		t.Fatal("持续不可用时按需等待应返回错误")
+	}
+	if elapsed := time.Since(started); elapsed > 300*time.Millisecond {
+		t.Fatalf("按需等待不应长期堆积，实际等待 %v", elapsed)
+	}
+}

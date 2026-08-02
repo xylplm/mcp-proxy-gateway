@@ -76,12 +76,16 @@ export interface ConnectionConfig {
   connect_timeout_s: number
   /** 初始退避秒数，范围 1-60，默认 5。 */
   retry_initial_backoff_s: number
-  /** 退避倍数，需大于等于 1，默认 5。 */
+  /** 退避倍数，需大于等于 1，默认 2。 */
   retry_multiplier: number
-  /** 退避上限秒数，范围 1-86400，默认 3600。 */
+  /** 退避上限秒数，范围 1-86400，默认 300（5 分钟）。 */
   retry_max_backoff_s: number
-  /** 连续失败阈值，范围 1-100，默认 10。 */
+  /** 连续失败阈值，范围 1-100，达到后进入低频持续探测。 */
   failure_threshold: number
+  /** 真实调用触发提前探测的最小间隔，范围 1-300，默认 5。 */
+  demand_reconnect_cooldown_s: number
+  /** 单次工具调用等待共享重连结果的上限，范围 1-30，默认 8。 */
+  demand_reconnect_wait_s: number
 }
 
 /** 聚合调用配置（对应后端 AggregationConfig）。 */

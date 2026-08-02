@@ -35,7 +35,8 @@ const (
 	ConnAvailable ConnState = "available"
 	// ConnUnavailable 表示连接当前不可用（断开或建立失败）。
 	ConnUnavailable ConnState = "unavailable"
-	// ConnSuspended 表示连续失败达到阈值后暂停自动重试。
+	// ConnSuspended 表示连续失败达到阈值后的降频恢复状态。该状态仍会按最大退避间隔
+	// 持续探测上游，避免临时故障恢复后必须由管理员手动干预。
 	ConnSuspended ConnState = "suspended"
 )
 
@@ -270,6 +271,10 @@ type Upstream struct {
 	State ConnState `json:"state"`
 	// LastError 为最近一次连接失败的原因（如有）。
 	LastError string `json:"lastError,omitempty"`
+	// FailureCount 为当前连续连接失败次数；连接成功后清零。该字段仅为运行期观测数据。
+	FailureCount int `json:"failureCount,omitempty"`
+	// NextRetryAt 为后台下一次连接探测的计划时间。连接可用或正在拨号时为空。
+	NextRetryAt *time.Time `json:"nextRetryAt,omitempty"`
 	// CreatedAt 为创建时间。
 	CreatedAt time.Time `json:"createdAt"`
 	// UpdatedAt 为最近更新时间。

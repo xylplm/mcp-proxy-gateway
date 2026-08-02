@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -402,5 +404,39 @@ func TestIntegrationUnreachableConnectFails(t *testing.T) {
 		// 连接被拒绝（不可用）或超时均为可接受的失败标记。
 	default:
 		t.Fatalf("不可达地址应返回 UPSTREAM_UNAVAILABLE 或 UPSTREAM_TIMEOUT，实际=%s err=%v", apiErr.Code, err)
+	}
+}
+
+func TestIsSessionLostClassifiesOnlyConnectionTerminalErrors(t *testing.T) {
+	if !IsSessionLost(ErrSessionLost) {
+		t.Fatal("显式会话终态错误应被识别")
+	}
+	if !IsSessionLost(fmt.Errorf("sdk: client is closing: failed to reconnect")) {
+		t.Fatal("SDK 明确关闭/重连耗尽语义应被识别")
+	}
+	if !IsSessionLost(mcp.ErrSessionMissing) {
+		t.Fatal("Streamable HTTP 服务端会话缺失应被识别为会话终态")
+	}
+	if IsSessionLost(context.DeadlineExceeded) {
+		t.Fatal("调用超时不应被当作会话终态")
+	}
+	if IsSessionLost(errors.New("工具参数不合法")) {
+		t.Fatal("业务错误不应被当作会话终态")
+	}
+	if IsSessionLost(&net.OpError{Op: "read", Err: errors.New("瞬态代理错误")}) {
+		t.Fatal("裸网络操作错误不应在缺少终态证据时拆掉逻辑会话")
+	}
+}
+
+func TestStdioClientConnForwardsLifecycleWaiter(t *testing.T) {
+	inner := &sdkClientConn{done: make(chan struct{})}
+	waitErr := errors.New("stdio child exited")
+	inner.waitErr = waitErr
+	close(inner.done)
+	wrapped := &stdioClientConn{inner: inner}
+
+	err := wrapped.WaitClosed(context.Background())
+	if !errors.Is(err, ErrSessionLost) {
+		t.Fatalf("stdio 装饰器应透传 SDK 会话终态，got=%v", err)
 	}
 }

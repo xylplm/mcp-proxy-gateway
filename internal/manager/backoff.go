@@ -16,20 +16,27 @@ type RetryPolicy struct {
 	MaxBackoff time.Duration
 	// Multiplier 为退避倍数，每次重试将上一次退避乘以该倍数（Req 5.1）。
 	Multiplier int
-	// FailureThreshold 为连续失败阈值，达到后转 suspended 暂停自动重试（Req 5.6）。
+	// FailureThreshold 为连续失败阈值。达到后进入 suspended 降频状态，但仍会按最大
+	// 退避间隔持续探测，确保长期临时故障可自行恢复。
 	FailureThreshold int
+	// DemandReconnectCooldown 为真实调用提前唤醒重连的最短间隔，避免高峰调用触发重连风暴。
+	DemandReconnectCooldown time.Duration
+	// DemandReconnectWait 为单次调用等待共享重连结果的上限；实际等待仍受调用上下文约束。
+	DemandReconnectWait time.Duration
 }
 
 // DefaultRetryPolicy 返回与设计默认值一致的退避策略。
 //
-// 对应 config 默认值：连接超时 30s、初始退避 5s、退避上限 3600s、倍数 5、失败阈值 10。
+// 对应当前推荐默认值：连接超时 30s、初始退避 5s、退避上限 5 分钟、倍数 2、失败阈值 10。
 func DefaultRetryPolicy() RetryPolicy {
 	return RetryPolicy{
-		ConnectTimeout:   30 * time.Second,
-		InitialBackoff:   5 * time.Second,
-		MaxBackoff:       3600 * time.Second,
-		Multiplier:       5,
-		FailureThreshold: 10,
+		ConnectTimeout:          30 * time.Second,
+		InitialBackoff:          5 * time.Second,
+		MaxBackoff:              5 * time.Minute,
+		Multiplier:              2,
+		FailureThreshold:        10,
+		DemandReconnectCooldown: 5 * time.Second,
+		DemandReconnectWait:     8 * time.Second,
 	}
 }
 
@@ -46,13 +53,19 @@ func (p RetryPolicy) normalize() RetryPolicy {
 		p.InitialBackoff = 5 * time.Second
 	}
 	if p.MaxBackoff <= 0 {
-		p.MaxBackoff = 3600 * time.Second
+		p.MaxBackoff = 5 * time.Minute
 	}
 	if p.Multiplier < 1 {
-		p.Multiplier = 5
+		p.Multiplier = 2
 	}
 	if p.FailureThreshold < 1 {
 		p.FailureThreshold = 10
+	}
+	if p.DemandReconnectCooldown <= 0 {
+		p.DemandReconnectCooldown = 5 * time.Second
+	}
+	if p.DemandReconnectWait <= 0 {
+		p.DemandReconnectWait = 8 * time.Second
 	}
 	return p
 }

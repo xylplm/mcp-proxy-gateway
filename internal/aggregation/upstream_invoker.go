@@ -41,6 +41,13 @@ type ConnStateProvider interface {
 	GetState(upstreamID string) (domain.ConnState, string)
 }
 
+// RecoveryCoordinator 是可选的按需恢复协调能力。实现方必须保证同一上游在任意时刻
+// 仅有一条实际拨号流程；调用方只等待共享结果，不直接创建连接。
+type RecoveryCoordinator interface {
+	// WaitForAvailable 请求提前探测并在 ctx 预算内等待上游恢复可用。
+	WaitForAvailable(ctx context.Context, upstreamID string) error
+}
+
 // ToolCaller 表示一条可向上游转发工具调用的会话能力（窄接口，Req 10.3）。
 //
 // 仅声明聚合转发实际需要的 CallTool。transport.UpstreamSession 的同名方法签名一致，
@@ -65,14 +72,20 @@ type SessionInvoker struct {
 	states ConnStateProvider
 	// sessions 为按上游获取可调用会话的能力。
 	sessions SessionProvider
+	// recovery 为可选按需恢复协调器；通常由 *manager.Manager 提供。
+	recovery RecoveryCoordinator
 	// callTimeout 为单次上游调用的超时时长（Req 10.8）。
 	callTimeout time.Duration
 	// log 为结构化日志器，记录上游调用的失败源头（不可用/无会话/超时/取消）。
 	log *slog.Logger
 }
 
-// 编译期断言：SessionInvoker 必须满足 UpstreamInvoker 接口契约。
-var _ UpstreamInvoker = (*SessionInvoker)(nil)
+// 编译期断言：SessionInvoker 必须满足上游调用和恢复感知接口契约。
+var (
+	_ UpstreamInvoker      = (*SessionInvoker)(nil)
+	_ RecoveryAwareInvoker = (*SessionInvoker)(nil)
+	_ PreDispatchInvoker   = (*SessionInvoker)(nil)
+)
 
 // NewSessionInvoker 构造真实的上游调用转发器。
 //
@@ -87,12 +100,16 @@ func NewSessionInvoker(states ConnStateProvider, sessions SessionProvider, callT
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &SessionInvoker{
+	invoker := &SessionInvoker{
 		states:      states,
 		sessions:    sessions,
 		callTimeout: callTimeout,
 		log:         logger,
 	}
+	if recovery, ok := states.(RecoveryCoordinator); ok {
+		invoker.recovery = recovery
+	}
+	return invoker
 }
 
 // CallUpstream 把一次工具调用转发到指定上游 MCP（Req 10.3/10.5/10.8）。
@@ -103,31 +120,73 @@ func NewSessionInvoker(states ConnStateProvider, sessions SessionProvider, callT
 //  3. 受超时约束转发：以 context.WithTimeout 约束调用，超时则中止、不返回部分结果并返回
 //     UPSTREAM_TIMEOUT（Req 10.8）；成功或上游报告的错误结果原样返回（Req 10.3）。
 func (in *SessionInvoker) CallUpstream(ctx context.Context, upstreamID, originalName string, args json.RawMessage) (domain.ToolResult, error) {
-	// 步骤 1：连接可用性判定（Req 10.5）。非 available 不发起任何上游调用。
-	state, lastErr := in.states.GetState(upstreamID)
-	if state != domain.ConnAvailable {
-		msg := "上游 MCP 连接不可用"
-		if lastErr != "" {
-			msg = msg + "：" + lastErr
-		}
-		in.log.Warn("上游调用失败：连接不可用", "upstreamID", upstreamID, "originalName", originalName, "state", state, "lastError", lastErr)
-		return domain.ToolResult{}, domain.NewError(domain.CodeUpstreamUnavailable, msg)
-	}
+	return in.callUpstream(ctx, upstreamID, originalName, args, nil)
+}
 
-	// 步骤 2：获取可调用会话；无会话视为不可用（Req 10.5）。
-	session, ok := in.sessions.Session(upstreamID)
-	if !ok || session == nil {
-		in.log.Warn("上游调用失败：无可用会话", "upstreamID", upstreamID, "originalName", originalName)
-		return domain.ToolResult{}, domain.NewError(domain.CodeUpstreamUnavailable, "上游 MCP 当前无可用会话")
-	}
+// CallUpstreamWithPreDispatch 在会话已确认可用、但尚未调用 tools/call 时执行回调。
+// 该钩子仅用于恢复候选的额度预占：恢复失败时不会执行回调，也不会消耗配额。
+func (in *SessionInvoker) CallUpstreamWithPreDispatch(
+	ctx context.Context,
+	upstreamID, originalName string,
+	args json.RawMessage,
+	beforeDispatch func(context.Context) error,
+) (domain.ToolResult, error) {
+	return in.callUpstream(ctx, upstreamID, originalName, args, beforeDispatch)
+}
 
-	// 步骤 3：受超时约束转发调用（Req 10.8）。
+func (in *SessionInvoker) callUpstream(
+	ctx context.Context,
+	upstreamID, originalName string,
+	args json.RawMessage,
+	beforeDispatch func(context.Context) error,
+) (domain.ToolResult, error) {
+	// 整个恢复等待和真实 tools/call 共用一份调用超时预算，避免出现“等待 30 秒后
+	// 再调用 30 秒”的双倍等待。尚未把工具请求发送到上游时，等待恢复后首次发送是安全的。
 	timeout := in.callTimeout
 	if timeout <= 0 {
 		timeout = DefaultUpstreamCallTimeout
 	}
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+
+	// 连接不可用或注册表无会话时，向 Manager 请求一次单飞的按需恢复，并短暂等待。
+	// 不具备协调器的测试/兼容接线保持原有快速拒绝语义。
+	state, lastErr := in.states.GetState(upstreamID)
+	session, ok := in.sessions.Session(upstreamID)
+	if state != domain.ConnAvailable || !ok || session == nil {
+		if in.recovery != nil {
+			if err := in.recovery.WaitForAvailable(callCtx, upstreamID); err != nil {
+				in.log.Warn("上游调用等待自动恢复失败", "upstreamID", upstreamID, "originalName", originalName, "state", state, "lastError", lastErr, "error", err)
+				if errors.Is(err, context.DeadlineExceeded) || errors.Is(callCtx.Err(), context.DeadlineExceeded) {
+					err = domain.NewError(domain.CodeUpstreamTimeout, "上游 MCP 调用超时")
+				}
+				return domain.ToolResult{}, in.preDispatchFailure(beforeDispatch, err)
+			}
+			state, lastErr = in.states.GetState(upstreamID)
+			session, ok = in.sessions.Session(upstreamID)
+		}
+		if state != domain.ConnAvailable || !ok || session == nil {
+			msg := "上游 MCP 连接不可用"
+			if lastErr != "" {
+				msg += "：" + lastErr
+			}
+			in.log.Warn("上游调用失败：连接不可用", "upstreamID", upstreamID, "originalName", originalName, "state", state, "lastError", lastErr)
+			return domain.ToolResult{}, in.preDispatchFailure(beforeDispatch, domain.NewError(domain.CodeUpstreamUnavailable, msg))
+		}
+	}
+
+	// 会话存在但未实际发送调用时被替换的概率极低；CallTool 自身会报告连接级错误，
+	// 由受管 session 触发后台恢复。本次请求不透明重放，避免有副作用工具重复执行。
+	// 若会话本身支持受管的“准备后立即发送”，让它在持有会话活跃租约期间执行
+	// 额度预占，避免预占完成到 CallTool 之间被生命周期关闭。
+	if beforeDispatch != nil {
+		if managed, ok := session.(PreDispatchToolCaller); ok {
+			return managed.CallToolWithPreDispatch(callCtx, originalName, args, beforeDispatch)
+		}
+		if err := beforeDispatch(callCtx); err != nil {
+			return domain.ToolResult{}, &PreDispatchError{Err: err}
+		}
+	}
 
 	// outcome 承载上游调用的返回值，经缓冲通道在协程间传递。
 	type outcome struct {
@@ -185,6 +244,11 @@ func (in *SessionInvoker) CallUpstream(ctx context.Context, upstreamID, original
 	}
 }
 
+// SupportsOnDemandRecovery 报告当前调用器是否具备由 Manager 协调的单飞恢复能力。
+func (in *SessionInvoker) SupportsOnDemandRecovery() bool {
+	return in != nil && in.recovery != nil
+}
+
 // UpstreamAvailable 返回指定上游当前是否具备可调用条件。
 func (in *SessionInvoker) UpstreamAvailable(upstreamID string) bool {
 	if in == nil || in.states == nil || in.sessions == nil {
@@ -196,4 +260,12 @@ func (in *SessionInvoker) UpstreamAvailable(upstreamID string) bool {
 	}
 	session, ok := in.sessions.Session(upstreamID)
 	return ok && session != nil
+}
+
+// preDispatchFailure 将尚未执行 CallTool 时的恢复失败标记为可安全回退的错误。
+func (in *SessionInvoker) preDispatchFailure(beforeDispatch func(context.Context) error, err error) error {
+	if beforeDispatch == nil || err == nil {
+		return err
+	}
+	return &PreDispatchError{Err: err}
 }
