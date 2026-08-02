@@ -281,7 +281,7 @@ layer(base);
 }
 
 .app-tooltip {
-  pointer-events: none;
+  pointer-events: auto;
   position: fixed;
   z-index: var(--z-index-999999);
   max-width: min(280px, calc(100vw - 16px));
@@ -298,6 +298,7 @@ layer(base);
   transition:
     opacity 150ms ease,
     transform 150ms ease;
+  user-select: text;
   white-space: nowrap;
 }
 
@@ -309,7 +310,7 @@ layer(base);
 /* 长文本（如工具描述）换行展示，覆盖默认的单行截断。 */
 .app-tooltip.is-wrap {
   white-space: normal;
-  word-break: break-word;
+  overflow-wrap: anywhere;
   max-width: min(360px, calc(100vw - 16px));
 }
 

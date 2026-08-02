@@ -138,6 +138,9 @@ const onboardingUpstream = ref<Upstream | null>(null)
 
 let statusPollTimer: number | undefined
 let statusPollingUntil = 0
+let recoveryClockTimer: number | undefined
+const recoveryClock = ref(Date.now())
+const recoverySchedules = new Map<string, { retryAt: number; startedAt: number }>()
 
 const normalizedSearchKeyword = computed(() => searchKeyword.value.trim().toLowerCase())
 const hasSearchKeyword = computed(() => normalizedSearchKeyword.value !== '')
@@ -562,6 +565,7 @@ async function loadUpstreams(showLoading = true): Promise<void> {
     const list = await listUpstreams()
     list.sort((a, b) => a.config.sortOrder - b.config.sortOrder)
     upstreams.value = list
+    syncRecoverySchedules(list)
     await loadToolCounts(list)
     if (currentPage.value > totalPages.value) currentPage.value = totalPages.value
     if (hasRecoveringUpstream.value) ensureStatusPolling(60_000)
@@ -573,7 +577,10 @@ async function loadUpstreams(showLoading = true): Promise<void> {
 }
 
 onMounted(loadUpstreams)
-onUnmounted(stopStatusPolling)
+onUnmounted(() => {
+  stopStatusPolling()
+  stopRecoveryClock()
+})
 
 async function loadToolCounts(list: Upstream[]): Promise<void> {
   const next = { ...toolCounts.value }
@@ -609,6 +616,39 @@ function stopStatusPolling(): void {
     window.clearInterval(statusPollTimer)
     statusPollTimer = undefined
   }
+}
+
+function syncRecoverySchedules(list: Upstream[]): void {
+  const activeIDs = new Set<string>()
+  const now = Date.now()
+  for (const up of list) {
+    const retryAt = up.nextRetryAt ? new Date(up.nextRetryAt).getTime() : Number.NaN
+    if (Number.isNaN(retryAt)) continue
+    activeIDs.add(up.id)
+    const previous = recoverySchedules.get(up.id)
+    if (previous?.retryAt !== retryAt) {
+      recoverySchedules.set(up.id, { retryAt, startedAt: now })
+    }
+  }
+  for (const id of recoverySchedules.keys()) {
+    if (!activeIDs.has(id)) recoverySchedules.delete(id)
+  }
+  if (activeIDs.size > 0) startRecoveryClock()
+  else stopRecoveryClock()
+}
+
+function startRecoveryClock(): void {
+  if (recoveryClockTimer !== undefined) return
+  recoveryClock.value = Date.now()
+  recoveryClockTimer = window.setInterval(() => {
+    recoveryClock.value = Date.now()
+  }, 1000)
+}
+
+function stopRecoveryClock(): void {
+  if (recoveryClockTimer === undefined) return
+  window.clearInterval(recoveryClockTimer)
+  recoveryClockTimer = undefined
 }
 
 function clearDrawerSources(): void {
@@ -865,6 +905,12 @@ function recoveryHint(up: Upstream): string {
     }
   }
   return up.state === 'suspended' ? '正在低频自动恢复' : '等待自动恢复'
+}
+
+function recoveryProgress(up: Upstream): number {
+  const schedule = recoverySchedules.get(up.id)
+  if (schedule === undefined || schedule.retryAt <= schedule.startedAt) return 0
+  return Math.min(100, Math.max(0, ((recoveryClock.value - schedule.startedAt) / (schedule.retryAt - schedule.startedAt)) * 100))
 }
 
 function formatToolUpdatedAt(value: string | null): string {
@@ -1429,10 +1475,13 @@ function goPage(p: number): void {
                 </span>
               </div>
               <div v-if="up.state === 'connecting' || up.nextRetryAt" class="mt-2 h-1 overflow-hidden rounded-full bg-brand-100 dark:bg-brand-500/15">
-                <span class="upstream-recovery-pulse block h-full w-2/3 rounded-full bg-brand-500"></span>
+                <span
+                  class="block h-full rounded-full bg-brand-500 transition-[width] duration-1000 ease-linear"
+                  :style="{ width: `${up.nextRetryAt ? recoveryProgress(up) : 100}%` }"
+                ></span>
               </div>
               <AppTooltip v-if="up.lastError" :content="up.lastError" placement="bottom-start">
-                <p class="mt-2 truncate text-xs text-error-600 dark:text-error-400">{{ up.lastError }}</p>
+                <p class="mt-2 line-clamp-2 break-all text-xs leading-5 text-error-600 dark:text-error-400">{{ up.lastError }}</p>
               </AppTooltip>
             </div>
 
@@ -1658,10 +1707,13 @@ function goPage(p: number): void {
                   </span>
                 </div>
                 <div v-if="up.state === 'connecting' || up.nextRetryAt" class="mt-2 h-1 overflow-hidden rounded-full bg-brand-100 dark:bg-brand-500/15">
-                  <span class="upstream-recovery-pulse block h-full w-2/3 rounded-full bg-brand-500"></span>
+                  <span
+                    class="block h-full rounded-full bg-brand-500 transition-[width] duration-1000 ease-linear"
+                    :style="{ width: `${up.nextRetryAt ? recoveryProgress(up) : 100}%` }"
+                  ></span>
                 </div>
                 <AppTooltip v-if="up.lastError" :content="up.lastError" placement="bottom-start">
-                  <p class="mt-2 truncate text-xs text-error-600 dark:text-error-400">{{ up.lastError }}</p>
+                  <p class="mt-2 line-clamp-2 break-all text-xs leading-5 text-error-600 dark:text-error-400">{{ up.lastError }}</p>
                 </AppTooltip>
               </div>
 
@@ -2633,31 +2685,6 @@ function goPage(p: number): void {
 </template>
 
 <style scoped>
-.upstream-recovery-pulse {
-  animation: upstream-recovery-progress 1.8s cubic-bezier(0.4, 0, 0.2, 1) infinite;
-  transform-origin: left center;
-}
-
-@keyframes upstream-recovery-progress {
-  0% {
-    opacity: 0.45;
-    transform: scaleX(0.35);
-  }
-  50% {
-    opacity: 1;
-    transform: scaleX(1);
-  }
-  100% {
-    opacity: 0.45;
-    transform: scaleX(0.35);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .upstream-recovery-pulse {
-    animation: none;
-  }
-}
 
 .fade-enter-active,
 .fade-leave-active {

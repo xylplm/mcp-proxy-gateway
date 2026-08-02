@@ -10,7 +10,7 @@ const props = withDefaults(defineProps<{
 }>(), {
   placement: 'top',
   disabled: false,
-  wrap: false,
+  wrap: true,
   tag: 'span',
 })
 </script>
@@ -19,7 +19,7 @@ const props = withDefaults(defineProps<{
   <component
     :is="props.tag"
     v-tooltip="{ content: props.content, placement: props.placement, disabled: props.disabled, wrap: props.wrap }"
-    class="inline-flex"
+    class="inline-flex min-w-0 max-w-full"
   >
     <slot />
   </component>

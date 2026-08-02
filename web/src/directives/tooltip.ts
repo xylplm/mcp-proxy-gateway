@@ -39,6 +39,7 @@ interface TooltipState {
   cleanupElement: () => void
   cleanupGlobal: (() => void) | null
   rafId: number | null
+  hideTimer: number | null
 }
 
 const tooltipStates = new WeakMap<HTMLElement, TooltipState>()
@@ -48,7 +49,7 @@ const DEFAULT_OPTIONS: NormalizedTooltipOptions = {
   content: '',
   placement: 'top',
   disabled: false,
-  wrap: false,
+  wrap: true,
 }
 
 function normalizeOptions(
@@ -226,10 +227,11 @@ function createState(el: HTMLElement, binding: DirectiveBinding<TooltipDirective
     cleanupElement: () => {},
     cleanupGlobal: null,
     rafId: null,
+    hideTimer: null,
   }
 
   const onMouseEnter = state.show
-  const onMouseLeave = state.hide
+  const onMouseLeave = () => scheduleTooltipHide(el, state)
   const onFocusIn = state.show
   const onFocusOut = state.hide
 
@@ -270,10 +272,13 @@ function attachGlobalListeners(state: TooltipState): void {
 
 function showTooltip(el: HTMLElement, state: TooltipState): void {
   if (state.options.disabled || state.options.content.trim() === '') return
+  cancelTooltipHide(state)
 
   if (state.tooltip === null) {
     state.tooltip = createTooltip()
     state.tooltip.id = state.id
+    state.tooltip.addEventListener('mouseenter', () => cancelTooltipHide(state))
+    state.tooltip.addEventListener('mouseleave', () => scheduleTooltipHide(el, state))
   }
 
   state.tooltip.textContent = state.options.content
@@ -299,6 +304,7 @@ function showTooltip(el: HTMLElement, state: TooltipState): void {
 }
 
 function hideTooltip(el: HTMLElement, state: TooltipState): void {
+  cancelTooltipHide(state)
   if (state.rafId !== null) {
     window.cancelAnimationFrame(state.rafId)
     state.rafId = null
@@ -308,6 +314,21 @@ function hideTooltip(el: HTMLElement, state: TooltipState): void {
   state.tooltip?.remove()
   state.cleanupGlobal?.()
   removeDescribedBy(el, state.id)
+}
+
+function cancelTooltipHide(state: TooltipState): void {
+  if (state.hideTimer === null) return
+  window.clearTimeout(state.hideTimer)
+  state.hideTimer = null
+}
+
+function scheduleTooltipHide(el: HTMLElement, state: TooltipState): void {
+  cancelTooltipHide(state)
+  // 让鼠标能够从触发元素移动至悬浮层，从而选择、复制其中的长文本。
+  state.hideTimer = window.setTimeout(() => {
+    state.hideTimer = null
+    hideTooltip(el, state)
+  }, 120)
 }
 
 function updateTooltipPosition(el: HTMLElement, state: TooltipState): void {
@@ -334,6 +355,7 @@ export const tooltipDirective: Directive<HTMLElement, TooltipDirectiveValue> = {
     state.options = normalizeOptions(binding.value, binding.arg)
     if (state.tooltip !== null) {
       state.tooltip.textContent = state.options.content
+      state.tooltip.classList.toggle('is-wrap', state.options.wrap)
     }
 
     if (state.options.disabled || state.options.content.trim() === '') {
