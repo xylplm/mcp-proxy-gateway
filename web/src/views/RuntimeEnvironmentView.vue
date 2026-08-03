@@ -861,8 +861,9 @@ onUnmounted(stopInstallProgressPolling)
           <div class="min-w-0">
             <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">依赖管理</h3>
             <p class="mt-1 max-w-3xl text-sm text-gray-500 dark:text-gray-400">
-              为已安装的 Node / Python 运行时集中安装第三方包，stdio 上游共享这些依赖。npm 包装到 Node
-              全局区，pip 包装到共享 venv。走已配置的镜像源。
+              为已安装的 Node / Python 运行时集中安装第三方包，所有 stdio 上游共享。npm 包装到 Node
+              全局区（node/npx 上游可直接 require）；pip 包装到共享 venv（python 上游需把该 venv
+              加入 PATH）。走已配置的镜像源。
             </p>
           </div>
           <button
@@ -897,13 +898,19 @@ onUnmounted(stopInstallProgressPolling)
           </button>
         </div>
 
-        <!-- pip 缺 Python 解释器时的引导 -->
+        <!-- 运行时未就绪时的引导：npm 未装 / Python 解释器缺失 -->
         <div
-          v-if="depKind === 'pip' && currentDepList && !currentDepList.ready && currentDepList.pythonHint"
+          v-if="currentDepList && !currentDepList.ready && (currentDepList.warning || currentDepList.pythonHint)"
           class="mb-4 rounded-xl border border-warning-200 bg-warning-50 px-4 py-3 text-sm text-warning-800 dark:border-warning-500/30 dark:bg-warning-500/10 dark:text-warning-300"
         >
-          <p class="font-semibold">Python 解释器未检测到</p>
-          <p class="mt-1">{{ currentDepList.pythonHint }}</p>
+          <p class="font-semibold">
+            {{ depKind === 'pip' ? 'Python 解释器未检测到' : `${depKind} 运行时未就绪` }}
+          </p>
+          <p class="mt-1">{{ currentDepList.pythonHint || currentDepList.warning }}</p>
+          <router-link
+            to="/runtime"
+            class="mt-2 inline-block font-medium underline underline-offset-2"
+          >先去安装 {{ depKind === 'npm' ? 'Node' : 'uv' }}</router-link>
         </div>
 
         <!-- 安装输入条：单行，支持逗号/空格分隔多个包 -->
@@ -929,7 +936,7 @@ onUnmounted(stopInstallProgressPolling)
             type="button"
             class="inline-flex h-10 items-center justify-center gap-1.5 rounded-lg px-4 text-sm font-medium text-white transition disabled:cursor-not-allowed disabled:opacity-50"
             :class="depKind === 'npm' ? 'bg-brand-500 hover:bg-brand-600' : 'bg-success-500 hover:bg-success-600'"
-            :disabled="depInput.trim() === '' || depBusy || (depKind === 'pip' && currentDepList !== null && !currentDepList.ready && !!currentDepList.pythonHint)"
+            :disabled="depInput.trim() === '' || depBusy || (currentDepList !== null && !currentDepList.ready)"
             :aria-label="`安装 ${depKind} 依赖`"
             @click="onInstallDep"
           >
