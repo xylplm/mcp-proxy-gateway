@@ -189,6 +189,26 @@ func ValidateYAMLConfig(cfg YAMLConfig) error {
 		fields["runtime.strict_network_default"] = "仅支持 deny 或 allowlist"
 	}
 
+	// 包仓库镜像：非空时必须是合法 http(s) URL（长度上限防止配置膨胀）。
+	for field, val := range map[string]string{
+		"runtime.npm_registry": cfg.Runtime.NpmRegistry,
+		"runtime.pip_index_url": cfg.Runtime.PipIndexURL,
+		"runtime.uv_index_url":  cfg.Runtime.UvIndexURL,
+	} {
+		v := strings.TrimSpace(val)
+		if v == "" {
+			continue
+		}
+		if len(v) > 512 {
+			fields[field] = "镜像地址过长（上限 512 字符）"
+			continue
+		}
+		u, err := url.Parse(v)
+		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+			fields[field] = "镜像地址必须是 http(s) URL"
+		}
+	}
+
 	if len(fields) > 0 {
 		return domain.NewValidationError("YAML 配置校验失败", fields)
 	}

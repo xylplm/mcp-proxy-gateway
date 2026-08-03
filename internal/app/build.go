@@ -74,6 +74,9 @@ func (a *App) build(envCfg config.EnvConfig) error {
 			StrictPathOnlyRuntime:     pathOnly,
 			StrictNetworkDefault:      rtenv.NetworkAccessMode(rt.StrictNetworkDefault),
 			StrictAllowPolicyOnly:     policyOnly,
+			NpmRegistry:               rt.NpmRegistry,
+			PipIndexURL:               rt.PipIndexURL,
+			UvIndexURL:                rt.UvIndexURL,
 		}
 	}
 	transport.SetPolicyProvider(policyFromCfg)

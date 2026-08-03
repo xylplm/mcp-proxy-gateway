@@ -68,6 +68,15 @@ type RuntimeConfig struct {
 	StrictNetworkDefault string `yaml:"strict_network_default" json:"strict_network_default"`
 	// StrictAllowPolicyOnly 无内核隔离时是否允许严格档仅策略运行。
 	StrictAllowPolicyOnly *bool `yaml:"strict_allow_policy_only" json:"strict_allow_policy_only"`
+	// NpmRegistry 为 stdio 子进程 npm/npx 使用的包仓库镜像（如 https://registry.npmmirror.com）；
+	// 空表示不覆盖（用子进程/上游 env 的默认）。注入 NPM_CONFIG_REGISTRY。
+	NpmRegistry string `yaml:"npm_registry" json:"npm_registry"`
+	// PipIndexURL 为 stdio 子进程 pip 使用的 PyPI 镜像（如 https://pypi.tuna.tsinghua.edu.cn/simple）；
+	// 空表示不覆盖。注入 PIP_INDEX_URL。
+	PipIndexURL string `yaml:"pip_index_url" json:"pip_index_url"`
+	// UvIndexURL 为 stdio 子进程 uv 使用的 PyPI 镜像（如 https://pypi.tuna.tsinghua.edu.cn/simple）；
+	// 空表示不覆盖。注入 UV_DEFAULT_INDEX。
+	UvIndexURL string `yaml:"uv_index_url" json:"uv_index_url"`
 }
 
 // ServerConfig 为 HTTP 服务监听配置。
@@ -294,6 +303,10 @@ func defaultRuntimeConfig() RuntimeConfig {
 		StrictPathOnlyRuntime: &pathOnly,
 		StrictNetworkDefault:  "allowlist",
 		StrictAllowPolicyOnly: &policyOnly,
+		// 包仓库镜像默认空：不覆盖子进程/上游 env 的默认源，避免影响可访问官方源的环境。
+		NpmRegistry: "",
+		PipIndexURL: "",
+		UvIndexURL:  "",
 	}
 }
 

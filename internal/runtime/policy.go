@@ -41,6 +41,11 @@ type Policy struct {
 	// StrictAllowPolicyOnly 为 true 时，即使无内核隔离能力也允许严格档仅策略运行（默认 false 在有强制隔离需求时可配）。
 	// Phase A 无真隔离时该标志不影响连接（策略-only 为唯一路径）；预留给 Phase C。
 	StrictAllowPolicyOnly bool
+	// NpmRegistry / PipIndexURL / UvIndexURL 为 stdio 子进程包仓库镜像（非空时注入对应环境变量）。
+	// 空表示不覆盖子进程/上游 env 的默认源。
+	NpmRegistry string
+	PipIndexURL string
+	UvIndexURL  string
 }
 
 // DefaultCommandAllowlist 与模板市场常用 stdio 命令对齐。

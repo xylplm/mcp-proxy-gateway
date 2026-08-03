@@ -168,6 +168,48 @@ func TestValidateServerListenConfig(t *testing.T) {
 	}
 }
 
+// TestValidateRuntimePackageMirrors 验证包仓库镜像 URL 校验：合法 https/空通过，非法报字段错误。
+func TestValidateRuntimePackageMirrors(t *testing.T) {
+	cases := []struct {
+		name    string
+		mutate  func(*YAMLConfig)
+		field   string
+		wantErr bool
+	}{
+		{name: "默认空镜像合法", mutate: func(*YAMLConfig) {}, wantErr: false},
+		{name: "https npm 镜像合法", mutate: func(c *YAMLConfig) { c.Runtime.NpmRegistry = "https://registry.npmmirror.com" }, wantErr: false},
+		{name: "http pip 镜像合法", mutate: func(c *YAMLConfig) { c.Runtime.PipIndexURL = "http://pypi.corp/simple" }, wantErr: false},
+		{name: "https uv 镜像合法", mutate: func(c *YAMLConfig) { c.Runtime.UvIndexURL = "https://pypi.tuna.tsinghua.edu.cn/simple" }, wantErr: false},
+		{name: "非 URL 拒绝", mutate: func(c *YAMLConfig) { c.Runtime.NpmRegistry = "registry.npmmirror.com" }, field: "runtime.npm_registry", wantErr: true},
+		{name: "无 scheme 拒绝", mutate: func(c *YAMLConfig) { c.Runtime.PipIndexURL = "pypi.tuna" }, field: "runtime.pip_index_url", wantErr: true},
+		{name: "无 host 拒绝", mutate: func(c *YAMLConfig) { c.Runtime.UvIndexURL = "https://" }, field: "runtime.uv_index_url", wantErr: true},
+		{name: "ftp 拒绝", mutate: func(c *YAMLConfig) { c.Runtime.NpmRegistry = "ftp://x/y" }, field: "runtime.npm_registry", wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := DefaultYAMLConfig()
+			tc.mutate(&cfg)
+			err := ValidateYAMLConfig(cfg)
+			if !tc.wantErr {
+				if err != nil {
+					t.Fatalf("配置应通过校验：%v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("期望校验错误")
+			}
+			var apiErr *domain.APIError
+			if !errors.As(err, &apiErr) {
+				t.Fatalf("期望 *domain.APIError，实际 %T", err)
+			}
+			if _, ok := apiErr.Fields[tc.field]; !ok {
+				t.Fatalf("期望字段 %q，实际 Fields=%v", tc.field, apiErr.Fields)
+			}
+		})
+	}
+}
+
 // TestValidateServerLogLevel 验证 server.log_level 取值校验：合法枚举通过，非法值报字段错误。
 func TestValidateServerLogLevel(t *testing.T) {
 	cases := []struct {

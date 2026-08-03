@@ -158,6 +158,76 @@ func TestBuildChildEnvExtraPrefix(t *testing.T) {
 	}
 }
 
+func envMapFrom(t *testing.T, out []string) map[string]string {
+	t.Helper()
+	env := map[string]string{}
+	for _, e := range out {
+		k, v, ok := splitEnvEntry(e)
+		if ok {
+			env[k] = v
+		}
+	}
+	return env
+}
+
+// TestBuildChildEnvPackageMirrorsInjected 验证镜像非空时注入对应环境变量（大小写双写）。
+func TestBuildChildEnvPackageMirrorsInjected(t *testing.T) {
+	t.Parallel()
+	policy := Policy{
+		StdioEnabled: true,
+		NpmRegistry:  "https://registry.npmmirror.com",
+		PipIndexURL:  "https://pypi.tuna.tsinghua.edu.cn/simple",
+		UvIndexURL:   "https://pypi.tuna.tsinghua.edu.cn/simple",
+	}
+	out := BuildChildEnv([]string{"PATH=/usr/bin"}, nil, policy)
+	env := envMapFrom(t, out)
+	if env["NPM_CONFIG_REGISTRY"] != policy.NpmRegistry {
+		t.Fatalf("NPM_CONFIG_REGISTRY=%q", env["NPM_CONFIG_REGISTRY"])
+	}
+	if env["npm_config_registry"] != policy.NpmRegistry {
+		t.Fatalf("npm_config_registry=%q", env["npm_config_registry"])
+	}
+	if env["PIP_INDEX_URL"] != policy.PipIndexURL {
+		t.Fatalf("PIP_INDEX_URL=%q", env["PIP_INDEX_URL"])
+	}
+	// uv 新旧变量名都注入，兼容不同版本。
+	if env["UV_DEFAULT_INDEX"] != policy.UvIndexURL {
+		t.Fatalf("UV_DEFAULT_INDEX=%q", env["UV_DEFAULT_INDEX"])
+	}
+	if env["UV_INDEX_URL"] != policy.UvIndexURL {
+		t.Fatalf("UV_INDEX_URL=%q", env["UV_INDEX_URL"])
+	}
+}
+
+// TestBuildChildEnvPackageMirrorsEmptyNotInjected 验证镜像为空时不注入。
+func TestBuildChildEnvPackageMirrorsEmptyNotInjected(t *testing.T) {
+	t.Parallel()
+	out := BuildChildEnv([]string{"PATH=/usr/bin"}, nil, Policy{StdioEnabled: true})
+	env := envMapFrom(t, out)
+	for _, key := range []string{"NPM_CONFIG_REGISTRY", "npm_config_registry", "PIP_INDEX_URL", "UV_DEFAULT_INDEX", "UV_INDEX_URL"} {
+		if _, ok := env[key]; ok {
+			t.Fatalf("空镜像不应注入 %s", key)
+		}
+	}
+}
+
+// TestBuildChildEnvUserEnvOverridesMirror 验证上游 env 显式配置优先于镜像默认。
+func TestBuildChildEnvUserEnvOverridesMirror(t *testing.T) {
+	t.Parallel()
+	policy := Policy{
+		StdioEnabled: true,
+		NpmRegistry:  "https://registry.npmmirror.com",
+	}
+	user := map[string]string{
+		"NPM_CONFIG_REGISTRY": "https://my-private.registry.local",
+	}
+	out := BuildChildEnv([]string{"PATH=/usr/bin"}, user, policy)
+	env := envMapFrom(t, out)
+	if env["NPM_CONFIG_REGISTRY"] != "https://my-private.registry.local" {
+		t.Fatalf("用户 env 应覆盖镜像默认，got=%q", env["NPM_CONFIG_REGISTRY"])
+	}
+}
+
 func TestBuildChildEnvPrependsRuntimePath(t *testing.T) {
 	t.Parallel()
 	parent := []string{"PATH=/usr/bin", "MPG_PG_DSN=secret"}

@@ -155,6 +155,10 @@ func BuildChildEnvWithOptions(
 		put("MPG_RUNTIME_DIR", opts.RuntimeDir, false)
 	}
 
+	// 包仓库镜像（加速 stdio 子进程拉依赖；所有档位生效，因为这是可达性配置而非安全开关）。
+	// 在用户 env 之前注入，用户在上游 env 显式配置的同名键仍会覆盖（userEnv 循环在其后）。
+	applyPackageMirrors(put, policy)
+
 	if len(opts.FileRoots) > 0 {
 		put("MPG_FS_ALLOWLIST", strings.Join(normalizePathList(opts.FileRoots), ";"), false)
 	}
@@ -265,6 +269,25 @@ func splitEnvEntry(entry string) (key, value string, ok bool) {
 		return "", "", false
 	}
 	return entry[:i], entry[i+1:], true
+}
+
+// applyPackageMirrors 将策略中的包仓库镜像注入到子进程环境（仅当非空时）。
+// 注入在用户 env 之前完成，因此上游 env 显式配置的同名键仍会覆盖本默认。
+// 大小写两个变量名都写入，兼容对大小写敏感的工具（如 npm 读 NPM_CONFIG_REGISTRY，
+// 但部分脚本/文档使用小写 npm_config_registry）。
+func applyPackageMirrors(put func(key, value string, fromParent bool), policy Policy) {
+	if v := strings.TrimSpace(policy.NpmRegistry); v != "" {
+		put("NPM_CONFIG_REGISTRY", v, false)
+		put("npm_config_registry", v, false)
+	}
+	if v := strings.TrimSpace(policy.PipIndexURL); v != "" {
+		put("PIP_INDEX_URL", v, false)
+	}
+	if v := strings.TrimSpace(policy.UvIndexURL); v != "" {
+		// uv 0.5+ 使用 UV_DEFAULT_INDEX（取代旧的 UV_INDEX_URL）。
+		put("UV_DEFAULT_INDEX", v, false)
+		put("UV_INDEX_URL", v, false)
+	}
 }
 
 func isSensitiveEnvKey(key string, prefixes []string) bool {
