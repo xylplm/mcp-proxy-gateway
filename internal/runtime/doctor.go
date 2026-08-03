@@ -40,7 +40,17 @@ type Summary struct {
 	InstallProgress          *InstallProgress    `json:"installProgress,omitempty"`
 	InstallLogs              []InstallLogEntry   `json:"installLogs,omitempty"`
 	InstallError             string              `json:"installError,omitempty"`
+	Deps                     *DepsStatus         `json:"deps,omitempty"`
 	RiskNotes                []string            `json:"riskNotes"`
+}
+
+// DepsStatus 汇总依赖管理（npm/pip）的当前状态。
+type DepsStatus struct {
+	Npm        *ListDepsResult `json:"npm,omitempty"`
+	Pip        *ListDepsResult `json:"pip,omitempty"`
+	DepProgress *DepProgress   `json:"depProgress,omitempty"`
+	DepLogs    []DepLogEntry   `json:"depLogs,omitempty"`
+	DepError   string          `json:"depError,omitempty"`
 }
 
 // LookPathFunc 便于单测注入。
@@ -188,6 +198,9 @@ type Service struct {
 
 	instMu         sync.Mutex
 	installer_     *Installer
+	depMu          sync.Mutex
+	depMgr_        *DependencyManager
+	depMgrDir      string
 	layoutMu       sync.Mutex
 	layoutDir      string
 	preflightMu    sync.Mutex
@@ -260,6 +273,21 @@ func (s *Service) installer() *Installer {
 	return s.installer_
 }
 
+// depManager 返回绑定当前 runtimeDir 与策略的共享依赖管理器（目录变更时重建）。
+func (s *Service) depManager() *DependencyManager {
+	if s == nil {
+		return NewDependencyManager("", nil)
+	}
+	dir := s.RuntimeDir()
+	s.depMu.Lock()
+	defer s.depMu.Unlock()
+	if s.depMgr_ == nil || s.depMgrDir != dir {
+		s.depMgr_ = NewDependencyManager(dir, s.policyFn)
+		s.depMgrDir = dir
+	}
+	return s.depMgr_
+}
+
 // Summary 返回管理台摘要。
 func (s *Service) Summary() Summary {
 	if s == nil {
@@ -281,7 +309,7 @@ func (s *Service) Summary() Summary {
 	progress := inst.currentProgress()
 	logs := inst.Logs()
 	lastErr := inst.lastInstallError()
-	return BuildSummary(
+	summary := BuildSummary(
 		policy,
 		doctor.Probe(),
 		dataDir,
@@ -293,6 +321,16 @@ func (s *Service) Summary() Summary {
 		logs,
 		lastErr,
 	)
+	// 依赖管理状态：仅当存在 runtimeDir 时填充（npm/pip 依赖 Node/uv 已安装）。
+	if runtimeDir != "" {
+		dm := s.depManager()
+		summary.Deps = &DepsStatus{
+			DepProgress: dm.currentProgress(),
+			DepLogs:     dm.Logs(),
+			DepError:    dm.lastOpError(),
+		}
+	}
+	return summary
 }
 
 func (s *Service) ensureRuntimeLayout(runtimeDir string) {
@@ -351,6 +389,30 @@ func (s *Service) UninstallPackage(packageID string) error {
 		s.InvalidatePreflightCache()
 	}
 	return err
+}
+
+// ListDeps 列出某类运行时已安装的第三方包。
+func (s *Service) ListDeps(ctx context.Context, kind DepKind) (ListDepsResult, error) {
+	if s == nil {
+		return ListDepsResult{Kind: kind, Items: []Dependency{}}, fmtUnavailable("运行环境服务未就绪")
+	}
+	return s.depManager().ListDeps(ctx, kind)
+}
+
+// InstallDep 安装/升级一个第三方包。
+func (s *Service) InstallDep(ctx context.Context, kind DepKind, spec string) (InstallDepResult, error) {
+	if s == nil {
+		return InstallDepResult{Kind: kind}, fmtUnavailable("运行环境服务未就绪")
+	}
+	return s.depManager().InstallDep(ctx, kind, spec)
+}
+
+// UninstallDep 卸载一个第三方包。
+func (s *Service) UninstallDep(ctx context.Context, kind DepKind, name string) (InstallDepResult, error) {
+	if s == nil {
+		return InstallDepResult{Kind: kind}, fmtUnavailable("运行环境服务未就绪")
+	}
+	return s.depManager().UninstallDep(ctx, kind, name)
 }
 
 // KnownToolCatalog 返回可声明依赖工具字典。
