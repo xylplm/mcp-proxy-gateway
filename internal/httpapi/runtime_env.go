@@ -21,6 +21,12 @@ type runtimeInstallRequest struct {
 	PackageID string `json:"packageId"`
 }
 
+type runtimeDepRequest struct {
+	Kind string `json:"kind"`
+	Spec string `json:"spec"`
+	Name string `json:"name"`
+}
+
 type runtimePreflightRequest struct {
 	Transport        string                     `json:"transport"`
 	Command          string                     `json:"command"`
@@ -41,6 +47,10 @@ func (r *Router) registerRuntimeRoutes(g *gin.RouterGroup) {
 	rt.POST("/install/preview", r.runtimeInstallPreview)
 	rt.POST("/install", r.runtimeInstall)
 	rt.POST("/uninstall", r.runtimeUninstall)
+	// 依赖管理：npm/pip 第三方包的列表/安装/卸载。
+	rt.GET("/deps", r.runtimeListDeps)
+	rt.POST("/deps/install", r.runtimeInstallDep)
+	rt.POST("/deps/uninstall", r.runtimeUninstallDep)
 }
 
 func (r *Router) runtimeSummary(c *gin.Context) {
@@ -250,4 +260,107 @@ func (r *Router) runtimeUninstall(c *gin.Context) {
 	}
 	r.recordUpdate(c, audit.ResourceSetting, "runtime:uninstall:"+pkgID)
 	respondOK(c, gin.H{"uninstalled": true, "packageId": pkgID})
+}
+
+// runtimeListDeps 列出某类运行时已安装的第三方包。
+func (r *Router) runtimeListDeps(c *gin.Context) {
+	if r.runtimeEnv == nil {
+		respondServiceUnavailable(c, "运行环境服务未就绪")
+		return
+	}
+	kindStr := strings.TrimSpace(c.Query("kind"))
+	kind, err := rtenv.NormalizeDepKind(kindStr)
+	if err != nil {
+		respondError(c, domain.NewValidationError(err.Error(), map[string]string{"kind": err.Error()}))
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
+	defer cancel()
+	result, err := r.runtimeEnv.ListDeps(ctx, kind)
+	if err != nil {
+		msg := err.Error()
+		respondError(c, domain.NewError(domain.CodeInternal, "查询依赖失败："+msg))
+		return
+	}
+	respondOK(c, result)
+}
+
+// runtimeInstallDep 安装/升级一个第三方包。
+func (r *Router) runtimeInstallDep(c *gin.Context) {
+	if r.runtimeEnv == nil {
+		respondServiceUnavailable(c, "运行环境服务未就绪")
+		return
+	}
+	var req runtimeDepRequest
+	if !bindJSON(c, &req) {
+		return
+	}
+	kind, kErr := rtenv.NormalizeDepKind(req.Kind)
+	if kErr != nil {
+		respondError(c, domain.NewValidationError(kErr.Error(), map[string]string{"kind": kErr.Error()}))
+		return
+	}
+	spec := strings.TrimSpace(req.Spec)
+	if spec == "" {
+		respondError(c, domain.NewValidationError("spec 不能为空", map[string]string{"spec": "必填"}))
+		return
+	}
+	if len(spec) > 256 {
+		respondError(c, domain.NewValidationError("spec 过长", map[string]string{"spec": "上限 256 字符"}))
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Minute)
+	defer cancel()
+	result, err := r.runtimeEnv.InstallDep(ctx, kind, spec)
+	if err != nil {
+		msg := err.Error()
+		if strings.Contains(msg, "不能为空") || strings.Contains(msg, "非法") || strings.Contains(msg, "不支持") {
+			respondError(c, domain.NewValidationError(msg, map[string]string{"spec": msg}))
+			return
+		}
+		respondError(c, domain.NewError(domain.CodeInternal, "安装依赖失败："+msg))
+		return
+	}
+	r.recordUpdate(c, audit.ResourceSetting, "runtime:dep:"+string(kind)+":install:"+result.Name)
+	respondOK(c, result)
+}
+
+// runtimeUninstallDep 卸载一个第三方包。
+func (r *Router) runtimeUninstallDep(c *gin.Context) {
+	if r.runtimeEnv == nil {
+		respondServiceUnavailable(c, "运行环境服务未就绪")
+		return
+	}
+	var req runtimeDepRequest
+	if !bindJSON(c, &req) {
+		return
+	}
+	kind, kErr := rtenv.NormalizeDepKind(req.Kind)
+	if kErr != nil {
+		respondError(c, domain.NewValidationError(kErr.Error(), map[string]string{"kind": kErr.Error()}))
+		return
+	}
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		respondError(c, domain.NewValidationError("name 不能为空", map[string]string{"name": "必填"}))
+		return
+	}
+	if len(name) > 214 {
+		respondError(c, domain.NewValidationError("name 过长", map[string]string{"name": "上限 214 字符"}))
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Minute)
+	defer cancel()
+	result, err := r.runtimeEnv.UninstallDep(ctx, kind, name)
+	if err != nil {
+		msg := err.Error()
+		if strings.Contains(msg, "不能为空") || strings.Contains(msg, "非法") || strings.Contains(msg, "不支持") {
+			respondError(c, domain.NewValidationError(msg, map[string]string{"name": msg}))
+			return
+		}
+		respondError(c, domain.NewError(domain.CodeInternal, "卸载依赖失败："+msg))
+		return
+	}
+	r.recordUpdate(c, audit.ResourceSetting, "runtime:dep:"+string(kind)+":uninstall:"+name)
+	respondOK(c, result)
 }

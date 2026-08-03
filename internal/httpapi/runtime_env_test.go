@@ -58,6 +58,15 @@ func (f *fakeRuntimeEnv) UninstallPackage(packageID string) error {
 	}
 	return nil
 }
+func (f *fakeRuntimeEnv) ListDeps(_ context.Context, kind rtenv.DepKind) (rtenv.ListDepsResult, error) {
+	return rtenv.ListDepsResult{Kind: kind, Items: []rtenv.Dependency{}}, nil
+}
+func (f *fakeRuntimeEnv) InstallDep(_ context.Context, kind rtenv.DepKind, spec string) (rtenv.InstallDepResult, error) {
+	return rtenv.InstallDepResult{Kind: kind, Name: spec}, nil
+}
+func (f *fakeRuntimeEnv) UninstallDep(_ context.Context, kind rtenv.DepKind, name string) (rtenv.InstallDepResult, error) {
+	return rtenv.InstallDepResult{Kind: kind, Name: name}, nil
+}
 func (f *fakeRuntimeEnv) BrowseRoots(contextRoots []string) rtenv.BrowseRootsResult {
 	return rtenv.BrowseRootsResult{
 		Roots: []rtenv.BrowseRoot{{
@@ -189,5 +198,47 @@ func TestRuntimeCatalogAndToolsAndPreflight(t *testing.T) {
 	w = doJSON(e, http.MethodPost, "/api/admin/runtime/preflight", `{"transport":"stdio","command":"npx"}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("preflight status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestRuntimeDepsValidation(t *testing.T) {
+	e := newTestEngine(Deps{RuntimeEnv: &fakeRuntimeEnv{}})
+
+	// list：非法 kind 拒绝
+	w := doJSON(e, http.MethodGet, "/api/admin/runtime/deps?kind=docker", "")
+	if w.Code == http.StatusOK {
+		t.Fatal("非法 kind 应被拒绝")
+	}
+	// list：合法 kind 通过
+	w = doJSON(e, http.MethodGet, "/api/admin/runtime/deps?kind=npm", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("npm list status=%d body=%s", w.Code, w.Body.String())
+	}
+
+	// install：空 spec 拒绝
+	w = doJSON(e, http.MethodPost, "/api/admin/runtime/deps/install", `{"kind":"npm","spec":""}`)
+	if w.Code == http.StatusOK {
+		t.Fatal("空 spec 应被拒绝")
+	}
+	// install：非法 kind 拒绝
+	w = doJSON(e, http.MethodPost, "/api/admin/runtime/deps/install", `{"kind":"nope","spec":"lodash"}`)
+	if w.Code == http.StatusOK {
+		t.Fatal("非法 kind 应被拒绝")
+	}
+	// install：合法通过（fake 返回成功）
+	w = doJSON(e, http.MethodPost, "/api/admin/runtime/deps/install", `{"kind":"npm","spec":"lodash@4.17.21"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("install status=%d body=%s", w.Code, w.Body.String())
+	}
+
+	// uninstall：空 name 拒绝
+	w = doJSON(e, http.MethodPost, "/api/admin/runtime/deps/uninstall", `{"kind":"pip","name":""}`)
+	if w.Code == http.StatusOK {
+		t.Fatal("空 name 应被拒绝")
+	}
+	// uninstall：合法通过
+	w = doJSON(e, http.MethodPost, "/api/admin/runtime/deps/uninstall", `{"kind":"pip","name":"requests"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("uninstall status=%d body=%s", w.Code, w.Body.String())
 	}
 }

@@ -395,6 +395,10 @@ type RuntimeEnvironmentService interface {
 	PreviewInstall(packageID string) (rtenv.CatalogPackage, error)
 	InstallPackage(ctx context.Context, packageID string) (rtenv.InstallResult, error)
 	UninstallPackage(packageID string) error
+	// 依赖管理（npm/pip 包的列表/安装/卸载）。
+	ListDeps(ctx context.Context, kind rtenv.DepKind) (rtenv.ListDepsResult, error)
+	InstallDep(ctx context.Context, kind rtenv.DepKind, spec string) (rtenv.InstallDepResult, error)
+	UninstallDep(ctx context.Context, kind rtenv.DepKind, name string) (rtenv.InstallDepResult, error)
 	// 路径浏览：供管理台 PathPicker 选择网关主机目录/文件（受允许根约束）。
 	BrowseRoots(contextRoots []string) rtenv.BrowseRootsResult
 	BrowseList(path, mode string, limit int, contextRoots []string) (rtenv.BrowseListResult, error)
