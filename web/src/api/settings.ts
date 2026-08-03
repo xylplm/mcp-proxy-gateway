@@ -159,6 +159,12 @@ export interface RuntimePolicyConfig {
   strict_network_default?: 'deny' | 'allowlist' | string
   /** 无内核隔离时是否允许严格档仅策略运行。 */
   strict_allow_policy_only?: boolean
+  /** npm/npx 包仓库镜像（注入 NPM_CONFIG_REGISTRY）；空表示不覆盖。 */
+  npm_registry?: string
+  /** pip 包仓库镜像（注入 PIP_INDEX_URL）；空表示不覆盖。 */
+  pip_index_url?: string
+  /** uv 包仓库镜像（注入 UV_DEFAULT_INDEX）；空表示不覆盖。 */
+  uv_index_url?: string
 }
 
 /** 小智接入配置（对应后端 XiaoZhiConfig，Req 15）。 */

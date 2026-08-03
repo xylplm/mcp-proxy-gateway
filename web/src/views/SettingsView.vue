@@ -111,6 +111,10 @@ const strictPackageAllowlistText = ref('')
 const globalFileRootsText = ref('')
 const browseExtraRootsText = ref('')
 const extraSensitiveEnvPrefixesText = ref('')
+/** 包仓库镜像（加速国内 stdio 子进程拉依赖），均为单行 URL。 */
+const npmRegistry = ref('')
+const pipIndexURL = ref('')
+const uvIndexURL = ref('')
 
 /** Port helpers: strip ':prefix on load, restore on save. */
 const adminPort = ref<number | string>('')
@@ -183,6 +187,9 @@ const browseExtraRootsError = computed(() => firstIndexedError('runtime.browse_e
 const extraSensitivePrefixError = computed(() =>
   firstIndexedError('runtime.extra_sensitive_env_prefixes'),
 )
+const npmRegistryError = computed(() => fieldErrors['runtime.npm_registry'] ?? '')
+const pipIndexURLError = computed(() => fieldErrors['runtime.pip_index_url'] ?? '')
+const uvIndexURLError = computed(() => fieldErrors['runtime.uv_index_url'] ?? '')
 
 function firstIndexedError(prefix: string): string {
   for (const [key, value] of Object.entries(fieldErrors)) {
@@ -215,6 +222,9 @@ function currentDraftConfig(): YAMLConfig | null {
     globalFileRoots: textToCIDRList(globalFileRootsText.value),
     browseExtraRoots: textToCIDRList(browseExtraRootsText.value),
     extraSensitiveEnvPrefixes: textToCIDRList(extraSensitiveEnvPrefixesText.value),
+    npmRegistry: npmRegistry.value,
+    pipIndexURL: pipIndexURL.value,
+    uvIndexURL: uvIndexURL.value,
   })
 }
 
@@ -235,6 +245,9 @@ function syncSecurityTextFields(): void {
   extraSensitiveEnvPrefixesText.value = cidrListToText(
     config.value.runtime?.extra_sensitive_env_prefixes ?? [],
   )
+  npmRegistry.value = config.value.runtime?.npm_registry ?? ''
+  pipIndexURL.value = config.value.runtime?.pip_index_url ?? ''
+  uvIndexURL.value = config.value.runtime?.uv_index_url ?? ''
 }
 
 function ensureRuntimeConfig(): void {
@@ -300,6 +313,16 @@ function ensureRuntimeConfig(): void {
   }
   if (config.value.runtime.strict_allow_policy_only == null) {
     config.value.runtime.strict_allow_policy_only = true
+  }
+  // 包仓库镜像字段缺省视为空（不覆盖子进程默认源）。
+  if (config.value.runtime.npm_registry == null) {
+    config.value.runtime.npm_registry = ''
+  }
+  if (config.value.runtime.pip_index_url == null) {
+    config.value.runtime.pip_index_url = ''
+  }
+  if (config.value.runtime.uv_index_url == null) {
+    config.value.runtime.uv_index_url = ''
   }
 }
 
@@ -1502,6 +1525,84 @@ const errClass = 'mt-1 text-xs text-error-500'
                 </p>
               </div>
             </div>
+
+            <!-- 加速镜像：国内网络拉 npm/pip/uv 依赖常被墙，为 stdio 子进程注入镜像源 -->
+            <details class="mt-5 rounded-xl border border-gray-200 bg-gray-50/50 p-4 dark:border-gray-800 dark:bg-white/[0.02]">
+              <summary class="cursor-pointer text-sm font-semibold text-gray-700 dark:text-gray-200">
+                加速镜像（国内网络推荐）
+              </summary>
+              <div :class="gridClass" class="mt-4">
+                <div>
+                  <FieldLabel
+                    label="npm 包仓库镜像"
+                    tooltip="启动本地 MCP（如 npx/@modelcontextprotocol）时，把 npm 拉依赖的仓库指到这里。注入 NPM_CONFIG_REGISTRY。留空表示不覆盖（用子进程默认官方源）。仅影响本地 stdio 子进程，不影响远程上游。"
+                  />
+                  <input
+                    v-model="npmRegistry"
+                    type="url"
+                    :class="inputClass"
+                    placeholder="留空 = 不覆盖（用子进程默认）"
+                  />
+                  <p :class="hintClass">例如 https://registry.npmmirror.com</p>
+                  <p v-if="npmRegistryError" :class="errClass">{{ npmRegistryError }}</p>
+                </div>
+                <div>
+                  <FieldLabel
+                    label="pip 包仓库镜像"
+                    tooltip="启动本地 Python MCP（如 pip 安装的 server）时，把 pip 拉 PyPI 包的源指到这里。注入 PIP_INDEX_URL。留空表示不覆盖。仅影响本地 stdio 子进程。"
+                  />
+                  <input
+                    v-model="pipIndexURL"
+                    type="url"
+                    :class="inputClass"
+                    placeholder="留空 = 不覆盖（用子进程默认）"
+                  />
+                  <p :class="hintClass">例如 https://pypi.tuna.tsinghua.edu.cn/simple</p>
+                  <p v-if="pipIndexURLError" :class="errClass">{{ pipIndexURLError }}</p>
+                </div>
+                <div>
+                  <FieldLabel
+                    label="uv 包仓库镜像"
+                    tooltip="启动本地 MCP 用 uv/uvx 拉包时，把 PyPI 源指到这里。注入 UV_DEFAULT_INDEX。留空表示不覆盖。仅影响本地 stdio 子进程。"
+                  />
+                  <input
+                    v-model="uvIndexURL"
+                    type="url"
+                    :class="inputClass"
+                    placeholder="留空 = 不覆盖（用子进程默认）"
+                  />
+                  <p :class="hintClass">例如 https://pypi.tuna.tsinghua.edu.cn/simple</p>
+                  <p v-if="uvIndexURLError" :class="errClass">{{ uvIndexURLError }}</p>
+                </div>
+              </div>
+              <div class="mt-3 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  class="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-100 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+                  @click="npmRegistry = 'https://registry.npmmirror.com'"
+                >
+                  npm 用淘宝源
+                </button>
+                <button
+                  type="button"
+                  class="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-100 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+                  @click="pipIndexURL = 'https://pypi.tuna.tsinghua.edu.cn/simple'; uvIndexURL = 'https://pypi.tuna.tsinghua.edu.cn/simple'"
+                >
+                  pip / uv 用清华源
+                </button>
+                <button
+                  type="button"
+                  class="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-100 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+                  @click="npmRegistry = ''; pipIndexURL = ''; uvIndexURL = ''"
+                >
+                  清空（用官方源）
+                </button>
+              </div>
+              <p :class="hintClass" class="mt-3">
+                仅影响新增的 stdio 子进程；保存后即时生效无需重启。上游 env
+                显式配置的同名键仍会覆盖这里的默认。
+              </p>
+            </details>
           </template>
           <p v-else class="text-sm text-gray-500 dark:text-gray-400">
             当前配置尚未包含本地运行时段，请重新加载系统设置。

@@ -19,6 +19,9 @@ export interface SettingsDraftInput {
   globalFileRoots?: string[]
   browseExtraRoots?: string[]
   extraSensitiveEnvPrefixes: string[]
+  npmRegistry?: string
+  pipIndexURL?: string
+  uvIndexURL?: string
 }
 
 function ensureRuntime(config: YAMLConfig): void {
@@ -77,6 +80,16 @@ function ensureRuntime(config: YAMLConfig): void {
   if (config.runtime.strict_allow_policy_only == null) {
     config.runtime.strict_allow_policy_only = true
   }
+  // 包仓库镜像字段缺省视为空（不覆盖子进程默认源）。
+  if (config.runtime.npm_registry == null) {
+    config.runtime.npm_registry = ''
+  }
+  if (config.runtime.pip_index_url == null) {
+    config.runtime.pip_index_url = ''
+  }
+  if (config.runtime.uv_index_url == null) {
+    config.runtime.uv_index_url = ''
+  }
 }
 
 type ValueFormatter = (value: unknown) => string
@@ -117,6 +130,16 @@ export function buildSettingsDraft(config: YAMLConfig, input: SettingsDraftInput
   }
   if (input.browseExtraRoots) {
     draft.runtime!.browse_extra_roots = input.browseExtraRoots
+  }
+  // 包仓库镜像：仅当输入显式提供时覆盖（空串也是合法值，表示清除镜像）。
+  if (input.npmRegistry !== undefined) {
+    draft.runtime!.npm_registry = input.npmRegistry.trim()
+  }
+  if (input.pipIndexURL !== undefined) {
+    draft.runtime!.pip_index_url = input.pipIndexURL.trim()
+  }
+  if (input.uvIndexURL !== undefined) {
+    draft.runtime!.uv_index_url = input.uvIndexURL.trim()
   }
   return draft
 }
@@ -406,6 +429,30 @@ export function collectSettingsChanges(before: YAMLConfig, after: YAMLConfig): S
     after.runtime?.strict_path_only_runtime ?? true,
     runtimeOnly,
     (v) => (v ? '启用' : '关闭'),
+  )
+  addChange(
+    changes,
+    'npm 包仓库镜像',
+    before.runtime?.npm_registry ?? '',
+    after.runtime?.npm_registry ?? '',
+    runtimeOnly,
+    (v) => (String(v).trim() ? String(v) : '未覆盖（用子进程默认）'),
+  )
+  addChange(
+    changes,
+    'pip 包仓库镜像',
+    before.runtime?.pip_index_url ?? '',
+    after.runtime?.pip_index_url ?? '',
+    runtimeOnly,
+    (v) => (String(v).trim() ? String(v) : '未覆盖（用子进程默认）'),
+  )
+  addChange(
+    changes,
+    'uv 包仓库镜像',
+    before.runtime?.uv_index_url ?? '',
+    after.runtime?.uv_index_url ?? '',
+    runtimeOnly,
+    (v) => (String(v).trim() ? String(v) : '未覆盖（用子进程默认）'),
   )
   addChange(
     changes,
