@@ -23,7 +23,7 @@ func TestDoctorProbeAndSummary(t *testing.T) {
 	if len(tools) != len(DefaultProbeTools()) {
 		t.Fatalf("tool count=%d", len(tools))
 	}
-	sum := BuildSummary(DefaultPolicy(), tools, "/data", "/data/runtime", []string{"/data/runtime/bin"}, nil, nil, nil)
+	sum := BuildSummary(DefaultPolicy(), tools, "/data", "/data/runtime", []string{"/data/runtime/bin"}, nil, nil, nil, nil, "")
 	if sum.AvailableCount != 2 {
 		t.Fatalf("available=%d", sum.AvailableCount)
 	}

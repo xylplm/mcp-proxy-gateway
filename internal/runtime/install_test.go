@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -225,6 +226,155 @@ func TestInstallerProgressSnapshotIsCopied(t *testing.T) {
 	in.setProgress(nil)
 	if in.currentProgress() != nil {
 		t.Fatal("progress should clear after installation")
+	}
+}
+
+// TestInstallerLogsCaptureSuccess 验证成功安装会写入包含 success 级别的日志。
+func TestInstallerLogsCaptureSuccess(t *testing.T) {
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	content := []byte("#!/bin/sh\necho uv\n")
+	if err := tw.WriteHeader(&tar.Header{Name: "uv", Mode: 0o755, Size: int64(len(content))}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(content); err != nil {
+		t.Fatal(err)
+	}
+	_ = tw.Close()
+	_ = gz.Close()
+	payload := buf.Bytes()
+	sum := sha256.Sum256(payload)
+	sha := hex.EncodeToString(sum[:])
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(payload)
+	}))
+	t.Cleanup(srv.Close)
+
+	rt := t.TempDir()
+	if err := EnsureRuntimeLayout(rt); err != nil {
+		t.Fatal(err)
+	}
+	in := NewInstaller(rt, srv.Client())
+	in.catalog = func() []PackageSpec {
+		return []PackageSpec{{
+			ID: "uv-log", Name: "uv-log", Version: "0.0.1", Kind: PackageKindUV,
+			Tools: []string{"uv", "uvx"},
+			Assets: []PackageAsset{{GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, URL: srv.URL + "/uv.tar.gz", SHA256: sha, Format: "tar.gz"}},
+		}}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if _, err := in.Install(ctx, "uv-log"); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	logs := in.Logs()
+	if len(logs) == 0 {
+		t.Fatal("expected install logs")
+	}
+	// 应包含开始、下载成功、安装完成三类。
+	var hasInfo, hasDownloadSuccess, hasInstallSuccess bool
+	for _, e := range logs {
+		if e.Level == InstallLogInfo {
+			hasInfo = true
+		}
+		if e.Phase == "downloading" && e.Level == InstallLogSuccess {
+			hasDownloadSuccess = true
+		}
+		if e.Phase == "placing" && e.Level == InstallLogSuccess && strings.Contains(e.Message, "安装完成") {
+			hasInstallSuccess = true
+		}
+	}
+	if !hasInfo {
+		t.Fatalf("missing info log: %+v", logs)
+	}
+	if !hasDownloadSuccess {
+		t.Fatalf("missing download success log: %+v", logs)
+	}
+	if !hasInstallSuccess {
+		t.Fatalf("missing install success log: %+v", logs)
+	}
+	// 成功后无残留错误。
+	if in.lastInstallError() != "" {
+		t.Fatalf("unexpected lastError=%q", in.lastInstallError())
+	}
+}
+
+// TestInstallerLogsCaptureError 验证失败安装写入 error 日志并保留 lastError。
+func TestInstallerLogsCaptureError(t *testing.T) {
+	official := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(official.Close)
+
+	rt := t.TempDir()
+	if err := EnsureRuntimeLayout(rt); err != nil {
+		t.Fatal(err)
+	}
+	in := NewInstaller(rt, official.Client())
+	in.catalog = func() []PackageSpec {
+		return []PackageSpec{{
+			ID: "uv-err", Name: "uv-err", Version: "0.0.1", Kind: PackageKindUV,
+			Tools: []string{"uv", "uvx"},
+			Assets: []PackageAsset{{
+				GOOS: runtime.GOOS, GOARCH: runtime.GOARCH,
+				URL: official.URL + "/uv.tar.gz", SHA256: strings.Repeat("a", 64), Format: "tar.gz",
+			}},
+		}}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	_, err := in.Install(ctx, "uv-err")
+	if err == nil {
+		t.Fatal("expected install failure")
+	}
+	if in.lastInstallError() == "" {
+		t.Fatal("expected lastError to be persisted")
+	}
+	if !strings.Contains(in.lastInstallError(), "所有下载源均失败") {
+		t.Fatalf("lastError=%q", in.lastInstallError())
+	}
+	var hasError bool
+	for _, e := range in.Logs() {
+		if e.Level == InstallLogError {
+			hasError = true
+		}
+	}
+	if !hasError {
+		t.Fatal("expected at least one error log")
+	}
+}
+
+// TestInstallerLogsRingBuffer 验证日志环形缓冲上限。
+func TestInstallerLogsRingBuffer(t *testing.T) {
+	in := NewInstaller(t.TempDir(), nil)
+	for i := 0; i < maxInstallLogs+50; i++ {
+		in.addLog(InstallLogEntry{Phase: "test", Level: InstallLogInfo, Message: fmt.Sprintf("entry-%d", i)})
+	}
+	logs := in.Logs()
+	if len(logs) != maxInstallLogs {
+		t.Fatalf("ring buffer size=%d, want %d", len(logs), maxInstallLogs)
+	}
+	// 应保留最新的 maxInstallLogs 条（即 entry-50 起）。
+	first := logs[0].Message
+	if first != "entry-50" {
+		t.Fatalf("oldest kept=%q, want entry-50", first)
+	}
+}
+
+// TestInstallerLogsSnapshotIsCopied 验证 Logs() 返回副本，外部修改不影响内部。
+func TestInstallerLogsSnapshotIsCopied(t *testing.T) {
+	in := NewInstaller(t.TempDir(), nil)
+	in.addLog(InstallLogEntry{Phase: "x", Level: InstallLogInfo, Message: "m"})
+	logs := in.Logs()
+	logs[0].Message = "tampered"
+	if in.Logs()[0].Message != "m" {
+		t.Fatal("Logs() should return a copy")
 	}
 }
 

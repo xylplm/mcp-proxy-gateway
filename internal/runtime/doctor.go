@@ -38,6 +38,8 @@ type Summary struct {
 	Catalog                  []CatalogPackage    `json:"catalog,omitempty"`
 	InstalledPackages        []InstallRecord     `json:"installedPackages,omitempty"`
 	InstallProgress          *InstallProgress    `json:"installProgress,omitempty"`
+	InstallLogs              []InstallLogEntry   `json:"installLogs,omitempty"`
+	InstallError             string              `json:"installError,omitempty"`
 	RiskNotes                []string            `json:"riskNotes"`
 }
 
@@ -103,6 +105,8 @@ func BuildSummary(
 	catalog []CatalogPackage,
 	installed []InstallRecord,
 	installProgress *InstallProgress,
+	installLogs []InstallLogEntry,
+	installError string,
 ) Summary {
 	policy = NormalizePolicy(policy)
 	allowlist := policy.CommandAllowlist
@@ -168,6 +172,8 @@ func BuildSummary(
 		Catalog:                  catalog,
 		InstalledPackages:        installed,
 		InstallProgress:          installProgress,
+		InstallLogs:              installLogs,
+		InstallError:             installError,
 		RiskNotes:                notes,
 	}
 }
@@ -257,7 +263,7 @@ func (s *Service) installer() *Installer {
 // Summary 返回管理台摘要。
 func (s *Service) Summary() Summary {
 	if s == nil {
-		return BuildSummary(DefaultPolicy(), nil, "", "", nil, nil, nil, nil)
+		return BuildSummary(DefaultPolicy(), nil, "", "", nil, nil, nil, nil, nil, "")
 	}
 	policy := s.Policy()
 	dataDir := ""
@@ -273,6 +279,8 @@ func (s *Service) Summary() Summary {
 	inst := s.installer()
 	state := inst.loadState()
 	progress := inst.currentProgress()
+	logs := inst.Logs()
+	lastErr := inst.lastInstallError()
 	return BuildSummary(
 		policy,
 		doctor.Probe(),
@@ -282,6 +290,8 @@ func (s *Service) Summary() Summary {
 		inst.catalogWithState(state),
 		state.Packages,
 		progress,
+		logs,
+		lastErr,
 	)
 }
 

@@ -65,6 +65,28 @@ type InstallProgress struct {
 	StartedAt time.Time `json:"startedAt"`
 }
 
+// maxInstallLogs 为环形缓冲保留的最近日志条数（避免长时间运行后内存膨胀）。
+const maxInstallLogs = 200
+
+// InstallLogLevel 为日志条目的严重级别。
+type InstallLogLevel string
+
+const (
+	InstallLogInfo    InstallLogLevel = "info"
+	InstallLogSuccess InstallLogLevel = "success"
+	InstallLogError   InstallLogLevel = "error"
+)
+
+// InstallLogEntry 为一条结构化安装日志（供管理台展示与排查）。
+type InstallLogEntry struct {
+	Phase   string          `json:"phase"`
+	Level   InstallLogLevel `json:"level"`
+	Message string          `json:"message"`
+	Source  string          `json:"source,omitempty"` // 下载源 URL 或镜像 host
+	Bytes   int64           `json:"bytes,omitempty"`
+	At      time.Time       `json:"at"`
+}
+
 // Installer 负责受控预置包安装到 runtimeDir。
 type Installer struct {
 	runtimeDir string
@@ -77,6 +99,9 @@ type Installer struct {
 	mu         sync.Mutex // 串行化安装，避免并发写同一目录
 	progressMu sync.RWMutex
 	progress   *InstallProgress
+	lastError  string // 最近一次安装失败原因（progress 清空后仍保留，供前端展示）
+	logMu      sync.RWMutex
+	logs       []InstallLogEntry
 }
 
 // NewInstaller 构造安装器；client 可空（使用官方源白名单客户端）。
@@ -126,29 +151,44 @@ func (in *Installer) PreviewInstall(packageID string) (CatalogPackage, error) {
 func (in *Installer) Install(ctx context.Context, packageID string) (InstallResult, error) {
 	in.mu.Lock()
 	defer in.mu.Unlock()
-	in.setProgress(&InstallProgress{PackageID: strings.TrimSpace(packageID), Phase: "preparing", StartedAt: time.Now().UTC()})
+	pkgID := strings.TrimSpace(packageID)
+	in.clearLogs()
+	in.setProgress(&InstallProgress{PackageID: pkgID, Phase: "preparing", StartedAt: time.Now().UTC()})
 	defer in.setProgress(nil)
+	in.addLog(InstallLogEntry{Phase: "preparing", Level: InstallLogInfo, Message: "开始安装 " + pkgID})
 
 	if strings.TrimSpace(in.runtimeDir) == "" {
+		in.setLastError("运行时目录未配置")
+		in.addLog(InstallLogEntry{Phase: "preparing", Level: InstallLogError, Message: "运行时目录未配置"})
 		return InstallResult{}, fmt.Errorf("运行时目录未配置")
 	}
 	if err := EnsureRuntimeLayout(in.runtimeDir); err != nil {
+		msg := fmt.Sprintf("准备运行时目录失败：%v", err)
+		in.setLastError(msg)
+		in.addLog(InstallLogEntry{Phase: "preparing", Level: InstallLogError, Message: msg})
 		return InstallResult{}, fmt.Errorf("准备运行时目录失败：%w", err)
 	}
 
 	spec, ok := in.findPackage(packageID)
 	if !ok {
-		return InstallResult{}, fmt.Errorf("未知预置包 %q，仅可安装内置目录中的包", packageID)
+		msg := fmt.Sprintf("未知预置包 %q，仅可安装内置目录中的包", packageID)
+		in.setLastError(msg)
+		in.addLog(InstallLogEntry{Phase: "preparing", Level: InstallLogError, Message: msg})
+		return InstallResult{}, fmt.Errorf("%s", msg)
 	}
 	asset, ok := SelectAsset(spec, runtime.GOOS, runtime.GOARCH)
 	if !ok {
-		return InstallResult{}, fmt.Errorf("预置包 %q 不支持当前平台 %s/%s", packageID, runtime.GOOS, runtime.GOARCH)
+		msg := fmt.Sprintf("预置包 %q 不支持当前平台 %s/%s", packageID, runtime.GOOS, runtime.GOARCH)
+		in.setLastError(msg)
+		in.addLog(InstallLogEntry{Phase: "preparing", Level: InstallLogError, Message: msg})
+		return InstallResult{}, fmt.Errorf("%s", msg)
 	}
 
 	state := in.loadState()
 	if ok, _ := state.find(spec.ID); ok {
 		// 若关键工具已在 PATH 前缀中可用，视为复用。
 		if in.toolsPresent(spec.Tools) {
+			in.addLog(InstallLogEntry{Phase: "preparing", Level: InstallLogSuccess, Message: spec.Name + " 已存在且工具可用，跳过下载"})
 			return InstallResult{
 				ID:         spec.ID,
 				Name:       spec.Name,
@@ -175,6 +215,9 @@ func (in *Installer) Install(ctx context.Context, packageID string) (InstallResu
 		_ = os.MkdirAll(filepath.Join(in.runtimeDir, RuntimeSubdirCache), 0o755)
 		tmpDir, err = os.MkdirTemp(filepath.Join(in.runtimeDir, RuntimeSubdirCache), "install-")
 		if err != nil {
+			msg := fmt.Sprintf("创建临时目录失败：%v", err)
+			in.setLastError(msg)
+			in.addLog(InstallLogEntry{Phase: "preparing", Level: InstallLogError, Message: msg})
 			return InstallResult{}, fmt.Errorf("创建临时目录失败：%w", err)
 		}
 	}
@@ -183,6 +226,9 @@ func (in *Installer) Install(ctx context.Context, packageID string) (InstallResu
 	archivePath := filepath.Join(tmpDir, "package"+extForFormat(asset.Format))
 	in.updateProgressPhase("downloading")
 	if err := in.downloadWithFallback(ctx, asset.downloadSources(), archivePath, asset.SHA256); err != nil {
+		in.setLastError(err.Error())
+		// downloadWithFallback 内部已逐源记录日志，这里补一条汇总。
+		in.addLog(InstallLogEntry{Phase: "downloading", Level: InstallLogError, Message: err.Error()})
 		return InstallResult{}, err
 	}
 
@@ -193,20 +239,33 @@ func (in *Installer) Install(ctx context.Context, packageID string) (InstallResu
 	switch strings.ToLower(asset.Format) {
 	case "tar.gz", "tgz":
 		in.updateProgressPhase("extracting")
+		in.addLog(InstallLogEntry{Phase: "extracting", Level: InstallLogInfo, Message: "正在解压 tar.gz"})
 		if err := extractTarGz(archivePath, extractDir); err != nil {
+			msg := fmt.Sprintf("解压失败：%v", err)
+			in.setLastError(msg)
+			in.addLog(InstallLogEntry{Phase: "extracting", Level: InstallLogError, Message: msg})
 			return InstallResult{}, fmt.Errorf("解压失败：%w", err)
 		}
 	case "zip":
 		in.updateProgressPhase("extracting")
+		in.addLog(InstallLogEntry{Phase: "extracting", Level: InstallLogInfo, Message: "正在解压 zip"})
 		if err := extractZip(archivePath, extractDir); err != nil {
+			msg := fmt.Sprintf("解压失败：%v", err)
+			in.setLastError(msg)
+			in.addLog(InstallLogEntry{Phase: "extracting", Level: InstallLogError, Message: msg})
 			return InstallResult{}, fmt.Errorf("解压失败：%w", err)
 		}
 	default:
-		return InstallResult{}, fmt.Errorf("不支持的包格式 %q", asset.Format)
+		msg := fmt.Sprintf("不支持的包格式 %q", asset.Format)
+		in.setLastError(msg)
+		in.addLog(InstallLogEntry{Phase: "extracting", Level: InstallLogError, Message: msg})
+		return InstallResult{}, fmt.Errorf("%s", msg)
 	}
 
 	in.updateProgressPhase("placing")
 	if err := in.placePackage(spec, extractDir); err != nil {
+		in.setLastError(err.Error())
+		in.addLog(InstallLogEntry{Phase: "placing", Level: InstallLogError, Message: err.Error()})
 		return InstallResult{}, err
 	}
 
@@ -222,9 +281,17 @@ func (in *Installer) Install(ctx context.Context, packageID string) (InstallResu
 	}
 	state.upsert(rec)
 	if err := in.saveState(state); err != nil {
+		msg := fmt.Sprintf("写入安装状态失败：%v", err)
+		in.setLastError(msg)
+		in.addLog(InstallLogEntry{Phase: "placing", Level: InstallLogError, Message: msg})
 		return InstallResult{}, fmt.Errorf("写入安装状态失败：%w", err)
 	}
 
+	in.addLog(InstallLogEntry{
+		Phase:   "placing",
+		Level:   InstallLogSuccess,
+		Message: spec.Name + " " + spec.Version + " 安装完成",
+	})
 	return InstallResult{
 		ID:         spec.ID,
 		Name:       spec.Name,
@@ -242,7 +309,16 @@ func (in *Installer) setProgress(progress *InstallProgress) {
 	} else {
 		copy := *progress
 		in.progress = &copy
+		// 开始新安装时清空上一次错误。
+		in.lastError = ""
 	}
+	in.progressMu.Unlock()
+}
+
+// setLastError 记录安装失败原因（progress 清空后仍保留）。
+func (in *Installer) setLastError(msg string) {
+	in.progressMu.Lock()
+	in.lastError = msg
 	in.progressMu.Unlock()
 }
 
@@ -270,6 +346,16 @@ func (in *Installer) addProgressBytes(n int64) {
 	in.progressMu.Unlock()
 }
 
+// currentProgressBytes 返回当前已下载字节数（只读快照）。
+func (in *Installer) currentProgressBytes() int64 {
+	in.progressMu.RLock()
+	defer in.progressMu.RUnlock()
+	if in.progress == nil {
+		return 0
+	}
+	return in.progress.Bytes
+}
+
 func (in *Installer) currentProgress() *InstallProgress {
 	in.progressMu.RLock()
 	defer in.progressMu.RUnlock()
@@ -278,6 +364,46 @@ func (in *Installer) currentProgress() *InstallProgress {
 	}
 	copy := *in.progress
 	return &copy
+}
+
+// lastInstallError 返回最近一次安装失败原因（无进度时仍保留，供前端排查）。
+func (in *Installer) lastInstallError() string {
+	in.progressMu.RLock()
+	defer in.progressMu.RUnlock()
+	return in.lastError
+}
+
+// addLog 追加一条安装日志，环形缓冲保留最近 maxInstallLogs 条。
+func (in *Installer) addLog(entry InstallLogEntry) {
+	if entry.At.IsZero() {
+		entry.At = time.Now().UTC()
+	}
+	in.logMu.Lock()
+	defer in.logMu.Unlock()
+	in.logs = append(in.logs, entry)
+	if len(in.logs) > maxInstallLogs {
+		// 丢弃最旧的一批，避免每次安装切片膨胀。
+		in.logs = append([]InstallLogEntry(nil), in.logs[len(in.logs)-maxInstallLogs:]...)
+	}
+}
+
+// clearLogs 清空历史日志（新一轮安装开始时调用，避免新旧混淆）。
+func (in *Installer) clearLogs() {
+	in.logMu.Lock()
+	defer in.logMu.Unlock()
+	in.logs = nil
+}
+
+// Logs 返回安装日志的副本（稳定顺序，最早在前）。
+func (in *Installer) Logs() []InstallLogEntry {
+	in.logMu.RLock()
+	defer in.logMu.RUnlock()
+	if len(in.logs) == 0 {
+		return nil
+	}
+	out := make([]InstallLogEntry, len(in.logs))
+	copy(out, in.logs)
+	return out
 }
 
 type installProgressWriter struct {
@@ -407,12 +533,36 @@ func (in *Installer) downloadWithFallback(ctx context.Context, sources []downloa
 	if len(sources) == 0 {
 		return fmt.Errorf("预置包缺少下载地址")
 	}
+	in.addLog(InstallLogEntry{
+		Phase:   "downloading",
+		Level:   InstallLogInfo,
+		Message: fmt.Sprintf("共 %d 个下载源（官方优先，镜像兜底）", len(sources)),
+	})
 	var attempts []downloadAttempt
 	for _, src := range sources {
+		label := "官方源"
+		if src.mirror {
+			label = "镜像源"
+		}
+		start := time.Now()
+		in.addLog(InstallLogEntry{Phase: "downloading", Level: InstallLogInfo, Message: label + " 开始下载", Source: src.url})
 		err := in.downloadFile(ctx, src.url, dest, wantSHA)
 		if err == nil {
+			in.addLog(InstallLogEntry{
+				Phase:   "downloading",
+				Level:   InstallLogSuccess,
+				Message: fmt.Sprintf("%s 下载完成（用时 %s）", label, time.Since(start).Round(time.Millisecond)),
+				Source:  src.url,
+				Bytes:   in.currentProgressBytes(),
+			})
 			return nil
 		}
+		in.addLog(InstallLogEntry{
+			Phase:   "downloading",
+			Level:   InstallLogError,
+			Message: fmt.Sprintf("%s 失败：%v", label, err),
+			Source:  src.url,
+		})
 		attempts = append(attempts, downloadAttempt{url: src.url, mirror: src.mirror, err: err})
 	}
 	// 聚合失败原因，明确列出每个源，避免「下载失败」后无从判断是被墙还是校验错。
