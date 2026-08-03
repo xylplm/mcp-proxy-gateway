@@ -29,11 +29,19 @@ func newInstallHTTPClient() *http.Client {
 
 func allowedInstallHost(host string) bool {
 	switch host {
+	// 官方发行渠道
 	case "nodejs.org",
 		"github.com",
 		"objects.githubusercontent.com",
 		"release-assets.githubusercontent.com",
 		"github-releases.githubusercontent.com":
+		return true
+	// 国内镜像（仅用于内置 catalog 的 Node/uv 回退下载）
+	case "registry.npmmirror.com",
+		"npmmirror.com",
+		"gh-proxy.com",
+		"ghproxy.net",
+		"mirror.ghproxy.com":
 		return true
 	default:
 		return strings.HasSuffix(host, ".githubusercontent.com")

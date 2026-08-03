@@ -13,6 +13,13 @@ const (
 	PackageKindUV   PackageKind = "uv"
 )
 
+// MirrorAsset 为官方资产的一个镜像源（host + url，内容字节与官方一致，复用同一 SHA256）。
+// 用于在国内等官方源不可达时自动回退；镜像必须与官方 tarball 字节一致。
+type MirrorAsset struct {
+	Host string `json:"host"`
+	URL  string `json:"url"`
+}
+
 // PackageAsset 为某一 GOOS/GOARCH 的下载资产（URL + 完整性校验）。
 type PackageAsset struct {
 	GOOS   string `json:"goos"`
@@ -21,6 +28,17 @@ type PackageAsset struct {
 	SHA256 string `json:"sha256"`
 	// Format: "tar.gz" | "zip"
 	Format string `json:"format"`
+	// Mirrors 为按序回退的镜像源（与官方 URL 同一文件，复用同一 SHA256）。
+	Mirrors []MirrorAsset `json:"mirrors,omitempty"`
+}
+
+// downloadSources 返回官方 URL 及其镜像，按安装顺序排列（官方优先，镜像兜底）。
+func (a PackageAsset) downloadSources() []downloadSource {
+	out := []downloadSource{{url: a.URL}}
+	for _, m := range a.Mirrors {
+		out = append(out, downloadSource{url: m.URL, host: m.Host, mirror: true})
+	}
+	return out
 }
 
 // PackageSpec 为受控预置包目录项（固定清单，禁止任意 URL）。
@@ -50,9 +68,26 @@ type CatalogPackage struct {
 	AssetGOARCH string      `json:"assetGoarch,omitempty"`
 }
 
+// nodeMirrors 返回 Node 官方资产在国内的镜像源（npmmirror 字节与官方一致，SHASUMS256 复用）。
+func nodeMirrors(version, file string) []MirrorAsset {
+	return []MirrorAsset{
+		{Host: "registry.npmmirror.com", URL: "https://registry.npmmirror.com/-/binary/node/v" + version + "/" + file},
+	}
+}
+
+// uvMirrors 返回 uv 官方资产在国内的代理镜像（转发到 GitHub release，字节一致）。
+func uvMirrors(file string) []MirrorAsset {
+	official := "https://github.com/astral-sh/uv/releases/download/0.6.14/" + file
+	return []MirrorAsset{
+		{Host: "gh-proxy.com", URL: "https://gh-proxy.com/" + official},
+		{Host: "ghproxy.net", URL: "https://ghproxy.net/" + official},
+	}
+}
+
 // DefaultCatalog 返回内置受控预置清单（版本与校验和写死，升级需发版）。
 //
 // 校验和来自官方发行渠道（Node SHASUMS256 / uv 发布 sha256）。
+// 镜像源字节与官方一致，复用同一 SHA256，仅在官方源不可达时按序回退。
 func DefaultCatalog() []PackageSpec {
 	return []PackageSpec{
 		{
@@ -69,6 +104,7 @@ func DefaultCatalog() []PackageSpec {
 					URL:    "https://nodejs.org/dist/v22.14.0/node-v22.14.0-linux-x64.tar.gz",
 					SHA256: "9d942932535988091034dc94cc5f42b6dc8784d6366df3a36c4c9ccb3996f0c2",
 					Format: "tar.gz",
+					Mirrors: nodeMirrors("22.14.0", "node-v22.14.0-linux-x64.tar.gz"),
 				},
 				{
 					GOOS:   "linux",
@@ -76,6 +112,7 @@ func DefaultCatalog() []PackageSpec {
 					URL:    "https://nodejs.org/dist/v22.14.0/node-v22.14.0-linux-arm64.tar.gz",
 					SHA256: "8cf30ff7250f9463b53c18f89c6c606dfda70378215b2c905d0a9a8b08bd45e0",
 					Format: "tar.gz",
+					Mirrors: nodeMirrors("22.14.0", "node-v22.14.0-linux-arm64.tar.gz"),
 				},
 				{
 					GOOS:   "windows",
@@ -83,6 +120,7 @@ func DefaultCatalog() []PackageSpec {
 					URL:    "https://nodejs.org/dist/v22.14.0/node-v22.14.0-win-x64.zip",
 					SHA256: "55b639295920b219bb2acbcfa00f90393a2789095b7323f79475c9f34795f217",
 					Format: "zip",
+					Mirrors: nodeMirrors("22.14.0", "node-v22.14.0-win-x64.zip"),
 				},
 			},
 		},
@@ -100,6 +138,7 @@ func DefaultCatalog() []PackageSpec {
 					URL:    "https://github.com/astral-sh/uv/releases/download/0.6.14/uv-x86_64-unknown-linux-musl.tar.gz",
 					SHA256: "0cac4df0cb3457b154f2039ae471e89cd4e15f3bd790bbb3cb0b8b40d940b93e",
 					Format: "tar.gz",
+					Mirrors: uvMirrors("uv-x86_64-unknown-linux-musl.tar.gz"),
 				},
 				{
 					GOOS:   "linux",
@@ -107,6 +146,7 @@ func DefaultCatalog() []PackageSpec {
 					URL:    "https://github.com/astral-sh/uv/releases/download/0.6.14/uv-aarch64-unknown-linux-musl.tar.gz",
 					SHA256: "94e22c4be44d205def456427639ca5ca1c1a9e29acc31808a7b28fdd5dcf7f17",
 					Format: "tar.gz",
+					Mirrors: uvMirrors("uv-aarch64-unknown-linux-musl.tar.gz"),
 				},
 				{
 					GOOS:   "windows",
@@ -114,6 +154,7 @@ func DefaultCatalog() []PackageSpec {
 					URL:    "https://github.com/astral-sh/uv/releases/download/0.6.14/uv-x86_64-pc-windows-msvc.zip",
 					SHA256: "93b29fc234758e381df461d7638ff73d0f08bdf3a0dc37923b1ee0b9e442ca3f",
 					Format: "zip",
+					Mirrors: uvMirrors("uv-x86_64-pc-windows-msvc.zip"),
 				},
 			},
 		},

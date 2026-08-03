@@ -182,7 +182,7 @@ func (in *Installer) Install(ctx context.Context, packageID string) (InstallResu
 
 	archivePath := filepath.Join(tmpDir, "package"+extForFormat(asset.Format))
 	in.updateProgressPhase("downloading")
-	if err := in.downloadFile(ctx, asset.URL, archivePath, asset.SHA256); err != nil {
+	if err := in.downloadWithFallback(ctx, asset.downloadSources(), archivePath, asset.SHA256); err != nil {
 		return InstallResult{}, err
 	}
 
@@ -382,6 +382,53 @@ func (in *Installer) toolsPresent(tools []string) bool {
 		}
 	}
 	return true
+}
+
+// downloadSource 描述一个可尝试的下载来源（官方优先，镜像兜底）。
+type downloadSource struct {
+	url    string
+	host   string // 预解析主机名，供日志展示；空则从 url 解析
+	mirror bool   // 是否镜像源
+}
+
+type downloadAttempt struct {
+	url    string
+	mirror bool
+	err    error
+}
+
+// downloadWithFallback 依次尝试官方源与镜像源；首个成功（通过 SHA256 校验）即返回。
+// 全部失败时返回聚合错误，列出每次尝试的目标与原因，便于排查被墙/超时。
+func (in *Installer) downloadWithFallback(ctx context.Context, sources []downloadSource, dest, wantSHA string) error {
+	wantSHA = strings.ToLower(strings.TrimSpace(wantSHA))
+	if wantSHA == "" || len(wantSHA) != 64 {
+		return fmt.Errorf("预置包缺少有效 SHA256")
+	}
+	if len(sources) == 0 {
+		return fmt.Errorf("预置包缺少下载地址")
+	}
+	var attempts []downloadAttempt
+	for _, src := range sources {
+		err := in.downloadFile(ctx, src.url, dest, wantSHA)
+		if err == nil {
+			return nil
+		}
+		attempts = append(attempts, downloadAttempt{url: src.url, mirror: src.mirror, err: err})
+	}
+	// 聚合失败原因，明确列出每个源，避免「下载失败」后无从判断是被墙还是校验错。
+	var b strings.Builder
+	b.WriteString("所有下载源均失败：")
+	for i, a := range attempts {
+		if i > 0 {
+			b.WriteString("；")
+		}
+		label := "官方源"
+		if a.mirror {
+			label = "镜像源"
+		}
+		fmt.Fprintf(&b, "%s %s → %v", label, a.url, a.err)
+	}
+	return fmt.Errorf("%s", b.String())
 }
 
 func (in *Installer) downloadFile(ctx context.Context, rawURL, dest, wantSHA string) error {

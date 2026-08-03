@@ -246,3 +246,159 @@ func TestInstallRejectsEmptyRuntimeDir(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+// TestDownloadWithFallbackFallsThroughMirrors 验证官方源失败后回退到镜像源。
+func TestDownloadWithFallbackFallsThroughMirrors(t *testing.T) {
+	payload := []byte("mirror-fallback-payload")
+	sum := sha256.Sum256(payload)
+	sha := hex.EncodeToString(sum[:])
+
+	// 第二个服务器（镜像）返回正确内容；第一个（官方）返回 503。
+	var goodSrv *httptest.Server
+	goodSrv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(payload)
+	}))
+	t.Cleanup(goodSrv.Close)
+
+	badSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(badSrv.Close)
+
+	rt := t.TempDir()
+	in := NewInstaller(rt, goodSrv.Client())
+	dest := filepath.Join(rt, "out.bin")
+
+	sources := []downloadSource{
+		{url: badSrv.URL + "/official", host: "official", mirror: false},
+		{url: goodSrv.URL + "/mirror", host: "mirror", mirror: true},
+	}
+	if err := in.downloadWithFallback(context.Background(), sources, dest, sha); err != nil {
+		t.Fatalf("expected fallback success, got: %v", err)
+	}
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("content mismatch")
+	}
+}
+
+// TestDownloadWithFallbackAllFailAggregatesErrors 验证全部源失败时返回聚合错误。
+func TestDownloadWithFallbackAllFailAggregatesErrors(t *testing.T) {
+	bad1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(bad1.Close)
+	bad2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusGatewayTimeout)
+	}))
+	t.Cleanup(bad2.Close)
+
+	rt := t.TempDir()
+	in := NewInstaller(rt, bad1.Client())
+	dest := filepath.Join(rt, "out.bin")
+	sources := []downloadSource{
+		{url: bad1.URL + "/official", mirror: false},
+		{url: bad2.URL + "/mirror", mirror: true},
+	}
+	err := in.downloadWithFallback(context.Background(), sources, dest, strings.Repeat("a", 64))
+	if err == nil {
+		t.Fatal("expected aggregate error")
+	}
+	if !strings.Contains(err.Error(), "所有下载源均失败") {
+		t.Fatalf("missing aggregate prefix: %v", err)
+	}
+	if !strings.Contains(err.Error(), "官方源") || !strings.Contains(err.Error(), "镜像源") {
+		t.Fatalf("missing source labels: %v", err)
+	}
+}
+
+// TestDownloadWithFallbackSHA256MismatchFails 验证 SHA256 校验失败不视为「成功源」。
+func TestDownloadWithFallbackSHA256MismatchFails(t *testing.T) {
+	payload := []byte("tampered")
+	sum := sha256.Sum256(payload)
+	sha := hex.EncodeToString(sum[:])
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		// 写入与 sha 不匹配的内容
+		_, _ = w.Write([]byte("different"))
+	}))
+	t.Cleanup(srv.Close)
+
+	rt := t.TempDir()
+	in := NewInstaller(rt, srv.Client())
+	dest := filepath.Join(rt, "out.bin")
+	sources := []downloadSource{{url: srv.URL + "/x", mirror: false}}
+	err := in.downloadWithFallback(context.Background(), sources, dest, sha)
+	if err == nil {
+		t.Fatal("expected checksum error")
+	}
+	if !strings.Contains(err.Error(), "校验和不匹配") {
+		t.Fatalf("expected checksum mismatch, got: %v", err)
+	}
+}
+
+// TestInstallUsesMirrorWhenOfficialFails 端到端：官方源 503，镜像源提供真实 uv tarball，安装成功。
+func TestInstallUsesMirrorWhenOfficialFails(t *testing.T) {
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	content := []byte("#!/bin/sh\necho uv\n")
+	if err := tw.WriteHeader(&tar.Header{Name: "uv", Mode: 0o755, Size: int64(len(content))}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(content); err != nil {
+		t.Fatal(err)
+	}
+	_ = tw.Close()
+	_ = gz.Close()
+	payload := buf.Bytes()
+	sum := sha256.Sum256(payload)
+	sha := hex.EncodeToString(sum[:])
+
+	mirror := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(payload)
+	}))
+	t.Cleanup(mirror.Close)
+	official := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(official.Close)
+
+	rt := t.TempDir()
+	if err := EnsureRuntimeLayout(rt); err != nil {
+		t.Fatal(err)
+	}
+	in := NewInstaller(rt, mirror.Client())
+	in.catalog = func() []PackageSpec {
+		return []PackageSpec{{
+			ID: "uv-mirror", Name: "uv-mirror", Version: "0.0.1", Kind: PackageKindUV,
+			Tools: []string{"uv", "uvx"},
+			Assets: []PackageAsset{{
+				GOOS: runtime.GOOS, GOARCH: runtime.GOARCH,
+				URL:    official.URL + "/official.tar.gz",
+				SHA256: sha,
+				Format: "tar.gz",
+				Mirrors: []MirrorAsset{{Host: "mirror.local", URL: mirror.URL + "/mirror.tar.gz"}},
+			}},
+		}}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	res, err := in.Install(ctx, "uv-mirror")
+	if err != nil {
+		t.Fatalf("install via mirror: %v", err)
+	}
+	if res.Reused {
+		t.Fatalf("expected fresh install")
+	}
+	if _, err := os.Stat(filepath.Join(rt, "bin", "uv")); err != nil {
+		t.Fatalf("uv missing after mirror install: %v", err)
+	}
+}
