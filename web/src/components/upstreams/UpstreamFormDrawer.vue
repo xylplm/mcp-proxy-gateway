@@ -1129,7 +1129,7 @@ async function handleInstallPackage(packageId: string): Promise<void> {
   if (!packageId || installingPackageId.value !== '') return
   const ok = await confirm({
     title: '安装运行时',
-    message: '将从官方源下载固定版本到数据卷（SHA256 校验）。是否继续？',
+    message: '将从官方源下载固定版本到数据卷（SHA256 校验）。官方源不可达时会自动尝试国内镜像源。完整进度与日志可在「运行环境」页查看。是否继续？',
     confirmText: '安装',
     tone: 'warning',
   })
@@ -1140,7 +1140,9 @@ async function handleInstallPackage(packageId: string): Promise<void> {
     toast.success(result.reused ? `${result.name} 已存在` : `${result.name} 安装完成`)
     await runPreflight()
   } catch (err) {
-    toast.error(err instanceof Error ? err.message : '安装失败')
+    const msg = err instanceof Error ? err.message : '安装失败'
+    // toast 简短提示，并引导去运行环境页看完整日志（国内网络下常见下载超时/被墙）。
+    toast.error(`${msg}。可在「运行环境」页查看安装日志与镜像回退详情。`)
   } finally {
     installingPackageId.value = ''
   }

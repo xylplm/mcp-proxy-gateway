@@ -73,7 +73,24 @@ export interface RuntimeSummary {
     total: number
     startedAt: string
   }
+  /** 最近一次安装的结构化日志（成功/失败各阶段），最早在前。 */
+  installLogs?: RuntimeInstallLogEntry[]
+  /** 最近一次安装失败原因（进度清空后仍保留，便于排查）。 */
+  installError?: string
   riskNotes: string[]
+}
+
+/** 安装日志条目级别。 */
+export type RuntimeInstallLogLevel = 'info' | 'success' | 'error'
+
+/** 运行时安装结构化日志条目（对应后端 InstallLogEntry）。 */
+export interface RuntimeInstallLogEntry {
+  phase: string
+  level: RuntimeInstallLogLevel
+  message: string
+  source?: string
+  bytes?: number
+  at: string
 }
 
 export interface RuntimeInstallResult {

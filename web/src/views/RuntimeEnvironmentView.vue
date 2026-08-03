@@ -11,6 +11,7 @@ import {
   installRuntimePackage,
   uninstallRuntimePackage,
   type RuntimeCatalogPackage,
+  type RuntimeInstallLogEntry,
   type RuntimeSummary,
   type RuntimeToolStatus,
 } from '@/api/runtime'
@@ -114,6 +115,19 @@ const installProgressPercent = computed(() => {
   return Math.min(100, Math.round((progress.bytes / progress.total) * 100))
 })
 
+/** 安装中或上次失败时，是否展示安装日志/错误面板。 */
+const showInstallPanel = computed(
+  () =>
+    !!summary.value?.installProgress ||
+    (summary.value?.installLogs != null && summary.value.installLogs.length > 0),
+)
+
+const installError = computed(() => summary.value?.installError ?? '')
+
+const installLogs = computed<RuntimeInstallLogEntry[]>(
+  () => summary.value?.installLogs ?? [],
+)
+
 function stopInstallProgressPolling(): void {
   if (installProgressTimer !== null) {
     clearInterval(installProgressTimer)
@@ -131,7 +145,7 @@ function startInstallProgressPolling(): void {
     } catch {
       // 保留最近一次进度，下一轮继续尝试；安装请求本身负责报告最终错误。
     }
-  }, 3000)
+  }, 1500)
 }
 
 async function load(): Promise<void> {
@@ -167,6 +181,40 @@ function packageChipClass(pkg: RuntimeCatalogPackage): string {
     return 'bg-gray-100 text-gray-500 dark:bg-white/5 dark:text-gray-400'
   }
   return 'bg-warning-50 text-warning-700 dark:bg-warning-500/10 dark:text-warning-400'
+}
+
+/** 安装日志时间线条目的左侧圆点颜色。 */
+function logEntryDotClass(entry: RuntimeInstallLogEntry): string {
+  if (entry.level === 'success') return 'bg-success-500'
+  if (entry.level === 'error') return 'bg-error-500'
+  return 'bg-brand-500'
+}
+
+/** 安装日志阶段标签。 */
+function logPhaseLabel(phase: string): string {
+  switch (phase) {
+    case 'preparing':
+      return '准备'
+    case 'downloading':
+      return '下载'
+    case 'verifying':
+      return '校验'
+    case 'extracting':
+      return '解压'
+    case 'placing':
+      return '安装'
+    default:
+      return phase
+  }
+}
+
+/** 简化的日志时间（HH:MM:SS），避免时间线过宽。 */
+function logTimeShort(iso: string): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
 
 async function onInstall(pkg: RuntimeCatalogPackage): Promise<void> {
@@ -503,6 +551,75 @@ onUnmounted(stopInstallProgressPolling)
             </div>
           </article>
         </div>
+
+        <!-- 安装日志与错误：不再被 toast 吞掉，便于排查被墙/超时/校验失败 -->
+        <section
+          v-if="showInstallPanel"
+          class="mt-4 rounded-2xl border bg-white p-5 shadow-sm dark:bg-white/[0.03]"
+          :class="installError ? 'border-error-200 dark:border-error-500/30' : 'border-gray-200 dark:border-gray-800'"
+        >
+          <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">安装日志</h3>
+            <span
+              v-if="summary.installProgress"
+              class="inline-flex rounded-full bg-brand-50 px-2.5 py-0.5 text-[11px] font-medium text-brand-700 dark:bg-brand-500/10 dark:text-brand-300"
+            >
+              {{ installProgressLabel }}…
+            </span>
+          </div>
+
+          <!-- 失败错误条：持久展示，直到下一次安装开始 -->
+          <div
+            v-if="installError"
+            class="mb-4 rounded-xl border border-error-200 bg-error-50 px-4 py-3 text-sm text-error-700 dark:border-error-500/30 dark:bg-error-500/10 dark:text-error-300"
+          >
+            <p class="font-semibold">安装失败</p>
+            <p class="mt-1 break-all">{{ installError }}</p>
+            <p class="mt-2 text-xs text-error-600/80 dark:text-error-400/80">
+              国内网络下官方源(nodejs.org/github.com)常不可达。系统已自动尝试镜像源，若仍失败可稍后重试或检查网络。
+            </p>
+          </div>
+
+          <!-- 日志时间线：小屏单列 -->
+          <ol v-if="installLogs.length > 0" class="space-y-2.5">
+            <li
+              v-for="(entry, idx) in installLogs"
+              :key="idx"
+              class="flex gap-3 text-xs"
+            >
+              <div class="flex flex-col items-center">
+                <span class="mt-1 h-2 w-2 shrink-0 rounded-full" :class="logEntryDotClass(entry)"></span>
+                <span
+                  v-if="idx < installLogs.length - 1"
+                  class="mt-0.5 w-px flex-1 bg-gray-200 dark:bg-gray-700"
+                ></span>
+              </div>
+              <div class="min-w-0 flex-1 pb-1">
+                <div class="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                  <span class="font-mono text-gray-400 dark:text-gray-500">{{ logTimeShort(entry.at) }}</span>
+                  <span
+                    class="inline-flex rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-600 dark:bg-white/5 dark:text-gray-300"
+                  >{{ logPhaseLabel(entry.phase) }}</span>
+                  <span
+                    v-if="entry.level === 'success'"
+                    class="text-success-600 dark:text-success-400"
+                  >成功</span>
+                  <span
+                    v-else-if="entry.level === 'error'"
+                    class="text-error-600 dark:text-error-400"
+                  >失败</span>
+                </div>
+                <p class="mt-0.5 break-all text-gray-700 dark:text-gray-200">{{ entry.message }}</p>
+                <p v-if="entry.source" class="mt-0.5 break-all font-mono text-[10px] text-gray-400 dark:text-gray-500">
+                  {{ entry.source }}
+                </p>
+              </div>
+            </li>
+          </ol>
+          <p v-else-if="!summary.installProgress" class="text-sm text-gray-400 dark:text-gray-500">
+            暂无安装日志。
+          </p>
+        </section>
       </section>
 
       <section
