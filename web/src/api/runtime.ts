@@ -77,6 +77,8 @@ export interface RuntimeSummary {
   installLogs?: RuntimeInstallLogEntry[]
   /** 最近一次安装失败原因（进度清空后仍保留，便于排查）。 */
   installError?: string
+  /** 依赖管理（npm/pip）状态。 */
+  deps?: RuntimeDepsStatus
   riskNotes: string[]
 }
 
@@ -100,6 +102,57 @@ export interface RuntimeInstallResult {
   tools: string[]
   runtimeDir: string
   reused: boolean
+}
+
+/** 依赖类型：npm / pip。 */
+export type RuntimeDepKind = 'npm' | 'pip'
+
+/** 已安装的第三方包。 */
+export interface RuntimeDependency {
+  name: string
+  version: string
+  latest?: string
+  kind: RuntimeDepKind
+}
+
+/** 依赖列表结果（对应后端 ListDepsResult）。 */
+export interface RuntimeListDepsResult {
+  kind: RuntimeDepKind
+  ready: boolean
+  items: RuntimeDependency[]
+  count: number
+  warning?: string
+  pythonHint?: string
+}
+
+/** 依赖安装/卸载结果。 */
+export interface RuntimeDepInstallResult {
+  kind: RuntimeDepKind
+  name: string
+  version?: string
+  message?: string
+}
+
+/** 依赖管理状态（嵌入 Summary.deps）。 */
+export interface RuntimeDepsStatus {
+  npm?: RuntimeListDepsResult
+  pip?: RuntimeListDepsResult
+  depProgress?: {
+    kind: RuntimeDepKind
+    action: string
+    spec?: string
+    startedAt: string
+  }
+  depLogs?: RuntimeDepLogEntry[]
+  depError?: string
+}
+
+/** 依赖操作日志条目。 */
+export interface RuntimeDepLogEntry {
+  kind: RuntimeDepKind
+  level: 'info' | 'success' | 'error'
+  message: string
+  at: string
 }
 
 export interface DirectoryLaunchEntry {
@@ -160,6 +213,40 @@ export async function uninstallRuntimePackage(
     {
       packageId,
     },
+  )
+  return res.data
+}
+
+/** 列出某类运行时已安装的第三方包。 */
+export async function listRuntimeDeps(kind: RuntimeDepKind): Promise<RuntimeListDepsResult> {
+  const res = await request.get<RuntimeListDepsResult>('/runtime/deps', { params: { kind } })
+  return res.data
+}
+
+/** 安装/升级一个第三方包（可能较久，提高超时）。 */
+export async function installRuntimeDep(
+  kind: RuntimeDepKind,
+  spec: string,
+): Promise<RuntimeDepInstallResult> {
+  const cfg: AxiosRequestConfig = { timeout: 12 * 60 * 1000 }
+  const res = await request.post<RuntimeDepInstallResult>(
+    '/runtime/deps/install',
+    { kind, spec },
+    cfg,
+  )
+  return res.data
+}
+
+/** 卸载一个第三方包。 */
+export async function uninstallRuntimeDep(
+  kind: RuntimeDepKind,
+  name: string,
+): Promise<RuntimeDepInstallResult> {
+  const cfg: AxiosRequestConfig = { timeout: 6 * 60 * 1000 }
+  const res = await request.post<RuntimeDepInstallResult>(
+    '/runtime/deps/uninstall',
+    { kind, name },
+    cfg,
   )
   return res.data
 }

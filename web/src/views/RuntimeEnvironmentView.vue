@@ -5,13 +5,20 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import AdminLayout from '@/components/layout/AdminLayout.vue'
 import PageBreadcrumb from '@/components/common/PageBreadcrumb.vue'
-import { BoxCubeIcon, RefreshIcon } from '@/icons'
+import { BoxCubeIcon, PlusIcon, RefreshIcon, TrashIcon } from '@/icons'
 import {
   getRuntimeSummary,
   installRuntimePackage,
+  installRuntimeDep,
+  listRuntimeDeps,
   uninstallRuntimePackage,
+  uninstallRuntimeDep,
   type RuntimeCatalogPackage,
+  type RuntimeDepKind,
+  type RuntimeDependency,
+  type RuntimeDepLogEntry,
   type RuntimeInstallLogEntry,
+  type RuntimeListDepsResult,
   type RuntimeSummary,
   type RuntimeToolStatus,
 } from '@/api/runtime'
@@ -98,6 +105,228 @@ const hasKernelIsolation = computed(
 const activeInstallPackageId = computed(
   () => busyPackageId.value || summary.value?.installProgress?.packageId || '',
 )
+
+// --- 依赖管理（npm/pip 包安装/升级/卸载）状态 ---
+const depKind = ref<RuntimeDepKind>('npm')
+const depList = ref<Record<RuntimeDepKind, RuntimeListDepsResult | null>>({
+  npm: null,
+  pip: null,
+})
+const depListLoading = ref(false)
+const depListError = ref('')
+const depInput = ref('')
+const depInstalling = ref(false)
+const depUninstallingName = ref('')
+const depInputError = ref('')
+
+const depProgress = computed(() => summary.value?.deps?.depProgress ?? null)
+const depError = computed(() => summary.value?.deps?.depError ?? '')
+const depLogs = computed<RuntimeDepLogEntry[]>(() => summary.value?.deps?.depLogs ?? [])
+const showDepPanel = computed(
+  () =>
+    !!depProgress.value ||
+    (depLogs.value != null && depLogs.value.length > 0),
+)
+
+/** 当前 kind 的依赖操作是否进行中（安装/卸载/列表加载）。 */
+const depBusy = computed(
+  () => depInstalling.value || depUninstallingName.value !== '' || depListLoading.value,
+)
+
+const currentDepList = computed(() => depList.value[depKind.value])
+
+/** 校验依赖输入合法性（即时反馈，不阻塞提交）。 */
+const validDepInput = computed(() => {
+  const spec = depInput.value.trim()
+  if (spec === '') return true
+  // 允许逗号/空格分隔多个包。
+  const parts = spec.split(/[,\s]+/).filter((p) => p !== '')
+  return parts.every((p) => isDepSpecValid(p))
+})
+
+function isDepSpecValid(spec: string): boolean {
+  if (spec === '' || spec.length > 256) return false
+  // 取裸包名（去掉 @version / ==version）。
+  const { name } = parseDepSpec(spec)
+  if (name === '' || name.length > 214) return false
+  if (name.includes('..')) return false
+  // 反斜杠 / 控制字符 拒绝。
+  if (name.includes('\\')) return false
+  for (const ch of name) {
+    const c = ch.codePointAt(0)
+    if (c === undefined || c < 0x20 || c === 0x7f) return false
+  }
+  // @scope/name 允许一个斜杠；否则不含斜杠/空格。
+  const slashCount = (name.match(/\//g) || []).length
+  if (name.startsWith('@')) {
+    if (slashCount !== 1) return false
+    const segs = name.split('/')
+    return segs[0].length >= 2 && segs[1] !== '' && !segs[1].includes('/')
+  }
+  return slashCount === 0 && !name.includes(' ')
+}
+
+/** 解析 spec 为裸包名与版本（与后端 parseDepSpecName 对齐）。 */
+function parseDepSpec(spec: string): { name: string; version: string } {
+  const s = spec.trim()
+  const eqIdx = s.indexOf('==')
+  if (eqIdx > 0) return { name: s.slice(0, eqIdx), version: s.slice(eqIdx + 2) }
+  // name@version（注意 @scope/name 的 @ 在开头，用 LastIndex）。
+  const at = s.lastIndexOf('@')
+  if (at > 0) return { name: s.slice(0, at), version: s.slice(at + 1) }
+  return { name: s, version: '' }
+}
+
+async function loadDepList(kind: RuntimeDepKind): Promise<void> {
+  if (depListLoading.value) return
+  depListLoading.value = true
+  depListError.value = ''
+  try {
+    depList.value[kind] = await listRuntimeDeps(kind)
+  } catch (err) {
+    depListError.value = err instanceof Error ? err.message : '加载依赖列表失败'
+  } finally {
+    depListLoading.value = false
+  }
+}
+
+async function switchDepKind(kind: RuntimeDepKind): Promise<void> {
+  if (depKind.value === kind) return
+  depKind.value = kind
+  depInputError.value = ''
+  if (depList.value[kind] === null) {
+    await loadDepList(kind)
+  }
+}
+
+/** 依赖操作轮询：安装期间 1.5s 拉取 summary 更新 depProgress/depLogs。 */
+function startDepProgressPolling(): void {
+  if (installProgressTimer !== null) return // 复用同一轮询（预置安装/依赖安装不会同时进行）
+  installProgressTimer = setInterval(async () => {
+    try {
+      const next = await getRuntimeSummary()
+      summary.value = next
+      if (!next.installProgress && !next.deps?.depProgress) {
+        stopInstallProgressPolling()
+      }
+    } catch {
+      // 保留最近状态，下一轮继续尝试。
+    }
+  }, 1500)
+}
+
+async function onInstallDep(): Promise<void> {
+  const raw = depInput.value.trim()
+  if (raw === '' || depBusy.value) return
+  if (!validDepInput.value) {
+    depInputError.value = '包名格式不正确'
+    return
+  }
+  depInputError.value = ''
+  // 支持逗号/空格分隔多个包，逐个安装。
+  const specs = raw.split(/[,\s]+/).filter((p) => p !== '')
+  if (specs.length === 0) return
+  const kind = depKind.value
+  // 多个包时二次确认。
+  const message =
+    specs.length === 1
+      ? `将向 ${kind === 'npm' ? 'Node 全局区' : 'Python venv'} 安装 ${specs[0]}（走已配置的镜像源）。是否继续？`
+      : `将依次安装 ${specs.length} 个包到 ${kind === 'npm' ? 'Node 全局区' : 'Python venv'}：${specs.join('、')}。是否继续？`
+  const ok = await confirm({
+    title: `安装 ${kind} 依赖`,
+    message,
+    confirmText: '安装',
+    tone: 'warning',
+  })
+  if (!ok) return
+  depInstalling.value = true
+  startDepProgressPolling()
+  try {
+    for (const spec of specs) {
+      await installRuntimeDep(kind, spec)
+    }
+    toast.success(`已安装 ${specs.length} 个包`)
+    depInput.value = ''
+    await loadDepList(kind)
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : '安装依赖失败'
+    toast.error(msg)
+  } finally {
+    depInstalling.value = false
+    if (!summary.value?.installProgress && !summary.value?.deps?.depProgress) {
+      stopInstallProgressPolling()
+    }
+  }
+}
+
+async function onUpgradeDep(dep: RuntimeDependency): Promise<void> {
+  if (depBusy.value) return
+  const kind = depKind.value
+  // npm 用 name@latest，pip 直接 install name（默认最新）。
+  const spec = kind === 'npm' ? `${dep.name}@latest` : dep.name
+  const ok = await confirm({
+    title: `升级 ${dep.name}`,
+    message: `将把 ${dep.name} 升级到最新版本（${kind === 'npm' ? 'Node 全局区' : 'Python venv'}）。是否继续？`,
+    confirmText: '升级',
+    tone: 'warning',
+  })
+  if (!ok) return
+  depInstalling.value = true
+  startDepProgressPolling()
+  try {
+    await installRuntimeDep(kind, spec)
+    toast.success(`${dep.name} 已升级`)
+    await loadDepList(kind)
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : '升级失败')
+  } finally {
+    depInstalling.value = false
+    if (!summary.value?.installProgress && !summary.value?.deps?.depProgress) {
+      stopInstallProgressPolling()
+    }
+  }
+}
+
+async function onUninstallDep(dep: RuntimeDependency): Promise<void> {
+  if (depBusy.value) return
+  const kind = depKind.value
+  const ok = await confirm({
+    title: `卸载 ${dep.name}`,
+    message: `将从 ${kind === 'npm' ? 'Node 全局区' : 'Python venv'} 移除 ${dep.name}。依赖它的 stdio 上游可能无法启动。是否继续？`,
+    confirmText: '卸载',
+    tone: 'danger',
+  })
+  if (!ok) return
+  depUninstallingName.value = dep.name
+  startDepProgressPolling()
+  try {
+    await uninstallRuntimeDep(kind, dep.name)
+    toast.success(`${dep.name} 已卸载`)
+    await loadDepList(kind)
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : '卸载失败')
+  } finally {
+    depUninstallingName.value = ''
+    if (!summary.value?.installProgress && !summary.value?.deps?.depProgress) {
+      stopInstallProgressPolling()
+    }
+  }
+}
+
+/** 依赖日志时间线辅助：级别点颜色 / 时间。 */
+function depLogDotClass(entry: RuntimeDepLogEntry): string {
+  if (entry.level === 'success') return 'bg-success-500'
+  if (entry.level === 'error') return 'bg-error-500'
+  return 'bg-brand-500'
+}
+
+function depLogTimeShort(iso: string): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+}
 
 const installProgressLabel = computed(() => {
   const phase = summary.value?.installProgress?.phase
@@ -268,6 +497,8 @@ async function onUninstall(pkg: RuntimeCatalogPackage): Promise<void> {
 onMounted(async () => {
   await load()
   if (summary.value?.installProgress) startInstallProgressPolling()
+  // 默认加载 npm 依赖列表（pip 段切换时再懒加载）。
+  void loadDepList('npm')
 })
 onUnmounted(stopInstallProgressPolling)
 </script>
@@ -620,6 +851,229 @@ onUnmounted(stopInstallProgressPolling)
             暂无安装日志。
           </p>
         </section>
+      </section>
+
+      <!-- 依赖管理：npm/pip 第三方包安装/升级/卸载（青龙式集中管理） -->
+      <section
+        class="mb-5 rounded-2xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-white/[0.03]"
+      >
+        <div class="mb-4 flex flex-wrap items-start justify-between gap-2">
+          <div class="min-w-0">
+            <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">依赖管理</h3>
+            <p class="mt-1 max-w-3xl text-sm text-gray-500 dark:text-gray-400">
+              为已安装的 Node / Python 运行时集中安装第三方包，stdio 上游共享这些依赖。npm 包装到 Node
+              全局区，pip 包装到共享 venv。走已配置的镜像源。
+            </p>
+          </div>
+          <button
+            type="button"
+            class="inline-flex h-9 items-center gap-1.5 rounded-lg border border-gray-300 px-3 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:opacity-60 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+            :disabled="depBusy"
+            :aria-label="`刷新${depKind} 依赖列表`"
+            @click="loadDepList(depKind)"
+          >
+            <RefreshIcon class="h-4 w-4" :class="depListLoading ? 'animate-spin' : ''" aria-hidden="true" />
+            刷新
+          </button>
+        </div>
+
+        <!-- npm / pip 分段切换 -->
+        <div class="mb-4 inline-flex rounded-lg border border-gray-200 p-1 dark:border-gray-700">
+          <button
+            type="button"
+            class="rounded-md px-4 py-1.5 text-sm font-medium transition"
+            :class="depKind === 'npm' ? 'bg-brand-500 text-white' : 'text-gray-600 hover:text-gray-800 dark:text-gray-300 dark:hover:text-white'"
+            @click="switchDepKind('npm')"
+          >
+            npm
+          </button>
+          <button
+            type="button"
+            class="rounded-md px-4 py-1.5 text-sm font-medium transition"
+            :class="depKind === 'pip' ? 'bg-brand-500 text-white' : 'text-gray-600 hover:text-gray-800 dark:text-gray-300 dark:hover:text-white'"
+            @click="switchDepKind('pip')"
+          >
+            pip
+          </button>
+        </div>
+
+        <!-- pip 缺 Python 解释器时的引导 -->
+        <div
+          v-if="depKind === 'pip' && currentDepList && !currentDepList.ready && currentDepList.pythonHint"
+          class="mb-4 rounded-xl border border-warning-200 bg-warning-50 px-4 py-3 text-sm text-warning-800 dark:border-warning-500/30 dark:bg-warning-500/10 dark:text-warning-300"
+        >
+          <p class="font-semibold">Python 解释器未检测到</p>
+          <p class="mt-1">{{ currentDepList.pythonHint }}</p>
+        </div>
+
+        <!-- 安装输入条：单行，支持逗号/空格分隔多个包 -->
+        <div class="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center">
+          <div class="flex-1">
+            <input
+              v-model="depInput"
+              type="text"
+              class="h-10 w-full rounded-lg border bg-transparent px-3 text-sm text-gray-800 shadow-sm placeholder:text-gray-400 focus:outline-none focus:ring-3 focus:ring-brand-500/10 dark:text-white/90 dark:placeholder:text-white/30"
+              :class="depInputError !== '' || !validDepInput ? 'border-error-300 focus:border-error-300' : 'border-gray-300 focus:border-brand-300 dark:border-gray-700'"
+              :placeholder="depKind === 'npm' ? 'lodash 或 lodash@4.17.21（多个用逗号分隔）' : 'requests 或 requests==2.31.0（多个用逗号分隔）'"
+              :disabled="depBusy"
+              @keydown.enter.prevent="onInstallDep"
+            />
+            <p
+              v-if="depInputError !== '' || !validDepInput"
+              class="mt-1 text-xs text-error-500"
+            >
+              {{ depInputError || '包名格式不正确' }}
+            </p>
+          </div>
+          <button
+            type="button"
+            class="inline-flex h-10 items-center justify-center gap-1.5 rounded-lg px-4 text-sm font-medium text-white transition disabled:cursor-not-allowed disabled:opacity-50"
+            :class="depKind === 'npm' ? 'bg-brand-500 hover:bg-brand-600' : 'bg-success-500 hover:bg-success-600'"
+            :disabled="depInput.trim() === '' || depBusy || (depKind === 'pip' && currentDepList !== null && !currentDepList.ready && !!currentDepList.pythonHint)"
+            :aria-label="`安装 ${depKind} 依赖`"
+            @click="onInstallDep"
+          >
+            <span
+              v-if="depInstalling"
+              class="mr-1 inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white"
+            />
+            <PlusIcon v-else class="h-4 w-4" aria-hidden="true" />
+            {{ depInstalling ? '安装中…' : '安装' }}
+          </button>
+        </div>
+
+        <!-- 安装进度条（依赖操作进行中） -->
+        <div
+          v-if="depProgress"
+          class="mb-4 rounded-lg bg-brand-50 px-3 py-2 text-xs text-brand-700 dark:bg-brand-500/10 dark:text-brand-300"
+        >
+          <div class="flex items-center justify-between gap-2">
+            <span>
+              {{ depProgress.action === 'uninstall' ? '正在卸载' : '正在安装' }}
+              <span class="font-mono">{{ depProgress.spec || '' }}</span>
+            </span>
+            <span class="inline-flex items-center gap-1">
+              <span class="inline-block h-3 w-3 animate-spin rounded-full border-2 border-brand-300 border-t-brand-600"></span>
+            </span>
+          </div>
+          <div class="mt-1.5 h-1.5 overflow-hidden rounded-full bg-brand-100 dark:bg-brand-500/20">
+            <div class="h-full w-1/3 animate-pulse rounded-full bg-brand-500" />
+          </div>
+        </div>
+
+        <!-- 依赖操作失败错误条 -->
+        <div
+          v-if="depError"
+          class="mb-4 rounded-xl border border-error-200 bg-error-50 px-4 py-3 text-sm text-error-700 dark:border-error-500/30 dark:bg-error-500/10 dark:text-error-300"
+        >
+          <p class="font-semibold">操作失败</p>
+          <p class="mt-1 break-all">{{ depError }}</p>
+        </div>
+
+        <!-- 列表加载错误 -->
+        <p
+          v-if="depListError !== ''"
+          class="mb-4 rounded-xl border border-error-200 bg-error-50 px-4 py-3 text-sm text-error-600 dark:border-error-500/30 dark:bg-error-500/10 dark:text-error-400"
+        >
+          {{ depListError }}
+        </p>
+
+        <!-- 依赖列表：响应式卡片网格 -->
+        <div
+          v-if="currentDepList && currentDepList.ready"
+        >
+          <div
+            v-if="currentDepList.count === 0"
+            class="rounded-xl border border-dashed border-gray-200 px-4 py-8 text-center text-sm text-gray-400 dark:border-gray-700"
+          >
+            暂无已安装的第三方包。可在上方输入包名安装，例如
+            <span class="font-mono">{{ depKind === 'npm' ? 'lodash' : 'requests' }}</span>。
+          </div>
+          <div v-else class="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <article
+              v-for="dep in currentDepList.items"
+              :key="dep.name"
+              class="group hover:border-brand-200 dark:hover:border-brand-500/30 rounded-xl border border-gray-100 bg-gray-50/80 p-3 transition duration-300 hover:bg-white hover:shadow-md dark:border-gray-800 dark:bg-white/[0.03] dark:hover:bg-white/[0.05]"
+            >
+              <div class="flex items-start justify-between gap-2">
+                <h4 class="min-w-0 break-all font-mono text-sm font-semibold text-gray-800 dark:text-white/90">
+                  {{ dep.name }}
+                </h4>
+                <span class="inline-flex shrink-0 rounded-full bg-success-50 px-2 py-0.5 text-[10px] font-medium text-success-700 dark:bg-success-500/10 dark:text-success-400">
+                  {{ dep.version || '—' }}
+                </span>
+              </div>
+              <div class="mt-3 flex flex-wrap gap-1.5">
+                <button
+                  type="button"
+                  class="inline-flex h-7 items-center rounded-md border border-gray-300 px-2 text-xs font-medium text-gray-600 transition hover:bg-gray-100 disabled:opacity-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+                  :disabled="depBusy"
+                  :aria-label="`升级 ${dep.name}`"
+                  title="升级到最新版"
+                  @click="onUpgradeDep(dep)"
+                >
+                  <RefreshIcon class="h-3.5 w-3.5" aria-hidden="true" />
+                </button>
+                <button
+                  type="button"
+                  class="inline-flex h-7 items-center rounded-md border border-gray-300 px-2 text-xs font-medium text-error-600 transition hover:bg-error-50 disabled:opacity-50 dark:border-gray-700 dark:text-error-400 dark:hover:bg-error-500/10"
+                  :disabled="depBusy"
+                  :aria-label="`卸载 ${dep.name}`"
+                  title="卸载"
+                  @click="onUninstallDep(dep)"
+                >
+                  <span
+                    v-if="depUninstallingName === dep.name"
+                    class="mr-1 inline-block h-3 w-3 animate-spin rounded-full border-2 border-error-300 border-t-error-600"
+                  />
+                  <TrashIcon v-else class="h-3.5 w-3.5" aria-hidden="true" />
+                </button>
+              </div>
+            </article>
+          </div>
+        </div>
+
+        <!-- 依赖操作日志时间线 -->
+        <details
+          v-if="showDepPanel"
+          class="mt-4 rounded-xl border border-gray-100 bg-gray-50/50 p-3 dark:border-white/5 dark:bg-white/[0.02]"
+        >
+          <summary class="cursor-pointer text-xs font-semibold text-gray-600 dark:text-gray-300">
+            依赖操作日志（{{ depLogs.length }} 条）
+          </summary>
+          <ol class="mt-3 space-y-2">
+            <li
+              v-for="(entry, idx) in depLogs"
+              :key="idx"
+              class="flex gap-2.5 text-xs"
+            >
+              <div class="flex flex-col items-center">
+                <span class="mt-1 h-2 w-2 shrink-0 rounded-full" :class="depLogDotClass(entry)"></span>
+                <span
+                  v-if="idx < depLogs.length - 1"
+                  class="mt-0.5 w-px flex-1 bg-gray-200 dark:bg-gray-700"
+                ></span>
+              </div>
+              <div class="min-w-0 flex-1 pb-1">
+                <div class="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                  <span class="font-mono text-gray-400 dark:text-gray-500">{{ depLogTimeShort(entry.at) }}</span>
+                  <span
+                    class="inline-flex rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-600 dark:bg-white/5 dark:text-gray-300"
+                  >{{ entry.kind }}</span>
+                  <span
+                    v-if="entry.level === 'success'"
+                    class="text-success-600 dark:text-success-400"
+                  >成功</span>
+                  <span
+                    v-else-if="entry.level === 'error'"
+                    class="text-error-600 dark:text-error-400"
+                  >失败</span>
+                </div>
+                <p class="mt-0.5 break-all text-gray-700 dark:text-gray-200">{{ entry.message }}</p>
+              </div>
+            </li>
+          </ol>
+        </details>
       </section>
 
       <section
