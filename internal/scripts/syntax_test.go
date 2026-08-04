@@ -9,11 +9,12 @@ import (
 
 // fakeRunner 实现 CommandRunner，按预设返回 stdout/stderr/err。
 type fakeRunner struct {
-	stdout  string
-	stderr  string
-	err     error
-	gotBase string
-	gotArgs []string
+	stdout       string
+	stderr       string
+	err          error
+	missing      bool // 是否把 err 报告为「运行时未安装」
+	gotBase      string
+	gotArgs      []string
 }
 
 func (f *fakeRunner) RunCommand(_ context.Context, base string, args []string, _ string) (string, string, error) {
@@ -21,6 +22,8 @@ func (f *fakeRunner) RunCommand(_ context.Context, base string, args []string, _
 	f.gotArgs = args
 	return f.stdout, f.stderr, f.err
 }
+
+func (f *fakeRunner) IsRuntimeMissing(_ error) bool { return f.missing }
 
 func TestValidateSyntaxNilRunnerSkips(t *testing.T) {
 	// runner 为 nil 时不检测，直接通过。
@@ -30,8 +33,8 @@ func TestValidateSyntaxNilRunnerSkips(t *testing.T) {
 }
 
 func TestValidateSyntaxRuntimeMissingSkips(t *testing.T) {
-	// 解释器未装（错误含「运行时未安装」）→ 跳过。
-	r := &fakeRunner{err: errors.New("运行时未安装：node")}
+	// 解释器未装（runner 报告 IsRuntimeMissing=true）→ 跳过。
+	r := &fakeRunner{err: errors.New("boom"), missing: true}
 	if err := ValidateSyntax("x", "node", r); err != nil {
 		t.Fatalf("运行时未装应跳过，got %v", err)
 	}

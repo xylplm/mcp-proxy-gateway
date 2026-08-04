@@ -1,7 +1,6 @@
 package runtime
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -65,41 +64,12 @@ func (s *Service) RunCommand(ctx context.Context, base string, args []string, cw
 		RuntimeDir: runtimeDir,
 	}, prefixes...)
 
-	stdoutPipe, err := cmd.StdoutPipe()
-	if err != nil {
-		return "", "", err
-	}
-	stderrPipe, err := cmd.StderrPipe()
-	if err != nil {
-		return "", "", err
-	}
-	if err := cmd.Start(); err != nil {
-		return "", "", err
-	}
+	// runBounded 负责启动、逐行读取、限时回收（防孙进程持管道泄漏 goroutine）；不写日志。
+	return runBounded(cmd, nil)
+}
 
-	stdoutBuf := newBoundedBuffer(maxCommandOutput)
-	stderrBuf := newBoundedBuffer(maxCommandOutput)
-	doneOut := make(chan struct{})
-	doneErr := make(chan struct{})
-	go func() {
-		scanner := bufio.NewScanner(stdoutPipe)
-		scanner.Buffer(make([]byte, 64*1024), 1024*1024)
-		for scanner.Scan() {
-			stdoutBuf.appendLine(scanner.Text())
-		}
-		close(doneOut)
-	}()
-	go func() {
-		scanner := bufio.NewScanner(stderrPipe)
-		scanner.Buffer(make([]byte, 64*1024), 1024*1024)
-		for scanner.Scan() {
-			stderrBuf.appendLine(scanner.Text())
-		}
-		close(doneErr)
-	}()
-
-	waitErr := cmd.Wait()
-	<-doneOut
-	<-doneErr
-	return stdoutBuf.String(), stderrBuf.String(), waitErr
+// IsRuntimeMissing 判断 RunCommand 返回的错误是否为「解释器未安装」。
+// 供 scripts.ValidateSyntax 据此跳过语法检测而非当作硬失败（不阻断保存）。
+func (s *Service) IsRuntimeMissing(err error) bool {
+	return errors.Is(err, ErrRuntimeMissing)
 }

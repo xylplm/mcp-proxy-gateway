@@ -372,7 +372,8 @@ function startInstallProgressPolling(): void {
     try {
       const next = await getRuntimeSummary()
       summary.value = next
-      if (!next.installProgress) stopInstallProgressPolling()
+      // 预置安装与依赖安装共享同一轮询；两者都结束时才停止（避免一方仍在进行时误停）。
+      if (!next.installProgress && !next.deps?.depProgress) stopInstallProgressPolling()
     } catch {
       // 保留最近一次进度，下一轮继续尝试；安装请求本身负责报告最终错误。
     }
@@ -471,7 +472,7 @@ async function onInstall(pkg: RuntimeCatalogPackage): Promise<void> {
     toast.error(err instanceof Error ? err.message : '安装失败')
   } finally {
     busyPackageId.value = ''
-    if (!summary.value?.installProgress) stopInstallProgressPolling()
+    if (!summary.value?.installProgress && !summary.value?.deps?.depProgress) stopInstallProgressPolling()
   }
 }
 
@@ -909,10 +910,10 @@ onUnmounted(stopInstallProgressPolling)
             {{ depKind === 'pip' ? 'Python 解释器未检测到' : `${depKind} 运行时未就绪` }}
           </p>
           <p class="mt-1">{{ currentDepList.pythonHint || currentDepList.warning }}</p>
-          <router-link
-            to="/runtime"
+          <a
+            href="#runtime-install"
             class="mt-2 inline-block font-medium underline underline-offset-2"
-          >先去安装 {{ depKind === 'npm' ? 'Node' : 'uv' }}</router-link>
+          >查看预置安装</a>
         </div>
 
         <!-- 安装输入条：单行，支持逗号/空格分隔多个包 -->

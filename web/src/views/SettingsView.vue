@@ -187,9 +187,9 @@ const browseExtraRootsError = computed(() => firstIndexedError('runtime.browse_e
 const extraSensitivePrefixError = computed(() =>
   firstIndexedError('runtime.extra_sensitive_env_prefixes'),
 )
-const npmRegistryError = computed(() => fieldErrors['runtime.npm_registry'] ?? '')
-const pipIndexURLError = computed(() => fieldErrors['runtime.pip_index_url'] ?? '')
-const uvIndexURLError = computed(() => fieldErrors['runtime.uv_index_url'] ?? '')
+const npmRegistryError = computed(() => firstIndexedError('runtime.npm_registry'))
+const pipIndexURLError = computed(() => firstIndexedError('runtime.pip_index_url'))
+const uvIndexURLError = computed(() => firstIndexedError('runtime.uv_index_url'))
 
 function firstIndexedError(prefix: string): string {
   for (const [key, value] of Object.entries(fieldErrors)) {

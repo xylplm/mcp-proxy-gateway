@@ -36,6 +36,9 @@ func TestValidateDepSpec(t *testing.T) {
 		{"flag 短选项拒绝", "-g", true},
 		{"flag prefix 注入拒绝", "--prefix", true},
 		{"flag target 拒绝", "--target=/tmp", true},
+		{"前置等号拒绝", "==bad", true},
+		{"尾部等号拒绝", "pkg=", true},
+		{"裸等号拒绝", "=", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

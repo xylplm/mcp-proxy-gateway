@@ -1,7 +1,6 @@
 package runtime
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -412,15 +411,15 @@ func (dm *DependencyManager) ensureVenv(ctx context.Context) (bool, error) {
 		return false, nil
 	}
 	if err := os.MkdirAll(dm.pythonDir(), 0o755); err != nil {
-		return true, err
+		return false, err
 	}
 	uvPath, err := dm.resolveUv()
 	if err != nil {
-		return true, err
+		return false, err
 	}
 	_, stderr, runErr := dm.runCommand(ctx, uvPath, []string{"venv", "--python", py, dm.venvDir()}, dm.pythonDir(), DepKindPip)
 	if runErr != nil {
-		return true, fmt.Errorf("创建 venv 失败：%v%s", runErr, depErrTail(stderr))
+		return false, fmt.Errorf("创建 venv 失败：%v%s", runErr, depErrTail(stderr))
 	}
 	return true, nil
 }
@@ -563,48 +562,12 @@ func (dm *DependencyManager) runCommand(ctx context.Context, command string, arg
 		RuntimeDir: dm.runtimeDir,
 	}, PathPrefixes(dm.runtimeDir)...)
 
-	stdoutPipe, err := cmd.StdoutPipe()
-	if err != nil {
-		return "", "", err
+	// runBounded 负责启动、逐行读取（写日志）、限时回收（防孙进程持管道泄漏 goroutine）。
+	logFn := func(stream, line string) {
+		// npm/pip 进度信息多走 stderr，统一标注为 info（非错误）。
+		dm.addLog(DepLogEntry{Kind: kind, Level: DepLogInfo, Message: line})
 	}
-	stderrPipe, err := cmd.StderrPipe()
-	if err != nil {
-		return "", "", err
-	}
-	if err := cmd.Start(); err != nil {
-		return "", "", err
-	}
-
-	stdoutBuf := newBoundedBuffer(maxCommandOutput)
-	stderrBuf := newBoundedBuffer(maxCommandOutput)
-	doneOut := make(chan struct{})
-	doneErr := make(chan struct{})
-	go func() {
-		scanner := bufio.NewScanner(stdoutPipe)
-		scanner.Buffer(make([]byte, 64*1024), 1024*1024)
-		for scanner.Scan() {
-			line := scanner.Text()
-			stdoutBuf.appendLine(line)
-			dm.addLog(DepLogEntry{Kind: kind, Level: DepLogInfo, Message: line})
-		}
-		close(doneOut)
-	}()
-	go func() {
-		scanner := bufio.NewScanner(stderrPipe)
-		scanner.Buffer(make([]byte, 64*1024), 1024*1024)
-		for scanner.Scan() {
-			line := scanner.Text()
-			stderrBuf.appendLine(line)
-			// npm/pip 进度信息走 stderr，标注为 info（非错误）。
-			dm.addLog(DepLogEntry{Kind: kind, Level: DepLogInfo, Message: line})
-		}
-		close(doneErr)
-	}()
-
-	waitErr := cmd.Wait()
-	<-doneOut
-	<-doneErr
-	return stdoutBuf.String(), stderrBuf.String(), waitErr
+	return runBounded(cmd, logFn)
 }
 
 // boundedBuffer 是一个有总字节上限的行缓冲（防止 chatty 子进程撑爆内存）。
@@ -658,9 +621,14 @@ func validateDepSpec(spec string) error {
 	if len(name) > 214 {
 		return fmt.Errorf("包名过长（上限 214 字符）")
 	}
-	// 拒绝 flag 注入：name 以 - 开头会被 npm/uv 当作选项。
+	// 拒绝非法起始字符：name 不能以 - / = 或非开头的 @ 开头（防 flag 注入与畸形 spec）。
+	// 合法的 @ 仅允许出现在 scoped 包名开头（@scope/name），其余位置的裸 @ 在 parseDepSpecName
+	// 后不应残留；==bad 这类会把 == 之后当作版本，导致 name 为空已被前面拦截，但 ==前置仍需拒绝。
 	if strings.HasPrefix(name, "-") {
 		return fmt.Errorf("包名不能以 - 开头")
+	}
+	if strings.HasPrefix(name, "=") {
+		return fmt.Errorf("包名不能以 = 开头")
 	}
 	// 拒绝反斜杠与路径穿越。
 	if strings.Contains(name, "\\") {
@@ -668,6 +636,10 @@ func validateDepSpec(spec string) error {
 	}
 	if strings.Contains(name, "..") {
 		return fmt.Errorf("包名非法")
+	}
+	// 包名部分不应含 = （==version 已被 parseDepSpecName 拆出；残留 = 视为畸形 spec）。
+	if strings.Contains(name, "=") {
+		return fmt.Errorf("包名格式非法")
 	}
 	// @scope/name 允许恰好一个斜杠（且在 @scope 之后）；其余含斜杠/空格的拒绝。
 	slashCount := strings.Count(name, "/")

@@ -177,7 +177,7 @@ watch(
 
 <template>
   <div class="code-editor-host">
-    <div ref="hostRef" class="code-editor-cm" />
+    <div ref="hostRef" class="code-editor-cm" role="textbox" aria-label="脚本代码编辑器" />
     <div
       v-if="!loaded"
       class="flex min-h-[380px] items-center justify-center rounded-lg bg-[#0b1020] text-xs text-gray-500"

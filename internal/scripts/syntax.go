@@ -15,6 +15,9 @@ import (
 // 由上层注入（runtime.Service 实现该接口），保持 scripts 包不直接依赖 runtime。
 type CommandRunner interface {
 	RunCommand(ctx context.Context, base string, args []string, cwd string) (stdout, stderr string, err error)
+	// IsRuntimeMissing 判断 RunCommand 返回的错误是否为「解释器未安装」。
+	// scripts 据此跳过语法检测而非当作硬失败（不阻断保存）。
+	IsRuntimeMissing(err error) bool
 }
 
 // syntaxCheckTimeout 单次语法检测超时（避免异常脚本挂起保存流程）。
@@ -67,8 +70,8 @@ func ValidateSyntax(content, runtime string, runner CommandRunner) error {
 	fullArgs := append(append([]string{}, args...), tmpPath)
 	_, stderr, runErr := runner.RunCommand(ctx, base, fullArgs, filepath.Dir(tmpPath))
 	if runErr != nil {
-		// 解释器未装（runtime.ErrRuntimeMissing 被 ResolveCommand 包装为含「运行时未安装」文案）→ 跳过。
-		if strings.Contains(runErr.Error(), "运行时未安装") {
+		// 解释器未装 → 跳过（类型化判断，避免脆弱的字符串匹配）。
+		if runner.IsRuntimeMissing(runErr) {
 			return nil
 		}
 		// 超时 → 跳过（避免异常脚本挂起保存流程）。

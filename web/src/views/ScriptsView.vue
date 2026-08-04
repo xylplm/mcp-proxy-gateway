@@ -521,7 +521,7 @@ onMounted(load)
     >
       {{ loadError }}
     </p>
-    <div v-if="loading" class="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2 2xl:grid-cols-3">
+    <div v-if="loading" class="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2 2xl:grid-cols-3 4k:grid-cols-4">
       <div
         v-for="n in 6"
         :key="n"
@@ -675,7 +675,7 @@ onMounted(load)
                   <div
                     class="flex items-center justify-between border-b border-white/10 px-4 py-2 text-xs text-gray-400"
                   >
-                    <span>{{ editingLanguage }} · UTF-8 · 最大 1 MiB</span
+                    <span>{{ languageLabel(editingLanguage) }} · UTF-8 · 最大 1 MiB</span
                     ><button
                       class="rounded-lg border border-white/10 px-2.5 py-1 text-gray-300 hover:bg-white/5"
                       :disabled="analyzing"
