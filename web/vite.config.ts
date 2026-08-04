@@ -28,17 +28,21 @@ export default defineConfig({
     },
   },
   build: {
-    // 图表库体积大，单独分包并通过 LazyApexChart 视口懒加载，避免拖大首包。
+    // 图表库与代码编辑器体积大，单独分包并通过懒加载，避免拖大首包。
     rollupOptions: {
       output: {
         manualChunks(id) {
           if (id.includes('node_modules/apexcharts') || id.includes('node_modules/vue3-apexcharts')) {
             return 'apexcharts'
           }
+          // CodeMirror 6 模块化，单独 chunk 由 CodeEditor 懒加载。
+          if (id.includes('node_modules/@codemirror/') || id.includes('node_modules/codemirror')) {
+            return 'codemirror'
+          }
         },
       },
     },
-    // apexcharts 懒加载独立 chunk 仍约 1MB；不计入首屏，提高阈值避免误报。
+    // apexcharts/codemirror 懒加载独立 chunk 体积较大；不计入首屏，提高阈值避免误报。
     chunkSizeWarningLimit: 1200,
   },
   server: {
