@@ -1130,6 +1130,15 @@ onUnmounted(stopInstallProgressPolling)
                 {{ toolStatusLabel(tool) }}
               </span>
             </div>
+            <p class="mt-2 text-xs leading-5 break-all text-gray-500 dark:text-gray-400">
+              {{
+                tool.warning
+                  ? tool.warning
+                  : tool.available
+                    ? tool.path || '已在 PATH 中找到'
+                    : '未在运行时目录或 PATH 中找到，stdio 使用该命令会失败'
+              }}
+            </p>
             <div v-if="!tool.available && !tool.warning && packageForTool(tool)" class="mt-3 flex items-center justify-between gap-2">
               <span class="text-[11px] text-gray-400 dark:text-gray-500">
                 可安装 {{ packageForTool(tool)?.name }} {{ packageForTool(tool)?.version }}
