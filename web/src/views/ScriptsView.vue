@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import AdminLayout from '@/components/layout/AdminLayout.vue'
 import PageBreadcrumb from '@/components/common/PageBreadcrumb.vue'
+import CodeEditor from '@/components/common/CodeEditor.vue'
 import {
   activateScriptVersion,
   analyzeScriptContent,
@@ -21,7 +22,6 @@ import {
   type ScriptRiskReport,
   type ScriptVersion,
 } from '@/api/scripts'
-import { highlightScript } from '@/utils/scriptHighlight'
 import {
   SCRIPT_TEMPLATES,
   exportScriptPackage,
@@ -58,7 +58,6 @@ const analyzing = ref(false)
 const liveRisk = ref<ScriptRiskReport | null>(null)
 const editorError = ref('')
 const importInput = ref<HTMLInputElement | null>(null)
-const codeTextarea = ref<HTMLTextAreaElement | null>(null)
 let detailSeq = 0
 let analyzeSeq = 0
 let versionsSeq = 0
@@ -82,10 +81,11 @@ const filtered = computed(() => {
   })
 })
 
-const highlighted = computed(() =>
-  highlightScript(editingContent.value, String(editingLanguage.value)),
-)
 const activeRisk = computed(() => liveRisk.value ?? detail.value?.risk ?? null)
+/** 编辑器语言（仅 python/javascript 两态，供 CodeEditor）。 */
+const editorLanguage = computed<'python' | 'javascript'>(() =>
+  editingLanguage.value === 'javascript' ? 'javascript' : 'python',
+)
 const isDirty = computed(() => {
   if (editorMode.value === 'create')
     return editingContent.value.trim() !== '' || editingName.value.trim() !== ''
@@ -131,6 +131,37 @@ function openCreate(language: 'python' | 'javascript' = 'python'): void {
   editorOpen.value = true
   void analyzeCurrent()
 }
+
+/**
+ * 判断编辑器内容是否仍是当前语言的未改动模板（用于切换语言时决定是否替换内容）。
+ * 用户已手动编辑则保留其内容，仅切换高亮/检测语言。
+ */
+function isPristineTemplate(): boolean {
+  const lang = editingLanguage.value
+  if (lang !== 'python' && lang !== 'javascript') return false
+  const tpl = SCRIPT_TEMPLATES[lang]
+  return (
+    editingContent.value === tpl.content &&
+    editingName.value === tpl.name &&
+    editingDescription.value === ''
+  )
+}
+
+/**
+ * 切换脚本语言：仅在 create 模式且内容仍是当前语言模板（未手改）时，替换为新语言模板；
+ * 否则保留用户内容，仅切换高亮/检测语言。同时同步 runtime。
+ * 此 watcher 取代了语言 <select> 上原内联 @change（统一处理 runtime + 模板）。
+ */
+watch(editingLanguage, (next) => {
+  if (editorMode.value === 'create' && isPristineTemplate()) {
+    if (next === 'python' || next === 'javascript') {
+      const tpl = SCRIPT_TEMPLATES[next]
+      editingContent.value = tpl.content
+      editingName.value = tpl.name
+    }
+  }
+  editingRuntime.value = next === 'python' ? 'python3' : 'node'
+})
 
 async function openEdit(item: ScriptItem): Promise<void> {
   const seq = ++detailSeq
@@ -403,17 +434,6 @@ function exportCurrent(): void {
   toast.success('脚本文件已导出')
 }
 
-function insertIndent(): void {
-  const el = codeTextarea.value
-  if (!el) return
-  const start = el.selectionStart
-  const end = el.selectionEnd
-  editingContent.value = `${editingContent.value.slice(0, start)}  ${editingContent.value.slice(end)}`
-  requestAnimationFrame(() => {
-    el.selectionStart = el.selectionEnd = start + 2
-  })
-}
-
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`
   return `${(n / 1024).toFixed(1)} KiB`
@@ -622,7 +642,6 @@ onMounted(load)
                     v-model="editingLanguage"
                     :disabled="editorMode === 'edit'"
                     class="h-10 rounded-lg border border-gray-300 px-3 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white/90"
-                    @change="editingRuntime = editingLanguage === 'python' ? 'python3' : 'node'"
                   >
                     <option value="python">Python</option>
                     <option value="javascript">JavaScript</option>
@@ -665,25 +684,12 @@ onMounted(load)
                       {{ analyzing ? '分析中…' : '风险分析' }}
                     </button>
                   </div>
-                  <textarea
-                    ref="codeTextarea"
+                  <CodeEditor
                     v-model="editingContent"
-                    spellcheck="false"
-                    class="min-h-[380px] flex-1 resize-none bg-transparent p-4 font-mono text-[13px] leading-6 text-gray-100 outline-none"
-                    @keydown.tab.prevent="insertIndent"
-                  ></textarea>
+                    :language="editorLanguage"
+                    class="min-h-[380px] flex-1"
+                  />
                 </div>
-                <details class="mt-3 rounded-xl border border-gray-200 dark:border-gray-800">
-                  <summary
-                    class="cursor-pointer px-4 py-2 text-sm text-gray-600 dark:text-gray-300"
-                  >
-                    语法高亮预览
-                  </summary>
-                  <div
-                    class="max-h-72 overflow-auto bg-[#0b1020] p-4 font-mono text-xs leading-5"
-                    v-html="highlighted"
-                  ></div>
-                </details>
               </main>
               <aside
                 class="border-t border-gray-200 p-4 sm:p-6 xl:overflow-y-auto xl:border-t-0 xl:border-l dark:border-gray-800"
