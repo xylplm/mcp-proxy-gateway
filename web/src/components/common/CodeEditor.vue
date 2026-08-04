@@ -194,20 +194,25 @@ watch(
 </template>
 
 <style>
-/* CodeMirror 编辑器容器：与现有脚本编辑器卡片视觉一致。 */
+/* CodeMirror 编辑器容器：与脚本编辑器卡片视觉一致（#0b1020 深底）。 */
 .code-editor-host {
   min-height: 380px;
   width: 100%;
+  display: flex;
+  flex-direction: column;
 }
 .code-editor-cm {
   min-height: 380px;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
 }
 .code-editor-cm .cm-editor {
   min-height: 380px;
+  flex: 1 1 auto;
   font-size: 13px;
   line-height: 1.5;
   background: #0b1020;
-  border-radius: 0.5rem;
 }
 .code-editor-cm .cm-editor.cm-focused {
   outline: none;

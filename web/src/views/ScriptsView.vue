@@ -867,35 +867,3 @@ onMounted(load)
     </Teleport>
   </AdminLayout>
 </template>
-
-<style>
-.script-line {
-  display: flex;
-  white-space: pre;
-}
-.script-ln {
-  width: 3rem;
-  flex: none;
-  user-select: none;
-  color: #64748b;
-  text-align: right;
-  padding-right: 1rem;
-}
-.script-code {
-  color: #e2e8f0;
-}
-.tok-comment {
-  color: #64748b;
-  font-style: italic;
-}
-.tok-str {
-  color: #86efac;
-}
-.tok-kw {
-  color: #93c5fd;
-  font-weight: 600;
-}
-.tok-num {
-  color: #fcd34d;
-}
-</style>
