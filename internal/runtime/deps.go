@@ -37,7 +37,6 @@ func NormalizeDepKind(kind string) (DepKind, error) {
 type Dependency struct {
 	Name    string  `json:"name"`
 	Version string  `json:"version"`
-	Latest  string  `json:"latest,omitempty"`
 	Kind    DepKind `json:"kind"`
 }
 
@@ -87,6 +86,10 @@ type DepLogEntry struct {
 const (
 	maxDepLogs               = 200
 	defaultDepCommandTimeout = 5 * time.Minute
+	// maxCommandOutput 单条命令 stdout/stderr 缓冲上限（防止 chatty 子进程撑爆内存）。
+	maxCommandOutput = 2 * 1024 * 1024 // 2 MiB
+	// depKillGrace 是超时后给子进程组优雅退出的宽限（之后 exec 运行时强制 SIGKILL）。
+	depKillGrace = 3 * time.Second
 )
 
 // DependencyManager 在 runtimeDir 内对 Node/Python 全局区做包管理。
@@ -355,6 +358,7 @@ func (dm *DependencyManager) uninstallNpm(ctx context.Context, name string) (Ins
 	npmPath, err := dm.resolveNpm()
 	if err != nil {
 		dm.setLastError(err.Error())
+		dm.addLog(DepLogEntry{Kind: DepKindNpm, Level: DepLogError, Message: err.Error()})
 		return InstallDepResult{Kind: DepKindNpm}, err
 	}
 	args := []string{"uninstall", "--prefix", dm.nodeDir(), name}
@@ -498,16 +502,19 @@ func (dm *DependencyManager) uninstallPip(ctx context.Context, name string) (Ins
 	uvPath, err := dm.resolveUv()
 	if err != nil {
 		dm.setLastError(err.Error())
+		dm.addLog(DepLogEntry{Kind: DepKindPip, Level: DepLogError, Message: err.Error()})
 		return InstallDepResult{Kind: DepKindPip}, err
 	}
 	venvOK, err := dm.ensureVenv(ctx)
 	if err != nil {
 		dm.setLastError(err.Error())
+		dm.addLog(DepLogEntry{Kind: DepKindPip, Level: DepLogError, Message: err.Error()})
 		return InstallDepResult{Kind: DepKindPip}, err
 	}
 	if !venvOK {
 		msg := "未检测到 Python 解释器，无法创建 venv"
 		dm.setLastError(msg)
+		dm.addLog(DepLogEntry{Kind: DepKindPip, Level: DepLogError, Message: msg})
 		return InstallDepResult{Kind: DepKindPip}, fmt.Errorf("%s", msg)
 	}
 	args := []string{"pip", "uninstall", "--python", dm.venvDir(), "-y", name}
@@ -525,11 +532,31 @@ func (dm *DependencyManager) uninstallPip(ctx context.Context, name string) (Ins
 // --- 命令执行 ---
 
 // runCommand 执行一条命令，逐行捕获 stdout/stderr 写入日志缓冲，返回 stdout 全文与 stderr 尾部。
+// runCommand 执行一条命令，逐行捕获 stdout/stderr 写入日志缓冲，返回 stdout 全文与 stderr 尾部。
+//
+// 安全/健壮性：
+//   - 独立进程组（Setpgid）：超时或取消时杀整个进程树，避免 npm/uv 的孙进程成为孤儿。
+//   - cmd.Cancel 发 SIGTERM 到进程组（优雅退出），cmd.WaitDelay 给宽限后 exec 强制 SIGKILL。
+//   - stdout/stderr 累积上限 maxCommandOutput，防止 chatty 子进程（postinstall 循环日志）撑爆内存；
+//     日志环形缓冲（maxDepLogs）也独立有界。
 func (dm *DependencyManager) runCommand(ctx context.Context, command string, args []string, cwd string, kind DepKind) (string, string, error) {
 	cmd := exec.CommandContext(ctx, command, args...)
 	if cwd != "" {
 		cmd.Dir = cwd
 	}
+	// 进程组：便于超时时按组清理 npm/uv 的孙进程（标准档不会引入 bwrap）。
+	ApplySandbox(cmd, SandboxOptions{
+		Enabled:       true,
+		SecurityMode:  SecurityModeStandard,
+		RuntimeDir:    dm.runtimeDir,
+		NetworkMode:   NetworkAccessInherit,
+	})
+	// 超时/取消时：先向进程组发 SIGTERM（优雅），WaitDelay 后 exec 运行时强制 SIGKILL。
+	cmd.Cancel = func() error {
+		terminateProcessGroup(cmd)
+		return os.ErrProcessDone
+	}
+	cmd.WaitDelay = depKillGrace
 	// 复用 env 构造：剥离敏感父进程变量、注入包仓库镜像、前置 runtime PATH。
 	cmd.Env = BuildChildEnvWithOptions(os.Environ(), nil, dm.policy(), ChildEnvOptions{
 		Mode:       SecurityModeStandard,
@@ -548,8 +575,8 @@ func (dm *DependencyManager) runCommand(ctx context.Context, command string, arg
 		return "", "", err
 	}
 
-	var stdoutBuf strings.Builder
-	var stderrBuf strings.Builder
+	stdoutBuf := newBoundedBuffer(maxCommandOutput)
+	stderrBuf := newBoundedBuffer(maxCommandOutput)
 	doneOut := make(chan struct{})
 	doneErr := make(chan struct{})
 	go func() {
@@ -557,8 +584,7 @@ func (dm *DependencyManager) runCommand(ctx context.Context, command string, arg
 		scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 		for scanner.Scan() {
 			line := scanner.Text()
-			stdoutBuf.WriteString(line)
-			stdoutBuf.WriteByte('\n')
+			stdoutBuf.appendLine(line)
 			dm.addLog(DepLogEntry{Kind: kind, Level: DepLogInfo, Message: line})
 		}
 		close(doneOut)
@@ -568,8 +594,7 @@ func (dm *DependencyManager) runCommand(ctx context.Context, command string, arg
 		scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 		for scanner.Scan() {
 			line := scanner.Text()
-			stderrBuf.WriteString(line)
-			stderrBuf.WriteByte('\n')
+			stderrBuf.appendLine(line)
 			// npm/pip 进度信息走 stderr，标注为 info（非错误）。
 			dm.addLog(DepLogEntry{Kind: kind, Level: DepLogInfo, Message: line})
 		}
@@ -582,9 +607,41 @@ func (dm *DependencyManager) runCommand(ctx context.Context, command string, arg
 	return stdoutBuf.String(), stderrBuf.String(), waitErr
 }
 
+// boundedBuffer 是一个有总字节上限的行缓冲（防止 chatty 子进程撑爆内存）。
+// 超过上限后丢弃新行（只保留已写入的尾部供 depErrTail 使用）。
+type boundedBuffer struct {
+	limit int
+	n     int
+	full  bool
+	b     strings.Builder
+}
+
+func newBoundedBuffer(limit int) *boundedBuffer {
+	return &boundedBuffer{limit: limit}
+}
+
+func (bb *boundedBuffer) appendLine(line string) {
+	if bb.full {
+		return
+	}
+	add := len(line) + 1
+	if bb.n+add > bb.limit {
+		bb.full = true
+		return
+	}
+	bb.b.WriteString(line)
+	bb.b.WriteByte('\n')
+	bb.n += add
+}
+
+func (bb *boundedBuffer) String() string {
+	return bb.b.String()
+}
+
 // --- 辅助 ---
 
-// validateDepSpec 校验包名/spec：拒绝空、路径分隔符、空格、..、控制字符。
+// validateDepSpec 校验包名/spec：拒绝空、路径分隔符、空格、..、控制字符、
+// 以及以 - 开头的项（防止被 npm/uv 解析为命令行 flag，例如 --prefix/-g/--target）。
 // 允许 name、name@version、@scope/name、@scope/name@version、name==version（pip 风格）。
 func validateDepSpec(spec string) error {
 	if strings.TrimSpace(spec) == "" {
@@ -601,31 +658,31 @@ func validateDepSpec(spec string) error {
 	if len(name) > 214 {
 		return fmt.Errorf("包名过长（上限 214 字符）")
 	}
-	// @scope/name 允许恰好一个斜杠（且在 @scope 之后）；其余含斜杠/反斜杠/空格的拒绝。
-	slashCount := strings.Count(name, "/")
-	backslashCount := strings.Count(name, "\\")
-	if backslashCount > 0 {
-		return fmt.Errorf("包名不能包含反斜杠或空格")
+	// 拒绝 flag 注入：name 以 - 开头会被 npm/uv 当作选项。
+	if strings.HasPrefix(name, "-") {
+		return fmt.Errorf("包名不能以 - 开头")
 	}
-	isScoped := strings.HasPrefix(name, "@")
-	if isScoped {
-		if slashCount != 1 || !strings.HasPrefix(name, "@/") && !strings.Contains(name, "/") {
-			// 合法形如 @scope/name：必须 @ 开头 + 恰好一个 /。
-		}
+	// 拒绝反斜杠与路径穿越。
+	if strings.Contains(name, "\\") {
+		return fmt.Errorf("包名不能包含反斜杠")
+	}
+	if strings.Contains(name, "..") {
+		return fmt.Errorf("包名非法")
+	}
+	// @scope/name 允许恰好一个斜杠（且在 @scope 之后）；其余含斜杠/空格的拒绝。
+	slashCount := strings.Count(name, "/")
+	if strings.HasPrefix(name, "@") {
 		if slashCount != 1 {
 			return fmt.Errorf("scoped 包名格式应为 @scope/name")
 		}
 		parts := strings.SplitN(name, "/", 2)
 		scope := parts[0]
 		pkg := parts[1]
-		if len(scope) < 2 || strings.ContainsAny(pkg, "/") || pkg == "" {
+		if len(scope) < 2 || pkg == "" || strings.ContainsAny(pkg, "/") {
 			return fmt.Errorf("scoped 包名格式应为 @scope/name")
 		}
-	} else if slashCount > 0 || strings.ContainsAny(name, " \\") {
+	} else if slashCount > 0 || strings.ContainsAny(name, " ") {
 		return fmt.Errorf("包名不能包含路径分隔符或空格")
-	}
-	if strings.Contains(name, "..") {
-		return fmt.Errorf("包名非法")
 	}
 	for _, r := range name {
 		if r < 0x20 || r == 0x7f {

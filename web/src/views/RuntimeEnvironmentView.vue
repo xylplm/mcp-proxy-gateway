@@ -193,6 +193,8 @@ async function loadDepList(kind: RuntimeDepKind): Promise<void> {
 async function switchDepKind(kind: RuntimeDepKind): Promise<void> {
   if (depKind.value === kind) return
   depKind.value = kind
+  // 切换生态时清空输入：npm 用 name@version、pip 用 name==version，语法不同，避免误用。
+  depInput.value = ''
   depInputError.value = ''
   if (depList.value[kind] === null) {
     await loadDepList(kind)
@@ -550,7 +552,7 @@ onUnmounted(stopInstallProgressPolling)
         <a v-else-if="environmentConclusion?.tone === 'warning'" href="#runtime-install" class="shrink-0 font-medium underline underline-offset-2">{{ environmentConclusion?.action }}</a>
         <router-link v-else to="/upstreams" class="shrink-0 font-medium underline underline-offset-2">{{ environmentConclusion?.action }}</router-link>
       </div>
-      <div class="mb-5 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div class="mb-5 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <section
           class="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm transition duration-300 hover:shadow-md dark:border-gray-800 dark:bg-white/[0.03]"
         >
@@ -996,7 +998,7 @@ onUnmounted(stopInstallProgressPolling)
             暂无已安装的第三方包。可在上方输入包名安装，例如
             <span class="font-mono">{{ depKind === 'npm' ? 'lodash' : 'requests' }}</span>。
           </div>
-          <div v-else class="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <div v-else class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 3xl:grid-cols-5">
             <article
               v-for="dep in currentDepList.items"
               :key="dep.name"
@@ -1101,7 +1103,7 @@ onUnmounted(stopInstallProgressPolling)
           </div>
         </div>
 
-        <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 3xl:grid-cols-5">
           <article
             v-for="tool in summary.tools"
             :key="tool.name"

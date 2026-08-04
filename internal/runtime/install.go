@@ -513,8 +513,7 @@ func (in *Installer) toolsPresent(tools []string) bool {
 // downloadSource 描述一个可尝试的下载来源（官方优先，镜像兜底）。
 type downloadSource struct {
 	url    string
-	host   string // 预解析主机名，供日志展示；空则从 url 解析
-	mirror bool   // 是否镜像源
+	mirror bool
 }
 
 type downloadAttempt struct {

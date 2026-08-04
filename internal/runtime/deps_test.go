@@ -32,6 +32,10 @@ func TestValidateDepSpec(t *testing.T) {
 		{"scoped 无名拒绝", "@scope/", true},
 		{"scoped 空scope拒绝", "@/pkg", true},
 		{"裸斜杠拒绝", "a/b", true},
+		{"flag 注入拒绝", "--global", true},
+		{"flag 短选项拒绝", "-g", true},
+		{"flag prefix 注入拒绝", "--prefix", true},
+		{"flag target 拒绝", "--target=/tmp", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -262,6 +266,45 @@ func TestDepLogsRingBuffer(t *testing.T) {
 	}
 	if len(dm.Logs()) != maxDepLogs {
 		t.Fatalf("ring buffer size=%d, want %d", len(dm.Logs()), maxDepLogs)
+	}
+}
+
+// TestBoundedBufferEnforcesLimit 验证 stdout/stderr 缓冲上限（防 OOM）。
+func TestBoundedBufferEnforcesLimit(t *testing.T) {
+	t.Parallel()
+	const limit = 64
+	bb := newBoundedBuffer(limit)
+	// 写入远超上限的行。
+	for i := 0; i < 1000; i++ {
+		bb.appendLine("0123456789") // 11 bytes/line（含 \n）
+	}
+	if bb.n > limit {
+		t.Fatalf("buffer overflowed limit: n=%d > %d", bb.n, limit)
+	}
+	if !bb.full {
+		t.Fatal("expected full flag set after exceeding limit")
+	}
+	// 超限后 String() 仍可安全返回已写入内容。
+	if bb.String() == "" {
+		t.Fatal("expected non-empty buffer content")
+	}
+}
+
+// TestBoundedBufferExactLimit 验证恰好填满上限不丢失。
+func TestBoundedBufferExactLimit(t *testing.T) {
+	t.Parallel()
+	const limit = 30 // 3 lines of "a\n" = 2 bytes each
+	bb := newBoundedBuffer(limit)
+	for i := 0; i < 15; i++ {
+		bb.appendLine("a") // 2 bytes each
+	}
+	// 前 15 行 = 30 bytes 恰好填满。
+	if bb.full {
+		t.Fatal("should not be full at exact limit")
+	}
+	bb.appendLine("a")
+	if !bb.full {
+		t.Fatal("should be full after exceeding")
 	}
 }
 

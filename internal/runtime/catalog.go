@@ -13,11 +13,10 @@ const (
 	PackageKindUV   PackageKind = "uv"
 )
 
-// MirrorAsset 为官方资产的一个镜像源（host + url，内容字节与官方一致，复用同一 SHA256）。
+// MirrorAsset 为官方资产的一个镜像源（url 与官方一致，内容字节相同，复用同一 SHA256）。
 // 用于在国内等官方源不可达时自动回退；镜像必须与官方 tarball 字节一致。
 type MirrorAsset struct {
-	Host string `json:"host"`
-	URL  string `json:"url"`
+	URL string `json:"url"`
 }
 
 // PackageAsset 为某一 GOOS/GOARCH 的下载资产（URL + 完整性校验）。
@@ -36,7 +35,7 @@ type PackageAsset struct {
 func (a PackageAsset) downloadSources() []downloadSource {
 	out := []downloadSource{{url: a.URL}}
 	for _, m := range a.Mirrors {
-		out = append(out, downloadSource{url: m.URL, host: m.Host, mirror: true})
+		out = append(out, downloadSource{url: m.URL, mirror: true})
 	}
 	return out
 }
@@ -71,7 +70,7 @@ type CatalogPackage struct {
 // nodeMirrors 返回 Node 官方资产在国内的镜像源（npmmirror 字节与官方一致，SHASUMS256 复用）。
 func nodeMirrors(version, file string) []MirrorAsset {
 	return []MirrorAsset{
-		{Host: "registry.npmmirror.com", URL: "https://registry.npmmirror.com/-/binary/node/v" + version + "/" + file},
+		{URL: "https://registry.npmmirror.com/-/binary/node/v" + version + "/" + file},
 	}
 }
 
@@ -79,8 +78,8 @@ func nodeMirrors(version, file string) []MirrorAsset {
 func uvMirrors(file string) []MirrorAsset {
 	official := "https://github.com/astral-sh/uv/releases/download/0.6.14/" + file
 	return []MirrorAsset{
-		{Host: "gh-proxy.com", URL: "https://gh-proxy.com/" + official},
-		{Host: "ghproxy.net", URL: "https://ghproxy.net/" + official},
+		{URL: "https://gh-proxy.com/" + official},
+		{URL: "https://ghproxy.net/" + official},
 	}
 }
 

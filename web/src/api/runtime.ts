@@ -111,7 +111,6 @@ export type RuntimeDepKind = 'npm' | 'pip'
 export interface RuntimeDependency {
   name: string
   version: string
-  latest?: string
   kind: RuntimeDepKind
 }
 
@@ -133,10 +132,8 @@ export interface RuntimeDepInstallResult {
   message?: string
 }
 
-/** 依赖管理状态（嵌入 Summary.deps）。 */
+/** 依赖管理状态（嵌入 Summary.deps；已装包列表通过 listRuntimeDeps 单独获取）。 */
 export interface RuntimeDepsStatus {
-  npm?: RuntimeListDepsResult
-  pip?: RuntimeListDepsResult
   depProgress?: {
     kind: RuntimeDepKind
     action: string

@@ -421,8 +421,8 @@ func TestDownloadWithFallbackFallsThroughMirrors(t *testing.T) {
 	dest := filepath.Join(rt, "out.bin")
 
 	sources := []downloadSource{
-		{url: badSrv.URL + "/official", host: "official", mirror: false},
-		{url: goodSrv.URL + "/mirror", host: "mirror", mirror: true},
+		{url: badSrv.URL + "/official", mirror: false},
+		{url: goodSrv.URL + "/mirror", mirror: true},
 	}
 	if err := in.downloadWithFallback(context.Background(), sources, dest, sha); err != nil {
 		t.Fatalf("expected fallback success, got: %v", err)
@@ -534,7 +534,7 @@ func TestInstallUsesMirrorWhenOfficialFails(t *testing.T) {
 				URL:    official.URL + "/official.tar.gz",
 				SHA256: sha,
 				Format: "tar.gz",
-				Mirrors: []MirrorAsset{{Host: "mirror.local", URL: mirror.URL + "/mirror.tar.gz"}},
+				Mirrors: []MirrorAsset{{URL: mirror.URL + "/mirror.tar.gz"}},
 			}},
 		}}
 	}

@@ -44,13 +44,14 @@ type Summary struct {
 	RiskNotes                []string            `json:"riskNotes"`
 }
 
-// DepsStatus 汇总依赖管理（npm/pip）的当前状态。
+// DepsStatus 汇总依赖管理（npm/pip）的进行中状态。
+//
+// 已装包列表不在此返回（可能较慢，且每次 summary 拉取都会执行 npm/uv）；
+// 前端通过 GET /runtime/deps?kind=... 单独按需获取。
 type DepsStatus struct {
-	Npm        *ListDepsResult `json:"npm,omitempty"`
-	Pip        *ListDepsResult `json:"pip,omitempty"`
-	DepProgress *DepProgress   `json:"depProgress,omitempty"`
-	DepLogs    []DepLogEntry   `json:"depLogs,omitempty"`
-	DepError   string          `json:"depError,omitempty"`
+	DepProgress *DepProgress `json:"depProgress,omitempty"`
+	DepLogs     []DepLogEntry `json:"depLogs,omitempty"`
+	DepError    string        `json:"depError,omitempty"`
 }
 
 // LookPathFunc 便于单测注入。
