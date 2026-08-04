@@ -7,13 +7,14 @@ import (
 
 // Service 脚本应用服务。
 type Service struct {
-	store *Store
+	store  *Store
+	runner CommandRunner // 可空：未注入时跳过语法检测
 }
 
-// NewService 构造脚本服务。
-func NewService(dataDir string) *Service {
+// NewService 构造脚本服务。runner 可空（不进行语法检测）。
+func NewService(dataDir string, runner CommandRunner) *Service {
 	_ = EnsureLayout(dataDir)
-	return &Service{store: NewStore(dataDir)}
+	return &Service{store: NewStore(dataDir), runner: runner}
 }
 
 func (s *Service) List() ([]Script, error) {
@@ -32,6 +33,9 @@ func (s *Service) GetDetail(id string) (ScriptDetail, error) {
 }
 
 func (s *Service) Create(in CreateInput) (ScriptDetail, error) {
+	if err := s.checkSyntax(in.Content, in.Runtime); err != nil {
+		return ScriptDetail{}, err
+	}
 	return s.store.Create(in)
 }
 
@@ -40,7 +44,31 @@ func (s *Service) UpdateMeta(id string, in UpdateMetaInput) (Script, error) {
 }
 
 func (s *Service) SaveContent(id string, in SaveContentInput) (ScriptDetail, error) {
+	if err := s.checkSyntax(in.Content, s.runtimeOf(id)); err != nil {
+		return ScriptDetail{}, err
+	}
 	return s.store.SaveContent(strings.TrimSpace(id), in)
+}
+
+// checkSyntax 在保存前做语法检测；失败返回带「语法」字样的错误（httpapi mapScriptErr
+// 默认映射为 ValidationError，字段 script）。runner 为空或运行时未装时跳过（不阻断保存）。
+func (s *Service) checkSyntax(content, runtime string) error {
+	if s == nil {
+		return nil
+	}
+	return ValidateSyntax(content, runtime, s.runner)
+}
+
+// runtimeOf 读取脚本当前运行时（SaveContent 时 content 可能不变，但需按现有 runtime 检测）。
+func (s *Service) runtimeOf(id string) string {
+	if s == nil || s.store == nil {
+		return ""
+	}
+	meta, err := s.store.Get(strings.TrimSpace(id))
+	if err != nil {
+		return ""
+	}
+	return meta.Runtime
 }
 
 func (s *Service) Delete(id string) error {

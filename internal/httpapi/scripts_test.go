@@ -36,7 +36,7 @@ func TestDeleteScriptReturnsCleanupWarning(t *testing.T) {
 
 func TestScriptsCRUDFlow(t *testing.T) {
 	dir := t.TempDir()
-	svc := scripts.NewService(dir)
+	svc := scripts.NewService(dir, nil)
 	e := newTestEngine(Deps{Scripts: svc})
 
 	// create
@@ -125,7 +125,7 @@ func (f *fakeScriptUpstreamService) Reconnect(context.Context, string) error    
 
 func TestScriptLaunchOptionalBodyValidation(t *testing.T) {
 	dir := t.TempDir()
-	svc := scripts.NewService(dir)
+	svc := scripts.NewService(dir, nil)
 	detail, err := svc.Create(scripts.CreateInput{Name: "launch-body", Language: scripts.LangPython, Content: "print(1)\n"})
 	if err != nil {
 		t.Fatal(err)
@@ -158,7 +158,7 @@ func TestScriptLaunchOptionalBodyValidation(t *testing.T) {
 
 func TestDeleteScriptRejectsReferenced(t *testing.T) {
 	dir := t.TempDir()
-	svc := scripts.NewService(dir)
+	svc := scripts.NewService(dir, nil)
 	detail, err := svc.Create(scripts.CreateInput{Name: "ref-demo", Language: scripts.LangPython, Content: "print(1)\n"})
 	if err != nil {
 		t.Fatal(err)

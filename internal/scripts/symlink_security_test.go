@@ -10,7 +10,7 @@ import (
 
 func TestResolveEntryRejectsTamperedContent(t *testing.T) {
 	dir := t.TempDir()
-	svc := NewService(dir)
+	svc := NewService(dir, nil)
 	detail, err := svc.Create(CreateInput{Name: "tamper-demo", Language: LangPython, Content: "print(1)\n"})
 	if err != nil {
 		t.Fatal(err)
@@ -26,7 +26,7 @@ func TestResolveEntryRejectsTamperedContent(t *testing.T) {
 
 func TestReadAPIsRejectSymlinkOutsideLibrary(t *testing.T) {
 	dir := t.TempDir()
-	svc := NewService(dir)
+	svc := NewService(dir, nil)
 	detail, err := svc.Create(CreateInput{Name: "read-link-demo", Language: LangPython, Content: "print(1)\n"})
 	if err != nil {
 		t.Fatal(err)
@@ -54,7 +54,7 @@ func TestReadAPIsRejectSymlinkOutsideLibrary(t *testing.T) {
 
 func TestReadAPIsRejectTamperedEntryMetadata(t *testing.T) {
 	dir := t.TempDir()
-	svc := NewService(dir)
+	svc := NewService(dir, nil)
 	detail, err := svc.Create(CreateInput{Name: "meta-demo", Language: LangPython, Content: "print(1)\n"})
 	if err != nil {
 		t.Fatal(err)
@@ -83,7 +83,7 @@ func TestReadAPIsRejectTamperedEntryMetadata(t *testing.T) {
 
 func TestReadAPIsRejectExternallyEnlargedContent(t *testing.T) {
 	dir := t.TempDir()
-	svc := NewService(dir)
+	svc := NewService(dir, nil)
 	detail, err := svc.Create(CreateInput{Name: "large-demo", Language: LangPython, Content: "print(1)\n"})
 	if err != nil {
 		t.Fatal(err)
@@ -98,7 +98,7 @@ func TestReadAPIsRejectExternallyEnlargedContent(t *testing.T) {
 
 func TestResolveEntryRejectsSymlinkOutsideLibrary(t *testing.T) {
 	dir := t.TempDir()
-	svc := NewService(dir)
+	svc := NewService(dir, nil)
 	detail, err := svc.Create(CreateInput{Name: "link-demo", Language: LangPython, Content: "print(1)\n"})
 	if err != nil {
 		t.Fatal(err)

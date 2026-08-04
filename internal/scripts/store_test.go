@@ -34,7 +34,7 @@ func TestSoftDeleteReportsTrashMoveFailure(t *testing.T) {
 
 func TestCreateListGetSaveVersion(t *testing.T) {
 	dir := t.TempDir()
-	svc := NewService(dir)
+	svc := NewService(dir, nil)
 
 	detail, err := svc.Create(CreateInput{
 		Name:     "demo-echo",

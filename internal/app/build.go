@@ -98,7 +98,7 @@ func (a *App) build(envCfg config.EnvConfig) error {
 		func() string { return a.cfg.Env().DataDir },
 		runtimeDirFn,
 	)
-	scriptSvc := scripts.NewService(envCfg.DataDir)
+	scriptSvc := scripts.NewService(envCfg.DataDir, runtimeSvc)
 	transport.SetScriptService(scriptSvc)
 	factory := transport.NewFactory()
 	dialer := newSessionDialer(factory)

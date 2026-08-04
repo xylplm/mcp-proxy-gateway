@@ -8,7 +8,7 @@ import (
 
 func TestResolveManagedScriptAndHash(t *testing.T) {
 	dir := t.TempDir()
-	svc := scripts.NewService(dir)
+	svc := scripts.NewService(dir, nil)
 	detail, err := svc.Create(scripts.CreateInput{
 		Name: "managed-demo", Language: scripts.LangPython, Content: "print(1)\n",
 	})
