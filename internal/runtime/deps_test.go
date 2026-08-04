@@ -114,6 +114,9 @@ func makeFakeBin(t *testing.T, dir, name, body string) string {
 	if runtime.GOOS == "windows" {
 		t.Skip("fake-bin 测试仅支持 Linux/Mac")
 	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	bin := filepath.Join(dir, name)
 	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"+body), 0o755); err != nil {
 		t.Fatal(err)
