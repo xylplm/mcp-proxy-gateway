@@ -103,9 +103,9 @@ type PreflightResult struct {
 // KnownTools 返回可声明/可探测的工具字典（稳定顺序）。
 func KnownTools() []KnownTool {
 	return []KnownTool{
-		{Name: "node", Label: "Node.js", Description: "Node 运行时", PackageID: "node-22.14.0", InferFrom: []string{"node", "npx", "npm"}, TemplateRuntimes: []string{"node"}},
-		{Name: "npx", Label: "npx", Description: "Node 包执行器", PackageID: "node-22.14.0", InferFrom: []string{"npx"}, TemplateRuntimes: []string{"node"}},
-		{Name: "npm", Label: "npm", Description: "Node 包管理器", PackageID: "node-22.14.0", InferFrom: []string{"npm"}, TemplateRuntimes: []string{"node"}},
+		{Name: "node", Label: "Node.js", Description: "Node 运行时", PackageID: DefaultNodePackageID, InferFrom: []string{"node", "npx", "npm"}, TemplateRuntimes: []string{"node"}},
+		{Name: "npx", Label: "npx", Description: "Node 包执行器", PackageID: DefaultNodePackageID, InferFrom: []string{"npx"}, TemplateRuntimes: []string{"node"}},
+		{Name: "npm", Label: "npm", Description: "Node 包管理器", PackageID: DefaultNodePackageID, InferFrom: []string{"npm"}, TemplateRuntimes: []string{"node"}},
 		{Name: "python", Label: "Python", Description: "Python 解释器", InferFrom: []string{"python"}, TemplateRuntimes: []string{"python"}},
 		{Name: "python3", Label: "Python 3", Description: "Python 3 解释器", InferFrom: []string{"python3"}, TemplateRuntimes: []string{"python"}},
 		{Name: "uv", Label: "uv", Description: "Astral uv", PackageID: "uv-0.6.14", InferFrom: []string{"uv", "uvx"}, TemplateRuntimes: []string{"uv", "uvx"}},

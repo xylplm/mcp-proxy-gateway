@@ -165,11 +165,11 @@ func TestRuntimeDirectoryInspectRejectsBrowseOnlyRoot(t *testing.T) {
 
 func TestRuntimeInstallPreviewAndInstall(t *testing.T) {
 	e := newTestEngine(Deps{RuntimeEnv: &fakeRuntimeEnv{}})
-	w := doJSON(e, http.MethodPost, "/api/admin/runtime/install/preview", `{"packageId":"node-22.14.0"}`)
+	w := doJSON(e, http.MethodPost, "/api/admin/runtime/install/preview", `{"packageId":"`+rtenv.DefaultNodePackageID+`"}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("preview status=%d body=%s", w.Code, w.Body.String())
 	}
-	w = doJSON(e, http.MethodPost, "/api/admin/runtime/install", `{"packageId":"node-22.14.0"}`)
+	w = doJSON(e, http.MethodPost, "/api/admin/runtime/install", `{"packageId":"`+rtenv.DefaultNodePackageID+`"}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("install status=%d body=%s", w.Code, w.Body.String())
 	}
@@ -177,7 +177,7 @@ func TestRuntimeInstallPreviewAndInstall(t *testing.T) {
 	if w.Code == http.StatusOK {
 		t.Fatal("bad package should fail")
 	}
-	w = doJSON(e, http.MethodPost, "/api/admin/runtime/uninstall", `{"packageId":"node-22.14.0"}`)
+	w = doJSON(e, http.MethodPost, "/api/admin/runtime/uninstall", `{"packageId":"`+rtenv.DefaultNodePackageID+`"}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("uninstall status=%d body=%s", w.Code, w.Body.String())
 	}
@@ -185,7 +185,7 @@ func TestRuntimeInstallPreviewAndInstall(t *testing.T) {
 
 func TestRuntimeCatalogAndToolsAndPreflight(t *testing.T) {
 	e := newTestEngine(Deps{RuntimeEnv: &fakeRuntimeEnv{catalog: []rtenv.CatalogPackage{
-		{ID: "node-22.14.0", Name: "Node.js", Supported: true},
+		{ID: rtenv.DefaultNodePackageID, Name: "Node.js", Supported: true},
 	}}})
 	w := doJSON(e, http.MethodGet, "/api/admin/runtime/catalog", "")
 	if w.Code != http.StatusOK {

@@ -125,7 +125,7 @@ func TestEvaluatePreflightMissingTool(t *testing.T) {
 	}
 	hasInstall := false
 	for _, a := range res.Actions {
-		if a.Type == "install" && a.PackageID == "node-22.14.0" {
+		if a.Type == "install" && a.PackageID == DefaultNodePackageID {
 			hasInstall = true
 		}
 	}

@@ -1042,9 +1042,9 @@ async function ensureKnownTools(): Promise<void> {
     knownTools.value = await getRuntimeKnownTools()
   } catch {
     knownTools.value = [
-      { name: 'node', label: 'Node.js', packageId: 'node-22.14.0', inferFrom: ['node', 'npx', 'npm'], templateRuntimes: ['node'] },
-      { name: 'npx', label: 'npx', packageId: 'node-22.14.0', inferFrom: ['npx'], templateRuntimes: ['node'] },
-      { name: 'npm', label: 'npm', packageId: 'node-22.14.0', inferFrom: ['npm'], templateRuntimes: ['node'] },
+      { name: 'node', label: 'Node.js', packageId: 'node-24.19.0', inferFrom: ['node', 'npx', 'npm'], templateRuntimes: ['node'] },
+      { name: 'npx', label: 'npx', packageId: 'node-24.19.0', inferFrom: ['npx'], templateRuntimes: ['node'] },
+      { name: 'npm', label: 'npm', packageId: 'node-24.19.0', inferFrom: ['npm'], templateRuntimes: ['node'] },
       { name: 'python', label: 'Python', inferFrom: ['python'], templateRuntimes: ['python'] },
       { name: 'python3', label: 'Python 3', inferFrom: ['python3'], templateRuntimes: ['python'] },
       { name: 'uv', label: 'uv', packageId: 'uv-0.6.14', inferFrom: ['uv', 'uvx'], templateRuntimes: ['uv', 'uvx'] },

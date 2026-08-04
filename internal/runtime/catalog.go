@@ -11,6 +11,10 @@ type PackageKind string
 const (
 	PackageKindNode PackageKind = "node"
 	PackageKindUV   PackageKind = "uv"
+
+	// DefaultNodePackageID 是新安装请求与运行时预检默认使用的 Node 版本。
+	// 旧版本仍保留在目录中，便于已有环境回滚或兼容。
+	DefaultNodePackageID = "node-24.19.0"
 )
 
 // MirrorAsset 为官方资产的一个镜像源（url 与官方一致，内容字节相同，复用同一 SHA256）。
@@ -90,6 +94,40 @@ func uvMirrors(file string) []MirrorAsset {
 func DefaultCatalog() []PackageSpec {
 	return []PackageSpec{
 		{
+			ID:          DefaultNodePackageID,
+			Name:        "Node.js",
+			Version:     "24.19.0",
+			Description: "官方 Node.js 24 LTS 发行版，提供 node / npx / npm，安装到 runtime/node。",
+			Kind:        PackageKindNode,
+			Tools:       []string{"node", "npx", "npm"},
+			Assets: []PackageAsset{
+				{
+					GOOS:    "linux",
+					GOARCH:  "amd64",
+					URL:     "https://nodejs.org/dist/v24.19.0/node-v24.19.0-linux-x64.tar.gz",
+					SHA256:  "f625d97cd707df4ff96254916fbc5ff014f09c09effe5a1e0ca8f6d41a8789d4",
+					Format:  "tar.gz",
+					Mirrors: nodeMirrors("24.19.0", "node-v24.19.0-linux-x64.tar.gz"),
+				},
+				{
+					GOOS:    "linux",
+					GOARCH:  "arm64",
+					URL:     "https://nodejs.org/dist/v24.19.0/node-v24.19.0-linux-arm64.tar.gz",
+					SHA256:  "d28c8a5bf0a808f0ed434a1dce8c54ae98f0371c0bd86ac58abc613f73e6643f",
+					Format:  "tar.gz",
+					Mirrors: nodeMirrors("24.19.0", "node-v24.19.0-linux-arm64.tar.gz"),
+				},
+				{
+					GOOS:    "windows",
+					GOARCH:  "amd64",
+					URL:     "https://nodejs.org/dist/v24.19.0/node-v24.19.0-win-x64.zip",
+					SHA256:  "57f71ab3652e797d84acddc79c81cc9ff1c6ddb2a1974cdb83f00fee9bff4c73",
+					Format:  "zip",
+					Mirrors: nodeMirrors("24.19.0", "node-v24.19.0-win-x64.zip"),
+				},
+			},
+		},
+		{
 			ID:          "node-22.14.0",
 			Name:        "Node.js",
 			Version:     "22.14.0",
@@ -98,27 +136,27 @@ func DefaultCatalog() []PackageSpec {
 			Tools:       []string{"node", "npx", "npm"},
 			Assets: []PackageAsset{
 				{
-					GOOS:   "linux",
-					GOARCH: "amd64",
-					URL:    "https://nodejs.org/dist/v22.14.0/node-v22.14.0-linux-x64.tar.gz",
-					SHA256: "9d942932535988091034dc94cc5f42b6dc8784d6366df3a36c4c9ccb3996f0c2",
-					Format: "tar.gz",
+					GOOS:    "linux",
+					GOARCH:  "amd64",
+					URL:     "https://nodejs.org/dist/v22.14.0/node-v22.14.0-linux-x64.tar.gz",
+					SHA256:  "9d942932535988091034dc94cc5f42b6dc8784d6366df3a36c4c9ccb3996f0c2",
+					Format:  "tar.gz",
 					Mirrors: nodeMirrors("22.14.0", "node-v22.14.0-linux-x64.tar.gz"),
 				},
 				{
-					GOOS:   "linux",
-					GOARCH: "arm64",
-					URL:    "https://nodejs.org/dist/v22.14.0/node-v22.14.0-linux-arm64.tar.gz",
-					SHA256: "8cf30ff7250f9463b53c18f89c6c606dfda70378215b2c905d0a9a8b08bd45e0",
-					Format: "tar.gz",
+					GOOS:    "linux",
+					GOARCH:  "arm64",
+					URL:     "https://nodejs.org/dist/v22.14.0/node-v22.14.0-linux-arm64.tar.gz",
+					SHA256:  "8cf30ff7250f9463b53c18f89c6c606dfda70378215b2c905d0a9a8b08bd45e0",
+					Format:  "tar.gz",
 					Mirrors: nodeMirrors("22.14.0", "node-v22.14.0-linux-arm64.tar.gz"),
 				},
 				{
-					GOOS:   "windows",
-					GOARCH: "amd64",
-					URL:    "https://nodejs.org/dist/v22.14.0/node-v22.14.0-win-x64.zip",
-					SHA256: "55b639295920b219bb2acbcfa00f90393a2789095b7323f79475c9f34795f217",
-					Format: "zip",
+					GOOS:    "windows",
+					GOARCH:  "amd64",
+					URL:     "https://nodejs.org/dist/v22.14.0/node-v22.14.0-win-x64.zip",
+					SHA256:  "55b639295920b219bb2acbcfa00f90393a2789095b7323f79475c9f34795f217",
+					Format:  "zip",
 					Mirrors: nodeMirrors("22.14.0", "node-v22.14.0-win-x64.zip"),
 				},
 			},
@@ -132,27 +170,27 @@ func DefaultCatalog() []PackageSpec {
 			Tools:       []string{"uv", "uvx"},
 			Assets: []PackageAsset{
 				{
-					GOOS:   "linux",
-					GOARCH: "amd64",
-					URL:    "https://github.com/astral-sh/uv/releases/download/0.6.14/uv-x86_64-unknown-linux-musl.tar.gz",
-					SHA256: "0cac4df0cb3457b154f2039ae471e89cd4e15f3bd790bbb3cb0b8b40d940b93e",
-					Format: "tar.gz",
+					GOOS:    "linux",
+					GOARCH:  "amd64",
+					URL:     "https://github.com/astral-sh/uv/releases/download/0.6.14/uv-x86_64-unknown-linux-musl.tar.gz",
+					SHA256:  "0cac4df0cb3457b154f2039ae471e89cd4e15f3bd790bbb3cb0b8b40d940b93e",
+					Format:  "tar.gz",
 					Mirrors: uvMirrors("uv-x86_64-unknown-linux-musl.tar.gz"),
 				},
 				{
-					GOOS:   "linux",
-					GOARCH: "arm64",
-					URL:    "https://github.com/astral-sh/uv/releases/download/0.6.14/uv-aarch64-unknown-linux-musl.tar.gz",
-					SHA256: "94e22c4be44d205def456427639ca5ca1c1a9e29acc31808a7b28fdd5dcf7f17",
-					Format: "tar.gz",
+					GOOS:    "linux",
+					GOARCH:  "arm64",
+					URL:     "https://github.com/astral-sh/uv/releases/download/0.6.14/uv-aarch64-unknown-linux-musl.tar.gz",
+					SHA256:  "94e22c4be44d205def456427639ca5ca1c1a9e29acc31808a7b28fdd5dcf7f17",
+					Format:  "tar.gz",
 					Mirrors: uvMirrors("uv-aarch64-unknown-linux-musl.tar.gz"),
 				},
 				{
-					GOOS:   "windows",
-					GOARCH: "amd64",
-					URL:    "https://github.com/astral-sh/uv/releases/download/0.6.14/uv-x86_64-pc-windows-msvc.zip",
-					SHA256: "93b29fc234758e381df461d7638ff73d0f08bdf3a0dc37923b1ee0b9e442ca3f",
-					Format: "zip",
+					GOOS:    "windows",
+					GOARCH:  "amd64",
+					URL:     "https://github.com/astral-sh/uv/releases/download/0.6.14/uv-x86_64-pc-windows-msvc.zip",
+					SHA256:  "93b29fc234758e381df461d7638ff73d0f08bdf3a0dc37923b1ee0b9e442ca3f",
+					Format:  "zip",
 					Mirrors: uvMirrors("uv-x86_64-pc-windows-msvc.zip"),
 				},
 			},

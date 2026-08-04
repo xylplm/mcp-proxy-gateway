@@ -1,5 +1,16 @@
 import type { RuntimeCatalogPackage, RuntimeSummary, RuntimeToolStatus } from '../api/runtime'
 
+export function findRuntimePackageForTool(
+  toolName: string,
+  catalog: RuntimeCatalogPackage[] | null | undefined,
+): RuntimeCatalogPackage | undefined {
+  const name = toolName.trim().toLowerCase()
+  if (!name || !catalog) return undefined
+  return catalog.find(
+    (pkg) => pkg.supported && (pkg.tools || []).some((tool) => tool.toLowerCase() === name),
+  )
+}
+
 export function toolStatusLabel(tool: RuntimeToolStatus): string {
   if (tool.warning) return '权限不足'
   return tool.available ? '可用' : '未检测到'
@@ -32,7 +43,9 @@ export function formatAllowlist(list: string[] | null | undefined): string {
 }
 
 /** 运行时 bin 目录展示（优先 pathPrefixes[0]，否则 runtimeDir/bin）。 */
-export function runtimeBinDir(summary: Pick<RuntimeSummary, 'runtimeDir' | 'pathPrefixes'>): string {
+export function runtimeBinDir(
+  summary: Pick<RuntimeSummary, 'runtimeDir' | 'pathPrefixes'>,
+): string {
   const prefix = summary.pathPrefixes?.find((p) => p && p.length > 0)
   if (prefix) return prefix
   const root = summary.runtimeDir?.trim()
@@ -58,7 +71,9 @@ export function runtimeGuideSteps(
   ]
 }
 
-export function packageStatusLabel(pkg: Pick<RuntimeCatalogPackage, 'installed' | 'supported'>): string {
+export function packageStatusLabel(
+  pkg: Pick<RuntimeCatalogPackage, 'installed' | 'supported'>,
+): string {
   if (pkg.installed) return '已安装'
   if (!pkg.supported) return '当前平台不可用'
   return '可安装'

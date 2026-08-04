@@ -103,6 +103,19 @@ func runtimeReadmeContent(runtimeDir string) string {
 		"也可设置环境变量 MPG_RUNTIME_DIR 覆盖本目录位置。\n"
 }
 
+// invalidatePathPrefixes 清除指定运行时目录的 PATH 前缀缓存。
+// 安装/卸载完成后立即调用，避免短 TTL 内继续使用旧探测结果。
+func invalidatePathPrefixes(runtimeDir string) {
+	runtimeDir = strings.TrimSpace(runtimeDir)
+	pathPrefixesCache.Lock()
+	if runtimeDir == "" || pathPrefixesCache.dir == runtimeDir {
+		pathPrefixesCache.dir = ""
+		pathPrefixesCache.at = time.Time{}
+		pathPrefixesCache.prefixes = nil
+	}
+	pathPrefixesCache.Unlock()
+}
+
 // PathPrefixes 返回应优先加入 PATH 的已存在子目录（稳定顺序）。
 func PathPrefixes(runtimeDir string) []string {
 	runtimeDir = strings.TrimSpace(runtimeDir)

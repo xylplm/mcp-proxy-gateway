@@ -268,6 +268,13 @@ func (in *Installer) Install(ctx context.Context, packageID string) (InstallResu
 		in.addLog(InstallLogEntry{Phase: "placing", Level: InstallLogError, Message: err.Error()})
 		return InstallResult{}, err
 	}
+	invalidatePathPrefixes(in.runtimeDir)
+	if !in.toolsPresent(spec.Tools) {
+		msg := fmt.Sprintf("%s 安装后工具不完整：未找到 %s", spec.Name, strings.Join(in.missingTools(spec.Tools), "、"))
+		in.setLastError(msg)
+		in.addLog(InstallLogEntry{Phase: "placing", Level: InstallLogError, Message: msg})
+		return InstallResult{}, fmt.Errorf("%s", msg)
+	}
 
 	rec := InstallRecord{
 		ID:        spec.ID,
@@ -279,6 +286,8 @@ func (in *Installer) Install(ctx context.Context, packageID string) (InstallResu
 		GOARCH:    asset.GOARCH,
 		Tools:     append([]string{}, spec.Tools...),
 	}
+	state = in.loadState()
+	state.removeKindExcept(spec.Kind, spec.ID)
 	state.upsert(rec)
 	if err := in.saveState(state); err != nil {
 		msg := fmt.Sprintf("写入安装状态失败：%v", err)
@@ -427,7 +436,10 @@ func (in *Installer) Uninstall(packageID string) error {
 	if strings.TrimSpace(in.runtimeDir) == "" {
 		return fmt.Errorf("运行时目录未配置")
 	}
-
+	state := in.loadState()
+	if active, ok := state.currentKind(spec.Kind); ok && active.ID != spec.ID {
+		return fmt.Errorf("当前 %s 版本为 %s，不能卸载非当前版本", spec.Name, active.Version)
+	}
 	switch spec.Kind {
 	case PackageKindNode:
 		_ = os.RemoveAll(filepath.Join(in.runtimeDir, RuntimeSubdirNode))
@@ -441,8 +453,8 @@ func (in *Installer) Uninstall(packageID string) error {
 		return fmt.Errorf("不支持卸载类型 %q", spec.Kind)
 	}
 
-	state := in.loadState()
 	state.remove(spec.ID)
+	invalidatePathPrefixes(in.runtimeDir)
 	return in.saveState(state)
 }
 
@@ -501,13 +513,18 @@ func (in *Installer) findPackage(id string) (PackageSpec, bool) {
 }
 
 func (in *Installer) toolsPresent(tools []string) bool {
+	return len(in.missingTools(tools)) == 0
+}
+
+func (in *Installer) missingTools(tools []string) []string {
 	prefixes := PathPrefixes(in.runtimeDir)
+	missing := make([]string, 0)
 	for _, tool := range tools {
 		if _, err := LookPathWithPrefixes(tool, prefixes, nil); err != nil {
-			return false
+			missing = append(missing, tool)
 		}
 	}
-	return true
+	return missing
 }
 
 // downloadSource 描述一个可尝试的下载来源（官方优先，镜像兜底）。
@@ -673,6 +690,11 @@ func (in *Installer) placeNode(extractDir string) error {
 				}
 			}
 		}
+	} else if err := restoreNodeLaunchers(root); err != nil {
+		return err
+	}
+	if missing := missingToolsInDir(filepath.Join(root, "bin"), []string{"node", "npm", "npx"}); len(missing) > 0 {
+		return fmt.Errorf("Node 发行包工具不完整：未找到 %s", strings.Join(missing, "、"))
 	}
 	target := filepath.Join(in.runtimeDir, RuntimeSubdirNode)
 	staging := target + ".staging"
@@ -689,6 +711,49 @@ func (in *Installer) placeNode(extractDir string) error {
 		return fmt.Errorf("安装 Node 失败：%w", err)
 	}
 	return nil
+}
+
+// restoreNodeLaunchers 只恢复 Node 官方布局中固定的 npm/npx launcher。
+// 通用归档解压器仍跳过任意符号链接，避免将不受控链接写入运行时目录。
+func restoreNodeLaunchers(root string) error {
+	for _, launcher := range []struct {
+		name   string
+		target string
+	}{
+		{name: "npm", target: "npm-cli.js"},
+		{name: "npx", target: "npx-cli.js"},
+	} {
+		linkPath := filepath.Join(root, "bin", launcher.name)
+		if _, err := os.Lstat(linkPath); err == nil {
+			continue
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf("检查 Node %s launcher 失败：%w", launcher.name, err)
+		}
+		targetRel := filepath.Join("..", "lib", "node_modules", "npm", "bin", launcher.target)
+		targetPath, err := safeJoin(filepath.Join(root, "bin"), targetRel)
+		if err != nil {
+			return fmt.Errorf("Node %s launcher 目标非法：%w", launcher.name, err)
+		}
+		st, err := os.Stat(targetPath)
+		if err != nil || st.IsDir() {
+			return fmt.Errorf("Node %s launcher 目标缺失", launcher.name)
+		}
+		if err := os.Symlink(targetRel, linkPath); err != nil {
+			return fmt.Errorf("恢复 Node %s launcher 失败：%w", launcher.name, err)
+		}
+	}
+	return nil
+}
+
+func missingToolsInDir(dir string, tools []string) []string {
+	missing := make([]string, 0)
+	for _, tool := range tools {
+		path, ok := findExecutableInDir(dir, tool)
+		if !ok || executablePermissionWarning(path) != "" {
+			missing = append(missing, tool)
+		}
+	}
+	return missing
 }
 
 func (in *Installer) placeUV(extractDir string) error {
@@ -829,6 +894,26 @@ func (st *InstallState) remove(id string) {
 		if p.ID != id {
 			out = append(out, p)
 		}
+	}
+	st.Packages = out
+}
+
+func (st InstallState) currentKind(kind PackageKind) (InstallRecord, bool) {
+	for _, p := range st.Packages {
+		if p.Kind == string(kind) {
+			return p, true
+		}
+	}
+	return InstallRecord{}, false
+}
+
+func (st *InstallState) removeKindExcept(kind PackageKind, keepID string) {
+	out := st.Packages[:0]
+	for _, p := range st.Packages {
+		if p.Kind == string(kind) && p.ID != keepID {
+			continue
+		}
+		out = append(out, p)
 	}
 	st.Packages = out
 }

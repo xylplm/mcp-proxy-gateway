@@ -183,11 +183,46 @@ func TestInstallUVFromFakeServer(t *testing.T) {
 	}
 }
 
+func TestRestoreNodeLaunchersFromSkippedSymlinks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Node tar launcher test requires Unix symlinks")
+	}
+	root := filepath.Join(t.TempDir(), "node-v24.19.0-linux-x64")
+	if err := os.MkdirAll(filepath.Join(root, "lib", "node_modules", "npm", "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "bin", "node"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"npm-cli.js", "npx-cli.js"} {
+		if err := os.WriteFile(filepath.Join(root, "lib", "node_modules", "npm", "bin", name), []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := restoreNodeLaunchers(root); err != nil {
+		t.Fatalf("restore launchers: %v", err)
+	}
+	for _, name := range []string{"node", "npm", "npx"} {
+		if _, ok := findExecutableInDir(filepath.Join(root, "bin"), name); !ok {
+			t.Fatalf("launcher %s missing", name)
+		}
+	}
+}
+
 func TestFindPackageAndSelectAsset(t *testing.T) {
 	t.Parallel()
-	spec, ok := FindPackage("node-22.14.0")
+	spec, ok := FindPackage(DefaultNodePackageID)
 	if !ok || spec.Kind != PackageKindNode {
-		t.Fatalf("node package missing")
+		t.Fatalf("default node package missing")
+	}
+	if spec.Version != "24.19.0" {
+		t.Fatalf("default node version=%q", spec.Version)
+	}
+	if _, ok := FindPackage("node-22.14.0"); !ok {
+		t.Fatal("legacy node package should remain available")
 	}
 	if _, ok := FindPackage("nope"); ok {
 		t.Fatal("unknown should miss")
@@ -241,6 +276,13 @@ func TestInstallerLogsCaptureSuccess(t *testing.T) {
 	if _, err := tw.Write(content); err != nil {
 		t.Fatal(err)
 	}
+	content2 := []byte("#!/bin/sh\necho uvx\n")
+	if err := tw.WriteHeader(&tar.Header{Name: "uvx", Mode: 0o755, Size: int64(len(content2))}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(content2); err != nil {
+		t.Fatal(err)
+	}
 	_ = tw.Close()
 	_ = gz.Close()
 	payload := buf.Bytes()
@@ -261,7 +303,7 @@ func TestInstallerLogsCaptureSuccess(t *testing.T) {
 	in.catalog = func() []PackageSpec {
 		return []PackageSpec{{
 			ID: "uv-log", Name: "uv-log", Version: "0.0.1", Kind: PackageKindUV,
-			Tools: []string{"uv", "uvx"},
+			Tools:  []string{"uv", "uvx"},
 			Assets: []PackageAsset{{GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, URL: srv.URL + "/uv.tar.gz", SHA256: sha, Format: "tar.gz"}},
 		}}
 	}
@@ -504,6 +546,13 @@ func TestInstallUsesMirrorWhenOfficialFails(t *testing.T) {
 	if _, err := tw.Write(content); err != nil {
 		t.Fatal(err)
 	}
+	content2 := []byte("#!/bin/sh\necho uvx\n")
+	if err := tw.WriteHeader(&tar.Header{Name: "uvx", Mode: 0o755, Size: int64(len(content2))}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(content2); err != nil {
+		t.Fatal(err)
+	}
 	_ = tw.Close()
 	_ = gz.Close()
 	payload := buf.Bytes()
@@ -531,9 +580,9 @@ func TestInstallUsesMirrorWhenOfficialFails(t *testing.T) {
 			Tools: []string{"uv", "uvx"},
 			Assets: []PackageAsset{{
 				GOOS: runtime.GOOS, GOARCH: runtime.GOARCH,
-				URL:    official.URL + "/official.tar.gz",
-				SHA256: sha,
-				Format: "tar.gz",
+				URL:     official.URL + "/official.tar.gz",
+				SHA256:  sha,
+				Format:  "tar.gz",
 				Mirrors: []MirrorAsset{{URL: mirror.URL + "/mirror.tar.gz"}},
 			}},
 		}}

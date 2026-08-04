@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  findRuntimePackageForTool,
   formatAllowlist,
   packageStatusLabel,
   packageStatusTone,
@@ -50,8 +51,14 @@ test('policy and allowlist formatting', () => {
 })
 
 test('runtime volume guide helpers', () => {
-  assert.equal(runtimeBinDir({ runtimeDir: '/data/runtime', pathPrefixes: ['/data/runtime/bin'] }), '/data/runtime/bin')
-  assert.equal(runtimeBinDir({ runtimeDir: '/data/runtime', pathPrefixes: [] }), '/data/runtime/bin')
+  assert.equal(
+    runtimeBinDir({ runtimeDir: '/data/runtime', pathPrefixes: ['/data/runtime/bin'] }),
+    '/data/runtime/bin',
+  )
+  assert.equal(
+    runtimeBinDir({ runtimeDir: '/data/runtime', pathPrefixes: [] }),
+    '/data/runtime/bin',
+  )
   assert.equal(runtimeBinDir({ runtimeDir: '', pathPrefixes: [] }), '')
   assert.equal(shouldShowRuntimeGuide({ missingCount: 2, runtimeDir: '/data/runtime' }), true)
   assert.equal(shouldShowRuntimeGuide({ missingCount: 0, runtimeDir: '/data/runtime' }), false)
@@ -61,6 +68,31 @@ test('runtime volume guide helpers', () => {
   assert.match(steps[0], /预置安装|bin/)
 })
 
+test('runtime catalog packages map to fixable tools only', () => {
+  const catalog = [
+    {
+      id: 'node-24.19.0',
+      name: 'Node.js',
+      version: '24.19.0',
+      tools: ['node', 'npx', 'npm'],
+      supported: true,
+      installed: false,
+    },
+    {
+      id: 'uv-0.6.14',
+      name: 'uv',
+      version: '0.6.14',
+      tools: ['uv', 'uvx'],
+      supported: true,
+      installed: true,
+    },
+  ]
+  assert.equal(findRuntimePackageForTool('npm', catalog)?.id, 'node-24.19.0')
+  assert.equal(findRuntimePackageForTool('UVX', catalog)?.id, 'uv-0.6.14')
+  assert.equal(findRuntimePackageForTool('python3', catalog), undefined)
+  assert.equal(findRuntimePackageForTool('docker', catalog), undefined)
+  assert.equal(findRuntimePackageForTool('node', [{ ...catalog[0], supported: false }]), undefined)
+})
 test('package and sandbox labels', () => {
   assert.equal(packageStatusLabel({ installed: true, supported: true }), '已安装')
   assert.equal(packageStatusLabel({ installed: false, supported: false }), '当前平台不可用')
@@ -73,5 +105,8 @@ test('package and sandbox labels', () => {
     }),
     'Linux 进程加固已启用',
   )
-  assert.equal(sandboxHardeningLabel({ processHardening: false, sandbox: undefined }), '进程加固已关闭')
+  assert.equal(
+    sandboxHardeningLabel({ processHardening: false, sandbox: undefined }),
+    '进程加固已关闭',
+  )
 })

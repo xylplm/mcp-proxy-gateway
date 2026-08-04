@@ -24,6 +24,7 @@ import {
 } from '@/api/runtime'
 import {
   formatAllowlist,
+  findRuntimePackageForTool,
   packageStatusLabel,
   packageStatusTone,
   runtimeBinDir,
@@ -76,6 +77,9 @@ const showGuide = computed(() => summary.value !== null && shouldShowRuntimeGuid
 const binDir = computed(() => (summary.value === null ? '' : runtimeBinDir(summary.value)))
 
 const catalog = computed(() => summary.value?.catalog ?? [])
+function packageForTool(tool: RuntimeToolStatus): RuntimeCatalogPackage | undefined {
+  return findRuntimePackageForTool(tool.name, catalog.value)
+}
 const environmentConclusion = computed(() => {
   const current = summary.value
   if (!current) return null
@@ -447,6 +451,11 @@ function logTimeShort(iso: string): string {
   if (Number.isNaN(d.getTime())) return iso
   const pad = (n: number): string => String(n).padStart(2, '0')
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+}
+
+async function onInstallForTool(tool: RuntimeToolStatus): Promise<void> {
+  const pkg = packageForTool(tool)
+  if (pkg) await onInstall(pkg)
 }
 
 async function onInstall(pkg: RuntimeCatalogPackage): Promise<void> {
@@ -1121,15 +1130,25 @@ onUnmounted(stopInstallProgressPolling)
                 {{ toolStatusLabel(tool) }}
               </span>
             </div>
-            <p class="mt-2 text-xs leading-5 break-all text-gray-500 dark:text-gray-400">
-              {{
-                tool.warning
-                  ? tool.warning
-                  : tool.available
-                    ? tool.path || '已在 PATH 中找到'
-                    : '未在运行时目录或 PATH 中找到，stdio 使用该命令会失败'
-              }}
-            </p>
+            <div v-if="!tool.available && !tool.warning && packageForTool(tool)" class="mt-3 flex items-center justify-between gap-2">
+              <span class="text-[11px] text-gray-400 dark:text-gray-500">
+                可安装 {{ packageForTool(tool)?.name }} {{ packageForTool(tool)?.version }}
+              </span>
+              <button
+                type="button"
+                class="bg-brand-500 hover:bg-brand-600 inline-flex h-8 shrink-0 items-center rounded-lg px-3 text-xs font-medium text-white transition disabled:cursor-not-allowed disabled:opacity-50"
+                :disabled="activeInstallPackageId !== ''"
+                :aria-label="`${packageForTool(tool)?.installed ? '修复' : '安装'} ${tool.name}`"
+                @click="onInstallForTool(tool)"
+              >
+                <span
+                  v-if="packageForTool(tool)?.id === activeInstallPackageId"
+                  class="mr-1.5 inline-block h-3 w-3 animate-spin rounded-full border-2 border-white/40 border-t-white"
+                  aria-hidden="true"
+                />
+                {{ packageForTool(tool)?.installed ? '修复安装' : '一键安装' }}
+              </button>
+            </div>
           </article>
         </div>
       </section>
