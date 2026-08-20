@@ -5,8 +5,9 @@
  * 创建 API Key 成功后展示完整明文密钥（plaintextKey）并提供一键复制。
  * 自部署场景下密钥支持二次查看，故此弹窗仅作创建后的便捷展示，关闭后仍可在列表中查看。
  */
-import { ref } from 'vue'
 import type { CreatedAPIKey } from '@/api/apikeys'
+import { useClipboard } from '@/composables/useClipboard'
+import { useToast } from '@/composables/useToast'
 
 const props = defineProps<{
   /** 创建成功的 API Key（含一次性明文）；为 null 时不渲染。 */
@@ -15,22 +16,21 @@ const props = defineProps<{
 
 const emit = defineEmits<{ (e: 'close'): void }>()
 
-/** 复制状态提示。 */
-const copied = ref(false)
+/** 复制状态提示（复制成功后短暂置位，由 useClipboard 自动复位）。 */
+const { copied, copy } = useClipboard()
+const toast = useToast()
 
-/** 复制明文密钥到剪贴板（Req 12.3）。 */
+/**
+ * 复制明文密钥到剪贴板（Req 12.3）。
+ *
+ * 走 useClipboard：navigator.clipboard 仅在安全上下文可用，局域网 http 访问时
+ * 需降级到 execCommand，否则按钮会毫无反应。复制结果必须给出可见反馈。
+ */
 async function copyKey(): Promise<void> {
   if (props.created === null) return
-  try {
-    await navigator.clipboard.writeText(props.created.plaintextKey)
-    copied.value = true
-    setTimeout(() => {
-      copied.value = false
-    }, 2000)
-  } catch {
-    // 剪贴板不可用时静默失败，用户仍可手动选择文本复制。
-    copied.value = false
-  }
+  const ok = await copy(props.created.plaintextKey)
+  if (ok) toast.success('已复制到剪贴板')
+  else toast.error('复制失败，请手动选中密钥复制')
 }
 
 /** 关闭弹窗并重置复制态。 */

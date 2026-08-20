@@ -708,15 +708,16 @@ async function saveAPISettings(): Promise<void> {
 }
 
 async function copyEndpoint(key: string, value: string): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(value)
-    copiedKey.value = key
-    setTimeout(() => {
-      if (copiedKey.value === key) copiedKey.value = ''
-    }, 1800)
-  } catch {
+  // 与 copyGuideText 一致走 useClipboard：非安全上下文下需降级到 execCommand。
+  const ok = await copy(value)
+  if (!ok) {
     toast.error('复制失败，请手动选择地址')
+    return
   }
+  copiedKey.value = key
+  window.setTimeout(() => {
+    if (copiedKey.value === key) copiedKey.value = ''
+  }, 1800)
 }
 
 function toolDescription(tool: ToolDef): string {
