@@ -62,8 +62,6 @@ func inferRuntimes(t Template) []RuntimeTag {
 	}
 	command, _ := t.PresetParams["command"].(string)
 	switch strings.ToLower(command) {
-	case "docker":
-		return []RuntimeTag{RuntimeDocker}
 	case "npx", "node":
 		return []RuntimeTag{RuntimeNode}
 	case "python", "python3":
@@ -108,20 +106,13 @@ func inferCredentialTypes(t Template) []CredentialType {
 	return out
 }
 
+// inferContainerReady 表示该模板能否在容器化网关中直接接入。
+//
+// 判定只看传输类型：远程传输（SSE / Streamable-HTTP / WebSocket / OpenAPI）不依赖
+// 网关容器内的任何本地可执行文件，装好即用；stdio 必须在容器内具备对应运行时
+// （Node / Python / uv 等），因此标记为偏本地运行。
 func inferContainerReady(t Template) bool {
-	if t.Transport != domain.TransportStdio {
-		return true
-	}
-	runtimes := t.Runtimes
-	if len(runtimes) == 0 {
-		runtimes = inferRuntimes(t)
-	}
-	for _, runtime := range runtimes {
-		if runtime == RuntimeDocker {
-			return true
-		}
-	}
-	return false
+	return t.Transport != domain.TransportStdio
 }
 
 func inferToolTypes(t Template) []ToolType {

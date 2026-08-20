@@ -4,7 +4,7 @@
 // 边界：
 //   - 不提供任意 shell / 任意 URL 装包；
 //   - 策略对 stdio 热生效，不影响远程传输主路径；
-//   - 默认兼容模板常用命令（node/npx/uvx 等）；docker 仍在默认白名单以兼容内置模板。
+//   - 默认兼容模板常用命令（node/npx/uvx 等）；不含 docker，容器内无法执行。
 package runtime
 
 import (
@@ -49,6 +49,10 @@ type Policy struct {
 }
 
 // DefaultCommandAllowlist 与模板市场常用 stdio 命令对齐。
+//
+// 不含 docker：网关运行在容器内，镜像不提供 docker CLI 也不挂载宿主 socket，
+// 因此 docker 命令永远不可用；挂载 socket 又等同于把宿主 root 交给子进程。
+// 确有需要的自建部署可自行在 runtime.command_allowlist 中加回。
 func DefaultCommandAllowlist() []string {
 	return []string{
 		"node",
@@ -58,11 +62,11 @@ func DefaultCommandAllowlist() []string {
 		"python3",
 		"uv",
 		"uvx",
-		"docker",
 	}
 }
 
 // DefaultProbeTools 为管理台 Doctor 探测的逻辑工具名。
+// 只探测镜像可能提供或可受管安装的工具，避免出现用户无法补齐的永久缺失项。
 func DefaultProbeTools() []string {
 	return []string{
 		"node",
@@ -72,7 +76,6 @@ func DefaultProbeTools() []string {
 		"python3",
 		"uv",
 		"uvx",
-		"docker",
 	}
 }
 

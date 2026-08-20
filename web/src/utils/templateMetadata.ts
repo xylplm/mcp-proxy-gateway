@@ -12,7 +12,6 @@ const trustLabels: Record<string, string> = {
 
 const runtimeLabels: Record<string, string> = {
   remote: '远程',
-  docker: 'Docker',
   node: 'Node',
   python: 'Python',
   uvx: 'uvx',
@@ -82,7 +81,7 @@ export function templateMetaChips(template: Template): TemplateMetaChip[] {
     ...runtimes.map((item) => ({
       key: `runtime:${item}`,
       label: runtimeLabel(item),
-      tone: item === 'docker' || item === 'remote' ? 'brand' : 'gray',
+      tone: item === 'remote' ? 'brand' : 'gray',
     }) satisfies TemplateMetaChip),
     {
       key: `container:${template.containerReady ? 'ready' : 'local'}`,

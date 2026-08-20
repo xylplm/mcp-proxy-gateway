@@ -53,11 +53,19 @@ func TestValidateCommandForSecurityModes(t *testing.T) {
 	if err := ValidateCommandForSecurity("node", p, std); err != nil {
 		t.Fatal(err)
 	}
-	if err := ValidateCommandForSecurity("docker", p, std); err != nil {
-		t.Fatalf("docker allowed in standard: %v", err)
+	// npm 在全局默认白名单内但不在严格档子集内，用它验证两档的差异。
+	if err := ValidateCommandForSecurity("npm", p, std); err != nil {
+		t.Fatalf("npm allowed in standard: %v", err)
+	}
+	// docker 已从默认白名单移除，标准档也应拒绝。
+	if err := ValidateCommandForSecurity("docker", p, std); err == nil {
+		t.Fatal("docker must be denied by default in standard")
 	}
 
 	strict := ResolveEffectiveSecurity(p, SecurityProfile{Mode: SecurityModeStrict}, "")
+	if err := ValidateCommandForSecurity("npm", p, strict); err == nil {
+		t.Fatal("npm must be denied in strict")
+	}
 	if err := ValidateCommandForSecurity("docker", p, strict); err == nil {
 		t.Fatal("docker must be denied in strict")
 	}

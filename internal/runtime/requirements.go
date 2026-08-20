@@ -110,7 +110,6 @@ func KnownTools() []KnownTool {
 		{Name: "python3", Label: "Python 3", Description: "Python 3 解释器", InferFrom: []string{"python3"}, TemplateRuntimes: []string{"python"}},
 		{Name: "uv", Label: "uv", Description: "Astral uv", PackageID: "uv-0.6.14", InferFrom: []string{"uv", "uvx"}, TemplateRuntimes: []string{"uv", "uvx"}},
 		{Name: "uvx", Label: "uvx", Description: "uv 工具运行器", PackageID: "uv-0.6.14", InferFrom: []string{"uvx"}, TemplateRuntimes: []string{"uv", "uvx"}},
-		{Name: "docker", Label: "Docker", Description: "容器运行时（需宿主机自行安装）", InferFrom: []string{"docker"}, TemplateRuntimes: []string{"docker"}},
 	}
 }
 

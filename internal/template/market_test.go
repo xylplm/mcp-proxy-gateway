@@ -224,11 +224,16 @@ func TestBuiltinTemplateMetadataTags(t *testing.T) {
 	if err != nil {
 		t.Fatalf("查询 github-mcp 失败：%v", err)
 	}
-	assertTemplateMetaContains(t, github.Runtimes, RuntimeDocker)
+	// GitHub 模板已从 docker run 改为官方托管远程端点：容器内无 docker CLI 也未挂宿主
+	// socket，docker 通路永远不可用，只有远程传输才能开箱接入。
+	assertTemplateMetaContains(t, github.Runtimes, RuntimeRemote)
 	assertTemplateMetaContains(t, github.CredentialTypes, CredentialToken)
 	assertTemplateMetaContains(t, github.ToolTypes, ToolTypeProjectManagement)
 	if !github.ContainerReady {
-		t.Fatal("Docker 模板应标记为适合容器内运行")
+		t.Fatal("远程传输模板应标记为适合容器内运行")
+	}
+	if github.Transport != domain.TransportStreamableHTTP {
+		t.Fatalf("github-mcp 传输类型=%q，应为 streamable-http", github.Transport)
 	}
 
 	playwright, err := m.Get("playwright-mcp")

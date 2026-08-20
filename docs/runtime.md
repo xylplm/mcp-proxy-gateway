@@ -16,7 +16,7 @@
    - 父进程敏感环境会被剥离；用户在 `connParams.env` 中显式配置的 MCP 凭证可按需要注入
 2. **本地运行安全档位（每上游可覆盖）**
    - `standard`（默认）：全局命令白名单 + 环境清理 + 进程清理
-   - `strict`：与 `strict_command_allowlist` 取交集（默认无 docker/npm）、强制 cwd/文件允许路径、禁止脚本自装包意图、严格档仅 runtime 卷解析命令、环境继承收紧；**允许 npx/uvx，但目标包必须在 `strict_package_allowlist`（或上游 `packageAllowlist`）内**
+   - `strict`：与 `strict_command_allowlist` 取交集（默认无 npm，避免严格档触发装包）、强制 cwd/文件允许路径、禁止脚本自装包意图、严格档仅 runtime 卷解析命令、环境继承收紧；**允许 npx/uvx，但目标包必须在 `strict_package_allowlist`（或上游 `packageAllowlist`）内**
    - `unrestricted`：denylist-only（仍禁 bash/cmd 等），管理台强红告警 + 二次确认
    - 配置键：全局 `runtime.default_stdio_security_mode`；每上游 `connParams.securityProfile`
    - **说明：** 策略本身不是内核沙箱。Linux 严格档在检测到 `bwrap` 时会尝试启用文件 bind 隔离，网络 `deny` 时会创建网络命名空间；在 Docker 内是否实际可用仍取决于容器权限与安全策略，存在 `bwrap` 二进制并不保证隔离能够启动。
@@ -73,6 +73,14 @@ $MPG_DATA_DIR/runtime/
 版本与校验和的唯一真源是 `internal/runtime/catalog.go` 中 `DefaultNodePackageID` 对应的资产；`Dockerfile.full` 以构建参数固定同一组值，并由 `TestDockerfileFullNodePinMatchesCatalog` 校验两处一致。升级预置 Node 时两处都要改，漏改会直接测试失败。
 
 镜像内也不安装 `python3-pip`：pip 依赖全程由受管 uv 在 `runtime/python/.venv/` 内完成，不经过系统 `pip`，且 `pip` 不在 stdio 命令白名单内，无法作为上游命令启动。
+
+## 为什么不支持 docker 作为 stdio 命令
+
+`docker` 不在默认命令白名单与探测工具列表中，模板市场也不再提供 `docker run` 形态的模板。
+
+网关自身运行在容器内，镜像不提供 `docker` CLI，也不挂载宿主 `/var/run/docker.sock`，因此 `docker run ...` 这类上游永远无法启动，只会得到一个信息量很低的 `initialize: EOF`。而挂载宿主 socket 等同于把宿主 root 权限交给 stdio 子进程，属于容器逃逸原语，不适合作为默认能力。
+
+以容器镜像分发的 MCP 服务请优先使用其远程端点（例如 GitHub 官方托管的 Streamable HTTP 服务）。确有本地需求的自建部署，可自行在 `runtime.command_allowlist` 中加回 `docker` 并自行承担 socket 挂载的风险；此时标准档风险等级会上报为 `high`，严格档仍然拒绝 `docker`。
 
 ## 受管依赖与包仓库
 

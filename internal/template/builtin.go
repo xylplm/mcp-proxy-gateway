@@ -141,21 +141,18 @@ func builtinTemplates() []Template {
 			},
 		},
 		{
-			ID:        "github-mcp",
-			Name:      "GitHub 代码托管",
-			Category:  CategoryDevTools,
-			Summary:   "接入 GitHub 官方 MCP 服务，支持仓库、Issue 与 PR 操作，需提供个人访问令牌（PAT）。",
-			DocURL:    "https://github.com/github/github-mcp-server",
-			Transport: domain.TransportStdio,
+			ID:       "github-mcp",
+			Name:     "GitHub 代码托管",
+			Category: CategoryDevTools,
+			Summary:  "接入 GitHub 官方托管的远程 MCP 服务，支持仓库、Issue 与 PR 操作，需提供个人访问令牌（PAT）。",
+			DocURL:   "https://github.com/github/github-mcp-server/blob/main/docs/remote-server.md",
+			// 使用 GitHub 官方托管端点而非 docker 本地镜像：网关运行在容器内，
+			// 无法执行 docker run（镜像不含 docker CLI，也未挂载宿主 socket）。
+			Transport: domain.TransportStreamableHTTP,
 			PresetParams: map[string]any{
-				"command": "docker",
-				"args": []any{
-					"run", "-i", "--rm",
-					"-e", "GITHUB_PERSONAL_ACCESS_TOKEN",
-					"ghcr.io/github/github-mcp-server",
-				},
-				"env": map[string]any{
-					"GITHUB_PERSONAL_ACCESS_TOKEN": "${token}",
+				"url": "https://api.githubcopilot.com/mcp/",
+				"headers": map[string]any{
+					"Authorization": "Bearer ${token}",
 				},
 			},
 			Placeholders: []Placeholder{

@@ -109,7 +109,6 @@ type RuntimeTag string
 
 const (
 	RuntimeRemote RuntimeTag = "remote"
-	RuntimeDocker RuntimeTag = "docker"
 	RuntimeNode   RuntimeTag = "node"
 	RuntimePython RuntimeTag = "python"
 	RuntimeUVX    RuntimeTag = "uvx"

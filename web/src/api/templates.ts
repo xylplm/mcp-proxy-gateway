@@ -30,7 +30,7 @@ export type TemplateCategory =
 export type ParamKind = 'string' | 'url' | 'secret' | 'int'
 
 export type TemplateTrustLevel = 'curated' | string
-export type TemplateRuntime = 'remote' | 'docker' | 'node' | 'python' | 'uvx' | 'local' | string
+export type TemplateRuntime = 'remote' | 'node' | 'python' | 'uvx' | 'local' | string
 export type TemplateCredentialType =
   | 'none'
   | 'api_key'

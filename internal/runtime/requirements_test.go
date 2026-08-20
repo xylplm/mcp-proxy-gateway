@@ -12,8 +12,9 @@ func TestInferToolsFromCommand(t *testing.T) {
 		"node":             {"node"},
 		"/usr/bin/python3": {"python3"},
 		"uvx":              {"uv", "uvx"},
-		"docker":           {"docker"},
-		"mybin":            nil,
+		// docker 已不是受管/可探测工具，与任意未知命令一样推断不出依赖。
+		"docker": nil,
+		"mybin":  nil,
 	}
 	for in, want := range cases {
 		got := InferToolsFromCommand(in)
@@ -61,12 +62,12 @@ func TestResolveEffectiveToolsManualAndAuto(t *testing.T) {
 	if len(sug) != 2 || eff[0] != "node" {
 		t.Fatalf("auto npx eff=%v sug=%v", eff, sug)
 	}
-	// manual overrides
+	// manual overrides：显式声明覆盖自动推断（python3 不会由 npx 推断出来）
 	eff, _ = ResolveEffectiveTools("npx", RuntimeRequirements{
 		Mode:  RequirementsManual,
-		Tools: []string{"docker"},
+		Tools: []string{"python3"},
 	}, nil)
-	if len(eff) != 1 || eff[0] != "docker" {
+	if len(eff) != 1 || eff[0] != "python3" {
 		t.Fatalf("manual=%v", eff)
 	}
 	// absolute-like command: empty infer, fallback saved tools in auto

@@ -108,7 +108,7 @@ func NormalizeSecurityMode(mode string, defaultMode StdioSecurityMode) StdioSecu
 	}
 }
 
-// DefaultStrictCommandAllowlist 严格档默认命令子集（无 docker/npm）。
+// DefaultStrictCommandAllowlist 严格档默认命令子集（不含 npm，避免严格档触发装包）。
 func DefaultStrictCommandAllowlist() []string {
 	return []string{"node", "npx", "python", "python3", "uv", "uvx"}
 }
@@ -811,6 +811,8 @@ func riskLevelFor(mode StdioSecurityMode, eff EffectiveSecurity) string {
 		}
 		return "low"
 	default:
+		// docker 已不在默认白名单，但用户仍可在配置中加回；容器内的 docker 需挂载
+		// 宿主 socket，等同于把宿主 root 交给子进程，因此按 high 上报。
 		if containsName(eff.CommandAllowlist, "docker") {
 			return "high"
 		}

@@ -9,10 +9,14 @@ func TestValidateCommandDefaults(t *testing.T) {
 	t.Parallel()
 	policy := DefaultPolicy()
 
-	for _, cmd := range []string{"npx", "node", "/usr/bin/python3", `C:\Tools\uvx.exe`, "docker"} {
+	for _, cmd := range []string{"npx", "node", "/usr/bin/python3", `C:\Tools\uvx.exe`} {
 		if err := ValidateCommand(cmd, policy); err != nil {
 			t.Fatalf("command %q should be allowed: %v", cmd, err)
 		}
+	}
+	// docker 已从默认白名单移除：容器内无 docker CLI 也未挂宿主 socket，永远无法启动。
+	if err := ValidateCommand("docker", policy); err == nil {
+		t.Fatal("docker 不应在默认白名单内")
 	}
 }
 

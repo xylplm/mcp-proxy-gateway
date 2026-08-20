@@ -16,9 +16,10 @@ const template = {
   category: 'dev_tools',
   summary: '代码托管',
   docUrl: '',
-  transport: 'stdio',
+  // github-mcp 已改为官方托管的远程 Streamable HTTP：容器内无法执行 docker run。
+  transport: 'streamable-http',
   trustLevel: 'curated',
-  runtimes: ['docker'],
+  runtimes: ['remote'],
   credentialTypes: ['token'],
   containerReady: true,
   toolTypes: ['dev_tools', 'project_management'],
@@ -37,16 +38,16 @@ test('builds compact and full template metadata chips', () => {
   const chips = templateMetaChips(template)
   assert.deepEqual(
     chips.map((chip) => chip.label),
-    ['内置精选', 'Token', 'Docker', '容器友好', '开发工具', '项目管理'],
+    ['内置精选', 'Token', '远程', '容器友好', '开发工具', '项目管理'],
   )
 
   assert.deepEqual(
     templateCardChips(template).map((chip) => chip.label),
-    ['Token', 'Docker', '开发工具'],
+    ['Token', '远程', '开发工具'],
   )
 })
 
 test('exposes metadata as searchable text', () => {
-  assert.match(templateMetadataSearchText(template), /Docker/)
+  assert.match(templateMetadataSearchText(template), /远程/)
   assert.match(templateMetadataSearchText(template), /项目管理/)
 })
