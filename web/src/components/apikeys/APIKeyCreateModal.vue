@@ -65,7 +65,6 @@ async function submit(): Promise<void> {
     <div
       v-if="open"
       class="fixed inset-0 z-[100001] flex items-center justify-center bg-gray-900/40 p-4 backdrop-blur-[1px]"
-      @click.self="emit('close')"
     >
       <div
         class="w-full max-w-md rounded-2xl border border-gray-200 bg-white p-6 shadow-xl dark:border-gray-800 dark:bg-gray-900"

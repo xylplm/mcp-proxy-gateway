@@ -1245,7 +1245,6 @@ const errClass = 'mt-1 text-xs text-error-500'
       <div
         v-if="toolDetailOpen && selectedToolDetail"
         class="fixed inset-0 z-[100000] flex items-center justify-center bg-gray-900/40 p-4 backdrop-blur-[1px]"
-        @click.self="closeToolDetail"
       >
         <div
           class="flex max-h-[88vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-xl dark:border-gray-800 dark:bg-gray-900"
@@ -1360,7 +1359,6 @@ const errClass = 'mt-1 text-xs text-error-500'
       <div
         v-if="guideOpen"
         class="fixed inset-0 z-[100001] flex items-center justify-center bg-gray-900/40 p-4 backdrop-blur-[1px]"
-        @click.self="closeGuide"
       >
         <div
           class="flex max-h-[88vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-xl dark:border-gray-800 dark:bg-gray-900"

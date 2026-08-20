@@ -1001,7 +1001,6 @@ onUnmounted(() => {
       <div
         v-if="detailOpen && selectedToolDetail !== null"
         class="fixed inset-0 z-[100000] flex items-center justify-center bg-gray-900/40 p-4 backdrop-blur-[1px]"
-        @click.self="closeDetail"
       >
         <div
           class="flex max-h-[88vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-xl dark:border-gray-800 dark:bg-gray-900"

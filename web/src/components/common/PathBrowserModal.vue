@@ -308,7 +308,6 @@ onUnmounted(() => {
       <div
         v-if="open"
         class="fixed inset-0 z-[100020] flex items-end justify-center bg-gray-950/45 p-0 backdrop-blur-[2px] sm:items-center sm:p-4"
-        @click.self="closeModal"
       >
         <transition name="path-pop" appear>
           <div

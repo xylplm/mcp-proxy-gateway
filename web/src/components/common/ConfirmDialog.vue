@@ -24,7 +24,6 @@ const state = computed(() => confirmState.value)
     <div
       v-if="state.open"
       class="fixed inset-0 z-[100040] flex items-center justify-center bg-gray-900/40 p-4 backdrop-blur-[1px]"
-      @click.self="resolveConfirm(false)"
     >
       <div class="w-full max-w-sm rounded-2xl border border-gray-200 bg-white p-6 shadow-xl dark:border-gray-800 dark:bg-gray-900">
         <div class="flex items-start gap-4">

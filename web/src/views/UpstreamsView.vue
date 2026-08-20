@@ -1783,7 +1783,6 @@ function goPage(p: number): void {
       <div
         v-if="detailOpen && detailUpstream !== null && detailSummary !== null"
         class="fixed inset-0 z-[100001] flex items-stretch justify-end bg-gray-900/40 backdrop-blur-[1px]"
-        @click.self="closeDetail"
       >
         <aside
           class="flex h-full w-full max-w-xl flex-col border-l border-gray-200 bg-white shadow-xl dark:border-gray-800 dark:bg-gray-900"
@@ -2093,7 +2092,6 @@ function goPage(p: number): void {
       <div
         v-if="importOpen"
         class="fixed inset-0 z-[100001] flex items-center justify-center bg-gray-900/40 p-4 backdrop-blur-[1px]"
-        @click.self="closeImport"
       >
         <div
           class="flex max-h-[88vh] w-full max-w-4xl flex-col rounded-2xl border border-gray-200 bg-white shadow-xl dark:border-gray-800 dark:bg-gray-900"
@@ -2327,7 +2325,6 @@ function goPage(p: number): void {
       <div
         v-if="toolModalOpen && toolModalUpstream !== null"
         class="fixed inset-0 z-[100001] flex items-center justify-center bg-gray-900/40 p-4 backdrop-blur-[1px]"
-        @click.self="toolModalOpen = false"
       >
         <div
           class="flex max-h-[86vh] w-full max-w-3xl flex-col rounded-2xl border border-gray-200 bg-white shadow-xl dark:border-gray-800 dark:bg-gray-900"
@@ -2434,7 +2431,6 @@ function goPage(p: number): void {
       <div
         v-if="sortingOpen"
         class="fixed inset-0 z-[100001] flex items-center justify-center bg-gray-900/40 p-4 backdrop-blur-[1px]"
-        @click.self="sortingOpen = false"
       >
         <div
           class="flex max-h-[86vh] w-full max-w-2xl flex-col rounded-2xl border border-gray-200 bg-white shadow-xl dark:border-gray-800 dark:bg-gray-900"

@@ -1709,7 +1709,6 @@ const errorClass = 'mt-1.5 text-xs text-error-500'
     <div
       v-if="open"
       class="fixed inset-0 z-[100000] flex justify-end bg-gray-900/40 backdrop-blur-[1px]"
-      @click.self="emit('close')"
     >
       <div
         class="flex h-full w-full flex-col overflow-hidden border-l border-gray-200 bg-white shadow-xl sm:max-w-[720px] dark:border-gray-800 dark:bg-gray-900"

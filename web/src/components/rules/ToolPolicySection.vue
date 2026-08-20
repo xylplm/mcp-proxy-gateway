@@ -461,7 +461,6 @@ defineExpose({ reload })
       <div
         v-if="modalOpen"
         class="fixed inset-0 z-[100001] flex items-center justify-center bg-gray-900/40 p-4 backdrop-blur-[1px]"
-        @click.self="closeModal"
       >
         <div class="max-h-[calc(100vh-2rem)] w-full max-w-2xl overflow-y-auto rounded-2xl border border-gray-200 bg-white p-6 shadow-xl dark:border-gray-800 dark:bg-gray-900">
           <h3 class="mb-4 text-base font-semibold text-gray-800 dark:text-white/90">

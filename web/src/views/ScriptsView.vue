@@ -606,7 +606,6 @@ onMounted(load)
         <div
           v-if="editorOpen"
           class="fixed inset-0 z-[100010] flex justify-end bg-gray-950/45 backdrop-blur-[2px]"
-          @click.self="closeEditor"
         >
           <div class="flex h-full w-full max-w-6xl flex-col bg-white shadow-2xl dark:bg-gray-900">
             <header
@@ -835,7 +834,6 @@ onMounted(load)
       <div
         v-if="diffOpen"
         class="fixed inset-0 z-[100030] flex items-center justify-center bg-gray-950/50 p-4"
-        @click.self="diffOpen = false"
       >
         <div
           class="max-h-[85vh] w-full max-w-4xl overflow-hidden rounded-2xl bg-white shadow-2xl dark:bg-gray-900"
@@ -844,7 +842,14 @@ onMounted(load)
             class="flex justify-between border-b border-gray-200 px-5 py-4 dark:border-gray-800"
           >
             <h3 class="font-semibold text-gray-800 dark:text-white/90">版本差异</h3>
-            <button @click="diffOpen = false">✕</button>
+            <button
+              type="button"
+              class="rounded-lg p-2 text-gray-400 hover:bg-gray-100 dark:hover:bg-white/5"
+              aria-label="关闭"
+              @click="diffOpen = false"
+            >
+              ✕
+            </button>
           </header>
           <div class="max-h-[70vh] overflow-auto bg-[#0b1020] p-4 font-mono text-xs leading-6">
             <p v-if="diffLoading" class="text-gray-400">生成中…</p>
