@@ -23,6 +23,7 @@
     "@codemirror/language": "^6.12.4",
     "@codemirror/state": "^6.7.1",
     "@codemirror/view": "^6.43.7",
+    "@lezer/highlight": "^1.2.3",
     "apexcharts": "^5.14.0",
     "axios": "^1.17.0",
     "codemirror": "^6.0.2",
