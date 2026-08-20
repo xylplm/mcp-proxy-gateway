@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 
-# 确保 TZ 环境变量已设置（Alpine 镜像默认无时区配置）
+# 确保 TZ 环境变量已设置
 export TZ="${TZ:-Asia/Shanghai}"
 
 DATA_DIR="${MPG_DATA_DIR:-/data}"
@@ -15,6 +15,7 @@ fi
 mkdir -p "${DATA_DIR}" \
   "${RUNTIME_DIR}/bin" \
   "${RUNTIME_DIR}/node" \
+  "${RUNTIME_DIR}/npm" \
   "${RUNTIME_DIR}/python" \
   "${RUNTIME_DIR}/uv" \
   "${RUNTIME_DIR}/cache" \
@@ -24,26 +25,31 @@ mkdir -p "${DATA_DIR}" \
 README_FILE="${RUNTIME_DIR}/README.txt"
 if [ ! -f "${README_FILE}" ]; then
   cat > "${README_FILE}" <<EOF
-MCP Proxy Gateway — 本地运行时目录
+MCP Proxy Gateway — Linux 容器受管运行时目录
+
+本目录仅由官方 Linux Docker/OCI 镜像管理。原生 Windows/macOS 和 Windows 容器不支持
+运行环境页的安装、卸载和依赖管理；Windows/macOS Docker Desktop 请使用 Linux 容器引擎。
 
 将 Node / Python / uv 等可执行文件放入本目录后，stdio 上游即可被探测与启动。
 本目录位于数据卷内，容器更新不会丢失。
 
 镜像说明：
-  默认 slim（:latest）不含系统 Node/Python，请用管理台预置安装或本目录放入工具。
-  完整版 full（:full）已内置 Node/npm 与 Python3，仍可用本目录覆盖或补充 uv 等。
+  默认 slim（:latest）不含系统 Node/Python；Node/uv 可使用管理台受管安装。
+  完整版 full（:full）已内置 Node/npm 与 Python3；pip 依赖管理需要 Python。
 
 推荐布局：
-  bin/           直接放置 node、npx、uv、uvx 等（优先加入 PATH）
-  node/bin/      Node 发行版
-  python/bin/    Python 发行版
-  uv/bin/        uv 发行版
-  cache/         包管理器缓存（预留）
-  state/         安装状态（预留）
+  bin/           用户手动放置的直接可执行文件（优先加入 PATH）
+  node/bin/      受管 Node 发行版
+  npm/           受管 npm 共享依赖、node_modules 与 CLI shim
+  python/bin/    用户手动放置的 Python 发行版
+  uv/bin/        受管 uv 发行版
+  cache/         npm / uv 受管缓存
+  state/         受管安装状态
+
+npm 共享依赖适用于受管 CLI 与 CommonJS 兼容查询；ESM 项目应维护自己的本地依赖。
 
 当前路径：${RUNTIME_DIR}
-放置文件后请重启网关进程，并在管理台「运行环境」刷新探测。
-也可设置环境变量 MPG_RUNTIME_DIR 覆盖本目录位置。
+放置文件后请刷新运行环境探测。也可设置 MPG_RUNTIME_DIR 覆盖本目录位置。
 EOF
 fi
 
@@ -58,9 +64,10 @@ prepend_path() {
   fi
 }
 
-# 逆序 prepend 以使最终顺序为 bin → node/bin → python/bin → uv/bin → 原 PATH
+# 逆序 prepend 以使最终顺序为 bin → node/bin → npm/.bin → python/bin → uv/bin → 原 PATH
 prepend_path "${RUNTIME_DIR}/uv/bin"
 prepend_path "${RUNTIME_DIR}/python/bin"
+prepend_path "${RUNTIME_DIR}/npm/node_modules/.bin"
 prepend_path "${RUNTIME_DIR}/node/bin"
 prepend_path "${RUNTIME_DIR}/bin"
 export PATH

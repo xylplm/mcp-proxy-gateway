@@ -61,8 +61,11 @@ var sensitiveEnvSuffixes = []string{
 type ChildEnvOptions struct {
 	// Mode 影响父 env 继承收紧与危险注入键剥离；空等同 standard。
 	Mode StdioSecurityMode
-	// RuntimeDir 非空时注入 MPG_RUNTIME_DIR，并将 cache 相关目录指到卷内（严格档）。
+	// RuntimeDir 非空时注入 MPG_RUNTIME_DIR；严格档还会将 cache 相关目录指到卷内。
 	RuntimeDir string
+	// PackageManagerCaches 为 true 时将 npm/uv/XDG 缓存固定到 runtime/cache。
+	// 仅依赖管理命令使用，避免改变普通标准档 stdio 子进程的缓存策略。
+	PackageManagerCaches bool
 	// FileRoots 注入协作信号 MPG_FS_ALLOWLIST（分号分隔，非内核强制）。
 	FileRoots []string
 	// NetworkMode / NetworkHosts 注入协作信号（非内核强制）。
@@ -142,8 +145,13 @@ func BuildChildEnvWithOptions(
 		}
 	}
 
-	// 严格档：把包管理缓存指到 runtime/cache，降低写家目录与意外自装残留。
-	if mode == SecurityModeStrict && strings.TrimSpace(opts.RuntimeDir) != "" {
+	// 受管运行时标识始终由网关注入，父进程的 MPG_* 已在前面剥离。
+	if strings.TrimSpace(opts.RuntimeDir) != "" {
+		put("MPG_RUNTIME_DIR", opts.RuntimeDir, false)
+	}
+
+	// 严格档与依赖管理命令都将包管理缓存放在持久运行时卷，避免写入容器临时层。
+	if (mode == SecurityModeStrict || opts.PackageManagerCaches) && strings.TrimSpace(opts.RuntimeDir) != "" {
 		cacheDir := filepath.Join(opts.RuntimeDir, RuntimeSubdirCache)
 		// 尽力创建，失败不阻断连接（权限/只读卷时仍注入路径，由子进程自行处理）。
 		_ = os.MkdirAll(filepath.Join(cacheDir, "npm"), 0o755)
@@ -152,7 +160,6 @@ func BuildChildEnvWithOptions(
 		put("NPM_CONFIG_CACHE", filepath.Join(cacheDir, "npm"), false)
 		put("UV_CACHE_DIR", filepath.Join(cacheDir, "uv"), false)
 		put("XDG_CACHE_HOME", cacheDir, false)
-		put("MPG_RUNTIME_DIR", opts.RuntimeDir, false)
 	}
 
 	// 包仓库镜像（加速 stdio 子进程拉依赖；所有档位生效，因为这是可达性配置而非安全开关）。
@@ -170,6 +177,11 @@ func BuildChildEnvWithOptions(
 	}
 	put("MPG_STDIO_SECURITY_MODE", string(mode), false)
 
+	managedNodePath := ""
+	if strings.TrimSpace(opts.RuntimeDir) != "" {
+		managedNodePath = filepath.Join(opts.RuntimeDir, RuntimeSubdirNpm, "node_modules")
+	}
+
 	for k, v := range userEnv {
 		key := strings.TrimSpace(k)
 		if key == "" {
@@ -183,6 +195,15 @@ func BuildChildEnvWithOptions(
 		put(key, v, false)
 	}
 
+	// 受管共享依赖始终位于模块搜索路径最前，且必须在用户 env 之后写入才能保证优先级。
+	if managedNodePath != "" {
+		if mode == SecurityModeStrict {
+			// 严格档只保留受管根，不接受父进程或上游声明的额外模块搜索路径。
+			put("NODE_PATH", managedNodePath, false)
+		} else {
+			put("NODE_PATH", PrependPath(lookupEnv(merged, "NODE_PATH"), []string{managedNodePath}), false)
+		}
+	}
 	if mode == SecurityModeStrict && len(pathPrefixes) > 0 {
 		cur := lookupPath(merged)
 		put("PATH", PrependPath(cur, pathPrefixes), false)
@@ -219,11 +240,15 @@ func BuildChildEnvWithOptions(
 }
 
 func lookupPath(merged map[string]string) string {
-	if cur, ok := merged["PATH"]; ok {
+	return lookupEnv(merged, "PATH")
+}
+
+func lookupEnv(merged map[string]string, key string) string {
+	if cur, ok := merged[key]; ok {
 		return cur
 	}
 	for k, v := range merged {
-		if strings.EqualFold(k, "PATH") {
+		if strings.EqualFold(k, key) {
 			return v
 		}
 	}
@@ -247,12 +272,12 @@ func strictInheritedEnvKey(key string) bool {
 	}
 }
 
-// isDangerousUserEnvKey 严格档拒绝用户注入的动态链接/预加载类键。
+// isDangerousUserEnvKey 严格档拒绝用户注入的动态链接/预加载/模块搜索路径类键。
 func isDangerousUserEnvKey(key string) bool {
 	upper := strings.ToUpper(strings.TrimSpace(key))
 	switch upper {
 	case "LD_PRELOAD", "LD_LIBRARY_PATH", "DYLD_INSERT_LIBRARIES", "DYLD_LIBRARY_PATH",
-		"NODE_OPTIONS", "PYTHONSTARTUP", "PYTHONPATH", "PERL5OPT", "RUBYOPT",
+		"NODE_OPTIONS", "NODE_PATH", "PYTHONSTARTUP", "PYTHONPATH", "PERL5OPT", "RUBYOPT",
 		"BASH_ENV", "ENV", "SHELLOPTS", "PROMPT_COMMAND":
 		return true
 	default:

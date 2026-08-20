@@ -1,6 +1,8 @@
 package runtime
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -23,7 +25,7 @@ func TestDoctorProbeAndSummary(t *testing.T) {
 	if len(tools) != len(DefaultProbeTools()) {
 		t.Fatalf("tool count=%d", len(tools))
 	}
-	sum := BuildSummary(DefaultPolicy(), tools, "/data", "/data/runtime", []string{"/data/runtime/bin"}, nil, nil, nil, nil, "")
+	sum := BuildSummary(DefaultPolicy(), tools, "/data", "/data/runtime", []string{"/data/runtime/bin"}, nil, nil, nil, nil, "", RuntimeManagementSupport{Supported: true})
 	if sum.AvailableCount != 2 {
 		t.Fatalf("available=%d", sum.AvailableCount)
 	}
@@ -75,7 +77,7 @@ func TestDoctorProbeReportsMissingExecutablePermission(t *testing.T) {
 	}
 }
 
-func TestServiceSummaryCreatesLayout(t *testing.T) {
+func TestServiceSummaryDoesNotCreateManagedLayoutOutsideOfficialImage(t *testing.T) {
 	root := t.TempDir()
 	data := filepath.Join(root, "data")
 	rt := filepath.Join(data, "runtime")
@@ -84,22 +86,36 @@ func TestServiceSummaryCreatesLayout(t *testing.T) {
 		func() string { return data },
 		func() string { return rt },
 	)
+	svc.supportFn = func() RuntimeManagementSupport {
+		return RuntimeManagementSupport{Reason: "test unsupported"}
+	}
 	sum := svc.Summary()
 	if sum.RuntimeDir != rt {
 		t.Fatalf("runtimeDir=%q", sum.RuntimeDir)
 	}
-	if !sum.LayoutReady {
-		t.Fatal("layout should be ready after Summary")
+	if sum.ManagementSupported {
+		t.Fatal("development process must not advertise official-image runtime management")
 	}
-	if _, err := os.Stat(filepath.Join(rt, "bin")); err != nil {
-		t.Fatalf("bin not created: %v", err)
+	if sum.ManagementReason == "" {
+		t.Fatal("unsupported management reason is required")
+	}
+	if sum.LayoutReady {
+		t.Fatal("summary must not create a managed layout outside the official image")
+	}
+	if _, err := os.Stat(filepath.Join(rt, "bin")); !os.IsNotExist(err) {
+		t.Fatalf("bin should not be created: %v", err)
 	}
 	if len(sum.Catalog) == 0 {
-		t.Fatal("catalog should be present")
+		t.Fatal("catalog should remain readable")
+	}
+	for _, pkg := range sum.Catalog {
+		if pkg.Supported {
+			t.Fatalf("catalog package must be non-installable outside official image: %+v", pkg)
+		}
 	}
 }
 
-func TestServiceSummaryReusesRuntimeLayoutAndInstallState(t *testing.T) {
+func TestServiceSummaryDoesNotInitializeLayoutTwiceOutsideOfficialImage(t *testing.T) {
 	root := t.TempDir()
 	data := filepath.Join(root, "data")
 	rt := filepath.Join(data, "runtime")
@@ -108,17 +124,84 @@ func TestServiceSummaryReusesRuntimeLayoutAndInstallState(t *testing.T) {
 		func() string { return data },
 		func() string { return rt },
 	)
-	if got := svc.Summary(); got.RuntimeDir != rt {
-		t.Fatalf("runtimeDir=%q", got.RuntimeDir)
-	}
-	if svc.layoutDir != rt {
-		t.Fatalf("layout marker=%q, want %q", svc.layoutDir, rt)
-	}
-	if err := os.Remove(filepath.Join(rt, RuntimeReadmeName)); err != nil {
-		t.Fatal(err)
+	svc.supportFn = func() RuntimeManagementSupport {
+		return RuntimeManagementSupport{Reason: "test unsupported"}
 	}
 	_ = svc.Summary()
-	if _, err := os.Stat(filepath.Join(rt, RuntimeReadmeName)); !os.IsNotExist(err) {
-		t.Fatalf("summary should not repeat layout initialization, stat err=%v", err)
+	if svc.layoutDir != "" {
+		t.Fatalf("layout marker=%q, want empty outside official image", svc.layoutDir)
+	}
+	_ = svc.Summary()
+	if _, err := os.Stat(rt); !os.IsNotExist(err) {
+		t.Fatalf("summary must not initialize runtime directory, stat err=%v", err)
+	}
+}
+
+func TestServiceRejectsManagedActionsWithoutWritingRuntime(t *testing.T) {
+	root := t.TempDir()
+	runtimeDir := filepath.Join(root, "runtime")
+	svc := NewService(
+		func() Policy { return DefaultPolicy() },
+		func() string { return root },
+		func() string { return runtimeDir },
+	)
+	svc.supportFn = func() RuntimeManagementSupport {
+		return RuntimeManagementSupport{Reason: "test unsupported"}
+	}
+
+	actions := []struct {
+		name string
+		call func() error
+	}{
+		{
+			name: "preview install",
+			call: func() error {
+				_, err := svc.PreviewInstall(DefaultNodePackageID)
+				return err
+			},
+		},
+		{
+			name: "install package",
+			call: func() error {
+				_, err := svc.InstallPackage(context.Background(), DefaultNodePackageID)
+				return err
+			},
+		},
+		{
+			name: "uninstall package",
+			call: func() error { return svc.UninstallPackage(DefaultNodePackageID) },
+		},
+		{
+			name: "list dependencies",
+			call: func() error {
+				_, err := svc.ListDeps(context.Background(), DepKindNpm)
+				return err
+			},
+		},
+		{
+			name: "install dependency",
+			call: func() error {
+				_, err := svc.InstallDep(context.Background(), DepKindNpm, "lodash")
+				return err
+			},
+		},
+		{
+			name: "uninstall dependency",
+			call: func() error {
+				_, err := svc.UninstallDep(context.Background(), DepKindNpm, "lodash")
+				return err
+			},
+		},
+	}
+
+	for _, action := range actions {
+		t.Run(action.name, func(t *testing.T) {
+			if err := action.call(); !errors.Is(err, ErrManagedRuntimeUnsupported) {
+				t.Fatalf("error=%v, expected ErrManagedRuntimeUnsupported", err)
+			}
+			if _, err := os.Stat(runtimeDir); !os.IsNotExist(err) {
+				t.Fatalf("unsupported action created runtime directory: %v", err)
+			}
+		})
 	}
 }

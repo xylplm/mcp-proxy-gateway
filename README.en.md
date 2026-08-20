@@ -103,7 +103,7 @@ The backend is written in Go. The admin console is built with Vue 3, Vite and Ta
 | Backend | Go 1.25, Gin, GORM, pgx/PostgreSQL, go-redis/v9, robfig/cron/v3, golang-jwt/v5, MCP Go SDK |
 | Frontend | Vue 3, Vite, TypeScript, Tailwind CSS, Pinia, Vue Router, ApexCharts |
 | Storage | PostgreSQL for business data and partitioned statistics; Redis for tool cache, rate limits and stats buffers |
-| Deployment | GitHub Actions builds linux/amd64 and linux/arm64 binaries, then packages them into a multi-arch Alpine Docker image |
+| Deployment | GitHub Actions builds linux/amd64 and linux/arm64 binaries, then packages them into a multi-arch Debian bookworm-slim/glibc Docker image |
 
 ## Quick Start
 
@@ -185,21 +185,22 @@ Images are published to Docker Hub: [`xylplm/mcp-proxy-gateway`](https://hub.doc
 | Tag | Description |
 | --- | --- |
 | `latest` / `1.0.YYYYMMDDHHmm` | **Slim (default)** — no Node/Python; install via admin Runtime or volume |
-| `full` / `1.0.YYYYMMDDHHmm-full` | **Full** — Node.js + npm + Python3 built-in for local stdio MCPs |
+| `full` / `1.0.YYYYMMDDHHmm-full` | **Full** — Node.js 24 LTS + npm/npx + Python3 built-in for local stdio MCPs |
 
 ```bash
 # Slim (default)
 docker pull xylplm/mcp-proxy-gateway:latest
 docker pull xylplm/mcp-proxy-gateway:1.0.202606071302
 
-# Full (Node.js + Python3)
+# Full (Node.js 24 LTS + Python3)
 docker pull xylplm/mcp-proxy-gateway:full
 docker pull xylplm/mcp-proxy-gateway:1.0.202606071302-full
 ```
 
 > `stdio` upstreams start local subprocesses beside the gateway:
-> - **Default `:latest` (slim)** has no Node / Python / uv. Use the admin **Runtime** controlled install, or drop tools into `$MPG_DATA_DIR/runtime`.
-> - **`:full`** ships Node.js (npm/npx) and Python3 for ready-to-use local MCPs; you can still install uv via the admin catalog.
+> - **Default `:latest` (slim)** has no Node / Python / uv. Use the admin **Runtime** controlled install for Node/uv, or drop tools into `$MPG_DATA_DIR/runtime`.
+> - **`:full`** ships Node.js 24 LTS (npm/npx) and Python3 for ready-to-use local MCPs; you can still install uv via the admin catalog. The built-in Node comes from the same official tarball as the managed install (identical version and SHA256), so the two never diverge.
+> - Managed Node, uv, npm and pip installation, removal and dependency management are supported only on the official `linux/amd64` and `linux/arm64` Docker/OCI images. Native Windows/macOS and Windows containers are unsupported; Docker Desktop is supported only with its Linux containers engine and an official image.
 > See [docs/runtime.md](docs/runtime.md). Remote SSE, Streamable HTTP, WebSocket and OpenAPI do not need local toolchains.
 
 ## Service Endpoints
@@ -239,7 +240,7 @@ Database, Redis and data directory are configured via environment variables:
 | `MPG_REDIS_ADDR` | yes | none | Redis address, for example `host:6379` |
 | `MPG_REDIS_PASSWORD` | no | empty | Redis password |
 | `MPG_DATA_DIR` | no | `/data` | Directory for YAML config and local persistent data |
-| `MPG_RUNTIME_DIR` | no | `{MPG_DATA_DIR}/runtime` | Local stdio tool volume (`bin` / `node` / `python` / `uv`, …) |
+| `MPG_RUNTIME_DIR` | no | `{MPG_DATA_DIR}/runtime` | Local stdio tool volume (`bin` / `node` / `npm` / `python` / `uv` / `cache`, …) |
 
 All other settings live in the YAML file under `MPG_DATA_DIR` and can be changed from the admin console:
 
@@ -356,7 +357,7 @@ mcp-proxy-gateway/
 │   ├── transport/          # Upstream transport adapters
 │   └── xiaozhi/            # XiaoZhi AI integration
 ├── web/                    # Vue 3 admin console
-├── Dockerfile              # Slim Alpine image (default :latest)
+├── Dockerfile              # Slim Debian bookworm-slim/glibc image (default :latest)
 ├── Dockerfile.full         # Full image (:full, Node + Python)
 └── .github/workflows/      # Release pipeline
 ```

@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -197,6 +198,10 @@ func (r *Router) runtimeInstallPreview(c *gin.Context) {
 	}
 	item, err := r.runtimeEnv.PreviewInstall(pkgID)
 	if err != nil {
+		if errors.Is(err, rtenv.ErrManagedRuntimeUnsupported) {
+			respondError(c, domain.NewValidationError(err.Error(), map[string]string{"packageId": err.Error()}))
+			return
+		}
 		respondError(c, domain.NewValidationError(err.Error(), map[string]string{
 			"packageId": err.Error(),
 		}))
@@ -226,7 +231,7 @@ func (r *Router) runtimeInstall(c *gin.Context) {
 	result, err := r.runtimeEnv.InstallPackage(ctx, pkgID)
 	if err != nil {
 		msg := err.Error()
-		if strings.Contains(msg, "未知") || strings.Contains(msg, "不支持") || strings.Contains(msg, "校验和") {
+		if errors.Is(err, rtenv.ErrManagedRuntimeUnsupported) || strings.Contains(msg, "未知") || strings.Contains(msg, "校验和") {
 			respondError(c, domain.NewValidationError(msg, map[string]string{"packageId": msg}))
 			return
 		}
@@ -279,6 +284,10 @@ func (r *Router) runtimeListDeps(c *gin.Context) {
 	result, err := r.runtimeEnv.ListDeps(ctx, kind)
 	if err != nil {
 		msg := err.Error()
+		if errors.Is(err, rtenv.ErrManagedRuntimeUnsupported) {
+			respondError(c, domain.NewValidationError(msg, map[string]string{"kind": msg}))
+			return
+		}
 		respondError(c, domain.NewError(domain.CodeInternal, "查询依赖失败："+msg))
 		return
 	}
@@ -314,7 +323,7 @@ func (r *Router) runtimeInstallDep(c *gin.Context) {
 	result, err := r.runtimeEnv.InstallDep(ctx, kind, spec)
 	if err != nil {
 		msg := err.Error()
-		if strings.Contains(msg, "不能为空") || strings.Contains(msg, "非法") || strings.Contains(msg, "不支持") {
+		if errors.Is(err, rtenv.ErrManagedRuntimeUnsupported) || strings.Contains(msg, "不能为空") || strings.Contains(msg, "非法") {
 			respondError(c, domain.NewValidationError(msg, map[string]string{"spec": msg}))
 			return
 		}
@@ -354,7 +363,7 @@ func (r *Router) runtimeUninstallDep(c *gin.Context) {
 	result, err := r.runtimeEnv.UninstallDep(ctx, kind, name)
 	if err != nil {
 		msg := err.Error()
-		if strings.Contains(msg, "不能为空") || strings.Contains(msg, "非法") || strings.Contains(msg, "不支持") {
+		if errors.Is(err, rtenv.ErrManagedRuntimeUnsupported) || strings.Contains(msg, "不能为空") || strings.Contains(msg, "非法") {
 			respondError(c, domain.NewValidationError(msg, map[string]string{"name": msg}))
 			return
 		}

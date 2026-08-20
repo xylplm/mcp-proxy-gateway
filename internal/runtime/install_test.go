@@ -166,8 +166,8 @@ func TestInstallUVFromFakeServer(t *testing.T) {
 	if res.ID != "uv-test" || res.Reused {
 		t.Fatalf("result=%+v", res)
 	}
-	if _, err := os.Stat(filepath.Join(rt, "bin", "uv")); err != nil {
-		t.Fatalf("uv missing in bin: %v", err)
+	if _, err := os.Stat(filepath.Join(rt, "uv", "bin", "uv")); err != nil {
+		t.Fatalf("uv missing in managed uv directory: %v", err)
 	}
 	// 二次安装应 reuse
 	res2, err := in.Install(ctx, "uv-test")
@@ -597,7 +597,7 @@ func TestInstallUsesMirrorWhenOfficialFails(t *testing.T) {
 	if res.Reused {
 		t.Fatalf("expected fresh install")
 	}
-	if _, err := os.Stat(filepath.Join(rt, "bin", "uv")); err != nil {
+	if _, err := os.Stat(filepath.Join(rt, "uv", "bin", "uv")); err != nil {
 		t.Fatalf("uv missing after mirror install: %v", err)
 	}
 }

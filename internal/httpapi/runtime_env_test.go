@@ -15,10 +15,13 @@ import (
 )
 
 type fakeRuntimeEnv struct {
-	summary    rtenv.Summary
-	catalog    []rtenv.CatalogPackage
-	browseStat rtenv.BrowseStatResult
-	policy     rtenv.Policy
+	summary         rtenv.Summary
+	catalog         []rtenv.CatalogPackage
+	browseStat      rtenv.BrowseStatResult
+	policy          rtenv.Policy
+	listDepsErr     error
+	installDepErr   error
+	uninstallDepErr error
 }
 
 func (f *fakeRuntimeEnv) Policy() rtenv.Policy {
@@ -59,12 +62,21 @@ func (f *fakeRuntimeEnv) UninstallPackage(packageID string) error {
 	return nil
 }
 func (f *fakeRuntimeEnv) ListDeps(_ context.Context, kind rtenv.DepKind) (rtenv.ListDepsResult, error) {
+	if f.listDepsErr != nil {
+		return rtenv.ListDepsResult{Kind: kind, Items: []rtenv.Dependency{}}, f.listDepsErr
+	}
 	return rtenv.ListDepsResult{Kind: kind, Items: []rtenv.Dependency{}}, nil
 }
 func (f *fakeRuntimeEnv) InstallDep(_ context.Context, kind rtenv.DepKind, spec string) (rtenv.InstallDepResult, error) {
+	if f.installDepErr != nil {
+		return rtenv.InstallDepResult{Kind: kind}, f.installDepErr
+	}
 	return rtenv.InstallDepResult{Kind: kind, Name: spec}, nil
 }
 func (f *fakeRuntimeEnv) UninstallDep(_ context.Context, kind rtenv.DepKind, name string) (rtenv.InstallDepResult, error) {
+	if f.uninstallDepErr != nil {
+		return rtenv.InstallDepResult{Kind: kind}, f.uninstallDepErr
+	}
 	return rtenv.InstallDepResult{Kind: kind, Name: name}, nil
 }
 func (f *fakeRuntimeEnv) BrowseRoots(contextRoots []string) rtenv.BrowseRootsResult {
@@ -198,6 +210,34 @@ func TestRuntimeCatalogAndToolsAndPreflight(t *testing.T) {
 	w = doJSON(e, http.MethodPost, "/api/admin/runtime/preflight", `{"transport":"stdio","command":"npx"}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("preflight status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestRuntimeDepsUnsupportedManagementReturnsValidationError(t *testing.T) {
+	unsupported := fmt.Errorf("%w：test unsupported", rtenv.ErrManagedRuntimeUnsupported)
+	env := &fakeRuntimeEnv{
+		listDepsErr:     unsupported,
+		installDepErr:   unsupported,
+		uninstallDepErr: unsupported,
+	}
+	e := newTestEngine(Deps{RuntimeEnv: env})
+
+	for _, request := range []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{method: http.MethodGet, path: "/api/admin/runtime/deps?kind=npm"},
+		{method: http.MethodPost, path: "/api/admin/runtime/deps/install", body: `{"kind":"npm","spec":"lodash"}`},
+		{method: http.MethodPost, path: "/api/admin/runtime/deps/uninstall", body: `{"kind":"npm","name":"lodash"}`},
+	} {
+		w := doJSON(e, request.method, request.path, request.body)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("%s %s status=%d body=%s", request.method, request.path, w.Code, w.Body.String())
+		}
+		if !strings.Contains(w.Body.String(), rtenv.ErrManagedRuntimeUnsupported.Error()) {
+			t.Fatalf("unsupported reason missing: %s", w.Body.String())
+		}
 	}
 }
 

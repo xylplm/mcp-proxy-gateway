@@ -91,8 +91,10 @@ func (a *App) build(envCfg config.EnvConfig) error {
 		return rtenv.ResolveRuntimeDir(env.DataDir, env.RuntimeDir)
 	}
 	transport.SetRuntimeDirProvider(runtimeDirFn)
-	// 启动时幂等创建目录布局（失败不阻断主业务；Summary 时也会再试）。
-	_ = rtenv.EnsureRuntimeLayout(runtimeDirFn())
+	// 受管运行时目录仅由官方 Linux Docker/OCI 镜像创建；非支持环境仍可使用远程上游与只读探测。
+	if rtenv.ManagedRuntimeSupport().Supported {
+		_ = rtenv.EnsureRuntimeLayout(runtimeDirFn())
+	}
 	runtimeSvc := rtenv.NewService(
 		policyFromCfg,
 		func() string { return a.cfg.Env().DataDir },

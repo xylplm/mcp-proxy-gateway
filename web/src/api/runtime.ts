@@ -63,6 +63,9 @@ export interface RuntimeSummary {
   pathPrefixes?: string[]
   layoutReady?: boolean
   processHardening?: boolean
+  /** 仅官方 Linux Docker/OCI 镜像可变更受管运行时与依赖。 */
+  managementSupported: boolean
+  managementReason?: string
   sandbox?: SandboxCapabilities
   catalog?: RuntimeCatalogPackage[]
   installedPackages?: RuntimeInstallRecord[]

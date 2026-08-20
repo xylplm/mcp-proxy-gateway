@@ -21,6 +21,7 @@ var pathPrefixesCache struct {
 const (
 	RuntimeSubdirBin    = "bin"
 	RuntimeSubdirNode   = "node"
+	RuntimeSubdirNpm    = "npm"
 	RuntimeSubdirPython = "python"
 	RuntimeSubdirUV     = "uv"
 	RuntimeSubdirCache  = "cache"
@@ -63,6 +64,7 @@ func EnsureRuntimeLayout(runtimeDir string) error {
 	subs := []string{
 		RuntimeSubdirBin,
 		RuntimeSubdirNode,
+		RuntimeSubdirNpm,
 		RuntimeSubdirPython,
 		RuntimeSubdirUV,
 		RuntimeSubdirCache,
@@ -84,23 +86,28 @@ func EnsureRuntimeLayout(runtimeDir string) error {
 }
 
 func runtimeReadmeContent(runtimeDir string) string {
-	return "" +
-		"MCP Proxy Gateway — 本地运行时目录\n" +
+	return "MCP Proxy Gateway — Linux 容器受管运行时目录\n" +
+		"\n" +
+		"本目录仅由官方 Linux Docker/OCI 镜像管理。原生 Windows/macOS 和 Windows 容器不支持\n" +
+		"运行环境页的安装、卸载和依赖管理；Windows/macOS Docker Desktop 请使用 Linux 容器引擎。\n" +
 		"\n" +
 		"将 Node / Python / uv 等可执行文件放入本目录后，stdio 上游即可被探测与启动。\n" +
-		"默认镜像不含这些工具；本目录位于数据卷内，容器更新不会丢失。\n" +
+		"本目录位于数据卷内，容器更新不会丢失。\n" +
 		"\n" +
 		"推荐布局：\n" +
-		"  bin/           直接放置 node、npx、uv、uvx 等（优先加入 PATH）\n" +
-		"  node/bin/      Node 发行版\n" +
-		"  python/bin/    Python 发行版\n" +
-		"  uv/bin/        uv 发行版\n" +
-		"  cache/         包管理器缓存（预留）\n" +
-		"  state/         安装状态（预留）\n" +
+		"  bin/           用户手动放置的直接可执行文件（优先加入 PATH）\n" +
+		"  node/bin/      受管 Node 发行版\n" +
+		"  npm/           受管 npm 共享依赖、node_modules 与 CLI shim\n" +
+		"  python/bin/    用户手动放置的 Python 发行版\n" +
+		"  uv/bin/        受管 uv 发行版\n" +
+		"  cache/         npm / uv 受管缓存\n" +
+		"  state/         受管安装状态\n" +
+		"\n" +
+		"npm 共享依赖适用于受管 CLI 与 CommonJS 兼容查询；ESM 项目应维护自己的本地依赖。\n" +
+		"pip 依赖管理需要镜像中可用 Python（官方 :full 镜像已提供）。\n" +
 		"\n" +
 		"当前路径：" + runtimeDir + "\n" +
-		"放置文件后请重启网关进程，并在管理台「运行环境」刷新探测。\n" +
-		"也可设置环境变量 MPG_RUNTIME_DIR 覆盖本目录位置。\n"
+		"放置文件后请刷新运行环境探测。也可设置 MPG_RUNTIME_DIR 覆盖本目录位置。\n"
 }
 
 // invalidatePathPrefixes 清除指定运行时目录的 PATH 前缀缓存。
@@ -134,6 +141,7 @@ func PathPrefixes(runtimeDir string) []string {
 	candidates := []string{
 		filepath.Join(runtimeDir, RuntimeSubdirBin),
 		filepath.Join(runtimeDir, RuntimeSubdirNode, "bin"),
+		filepath.Join(runtimeDir, RuntimeSubdirNpm, "node_modules", ".bin"),
 		filepath.Join(runtimeDir, RuntimeSubdirPython, "bin"),
 		filepath.Join(runtimeDir, RuntimeSubdirUV, "bin"),
 	}

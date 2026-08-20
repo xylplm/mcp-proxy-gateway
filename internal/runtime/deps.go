@@ -41,12 +41,12 @@ type Dependency struct {
 
 // ListDepsResult 为某类运行时已装第三方包的列表结果。
 type ListDepsResult struct {
-	Kind       DepKind       `json:"kind"`
-	Ready      bool          `json:"ready"`        // 运行时是否可用（npm 已装 / python 解释器存在）
-	Items      []Dependency  `json:"items"`        // 已装第三方包（已过滤 npm/pip 内置项）
-	Count      int           `json:"count"`        // 第三方包数量
-	Warning    string        `json:"warning,omitempty"`
-	PythonHint string        `json:"pythonHint,omitempty"` // pip 缺解释器时的引导文案
+	Kind       DepKind      `json:"kind"`
+	Ready      bool         `json:"ready"` // 运行时是否可用（npm 已装 / python 解释器存在）
+	Items      []Dependency `json:"items"` // 已装第三方包（已过滤 npm/pip 内置项）
+	Count      int          `json:"count"` // 第三方包数量
+	Warning    string       `json:"warning,omitempty"`
+	PythonHint string       `json:"pythonHint,omitempty"` // pip 缺解释器时的引导文案
 }
 
 // InstallDepResult 为一次安装/卸载结果。
@@ -59,9 +59,9 @@ type InstallDepResult struct {
 
 // DepProgress 为依赖操作的进行中状态（供前端轮询展示）。
 type DepProgress struct {
-	Kind      DepKind  `json:"kind"`
-	Action    string   `json:"action"` // install | uninstall | list
-	Spec      string   `json:"spec,omitempty"`
+	Kind      DepKind   `json:"kind"`
+	Action    string    `json:"action"` // install | uninstall | list
+	Spec      string    `json:"spec,omitempty"`
 	StartedAt time.Time `json:"startedAt"`
 }
 
@@ -76,10 +76,10 @@ const (
 
 // DepLogEntry 为一条依赖操作日志（stdout/stderr 逐行 + 阶段标记）。
 type DepLogEntry struct {
-	Kind    DepKind      `json:"kind"`
-	Level   DepLogLevel  `json:"level"`
-	Message string       `json:"message"`
-	At      time.Time    `json:"at"`
+	Kind    DepKind     `json:"kind"`
+	Level   DepLogLevel `json:"level"`
+	Message string      `json:"message"`
+	At      time.Time   `json:"at"`
 }
 
 const (
@@ -91,11 +91,12 @@ const (
 	depKillGrace = 3 * time.Second
 )
 
-// DependencyManager 在 runtimeDir 内对 Node/Python 全局区做包管理。
+// DependencyManager 在 runtimeDir 内对 Node/Python 的受管依赖区做包管理。
 //
-// npm 包通过 npm install --prefix <runtime/node> 装到 Node 自带的全局区，
-// stdio node/npx 上游可直接 require；pip 包通过受管 uv 在 runtime/python 建
-// 一个共享 venv，python 上游需把该 venv 加入 PATH 或用其解释器。
+// npm 包通过独立 runtime/npm prefix 安装，避免 Node 版本切换或卸载时删除依赖；
+// 受管 CLI shim 会加入子进程 PATH，CommonJS 查询通过受控 NODE_PATH 兼容。ESM
+// 项目仍应在项目目录维护自己的依赖。pip 包通过受管 uv 在 runtime/python 建一个
+// 共享 venv，Python 上游应使用该 venv 的解释器或显式配置其 PATH。
 type DependencyManager struct {
 	runtimeDir string
 	policyFn   func() Policy
@@ -218,6 +219,12 @@ func (dm *DependencyManager) InstallDep(ctx context.Context, kind DepKind, spec 
 	dm.mu.Lock()
 	defer dm.mu.Unlock()
 	spec = strings.TrimSpace(spec)
+	if dm.runtimeDir == "" {
+		return InstallDepResult{Kind: kind}, fmt.Errorf("运行时目录未配置")
+	}
+	if err := EnsureRuntimeLayout(dm.runtimeDir); err != nil {
+		return InstallDepResult{Kind: kind}, fmt.Errorf("准备运行时目录失败：%w", err)
+	}
 	if spec == "" {
 		return InstallDepResult{Kind: kind}, fmt.Errorf("包名不能为空")
 	}
@@ -252,6 +259,12 @@ func (dm *DependencyManager) UninstallDep(ctx context.Context, kind DepKind, nam
 	dm.mu.Lock()
 	defer dm.mu.Unlock()
 	name = strings.TrimSpace(name)
+	if dm.runtimeDir == "" {
+		return InstallDepResult{Kind: kind}, fmt.Errorf("运行时目录未配置")
+	}
+	if err := EnsureRuntimeLayout(dm.runtimeDir); err != nil {
+		return InstallDepResult{Kind: kind}, fmt.Errorf("准备运行时目录失败：%w", err)
+	}
 	if name == "" {
 		return InstallDepResult{Kind: kind}, fmt.Errorf("包名不能为空")
 	}
@@ -283,8 +296,8 @@ func (dm *DependencyManager) UninstallDep(ctx context.Context, kind DepKind, nam
 
 // --- npm ---
 
-func (dm *DependencyManager) nodeDir() string {
-	return filepath.Join(dm.runtimeDir, RuntimeSubdirNode)
+func (dm *DependencyManager) npmPrefixDir() string {
+	return filepath.Join(dm.runtimeDir, RuntimeSubdirNpm)
 }
 
 func (dm *DependencyManager) resolveNpm() (string, error) {
@@ -304,7 +317,7 @@ func (dm *DependencyManager) listNpm(ctx context.Context) (ListDepsResult, error
 		return result, nil
 	}
 	// npm ls --json --depth=0 列出直接依赖。
-	stdout, stderr, runErr := dm.runCommand(ctx, npmPath, []string{"ls", "--json", "--depth=0"}, dm.nodeDir(), DepKindNpm)
+	stdout, stderr, runErr := dm.runCommand(ctx, npmPath, []string{"ls", "--prefix", dm.npmPrefixDir(), "--json", "--depth=0"}, dm.npmPrefixDir(), DepKindNpm)
 	if runErr != nil {
 		// npm 在无 package.json 或无依赖时可能返回非零但 stdout 仍含 JSON。
 		if stdout == "" {
@@ -340,8 +353,8 @@ func (dm *DependencyManager) installNpm(ctx context.Context, spec string) (Insta
 		dm.addLog(DepLogEntry{Kind: DepKindNpm, Level: DepLogError, Message: err.Error()})
 		return InstallDepResult{Kind: DepKindNpm}, err
 	}
-	args := []string{"install", "--prefix", dm.nodeDir(), spec}
-	_, stderr, runErr := dm.runCommand(ctx, npmPath, args, dm.nodeDir(), DepKindNpm)
+	args := []string{"install", "--prefix", dm.npmPrefixDir(), spec}
+	_, stderr, runErr := dm.runCommand(ctx, npmPath, args, dm.npmPrefixDir(), DepKindNpm)
 	if runErr != nil {
 		msg := fmt.Sprintf("npm install 失败：%v%s", runErr, depErrTail(stderr))
 		dm.setLastError(msg)
@@ -360,8 +373,8 @@ func (dm *DependencyManager) uninstallNpm(ctx context.Context, name string) (Ins
 		dm.addLog(DepLogEntry{Kind: DepKindNpm, Level: DepLogError, Message: err.Error()})
 		return InstallDepResult{Kind: DepKindNpm}, err
 	}
-	args := []string{"uninstall", "--prefix", dm.nodeDir(), name}
-	_, stderr, runErr := dm.runCommand(ctx, npmPath, args, dm.nodeDir(), DepKindNpm)
+	args := []string{"uninstall", "--prefix", dm.npmPrefixDir(), name}
+	_, stderr, runErr := dm.runCommand(ctx, npmPath, args, dm.npmPrefixDir(), DepKindNpm)
 	if runErr != nil {
 		msg := fmt.Sprintf("npm uninstall 失败：%v%s", runErr, depErrTail(stderr))
 		dm.setLastError(msg)
@@ -453,7 +466,7 @@ func (dm *DependencyManager) listPip(ctx context.Context) (ListDepsResult, error
 		result.Warning = fmt.Sprintf("解析 pip 输出失败：%v", err)
 		return result, nil
 	}
-	skip := pipBuiltinNames()
+	skip := pipBootstrapNames()
 	for _, p := range parsed {
 		if _, isBuiltin := skip[strings.ToLower(p.Name)]; isBuiltin {
 			continue
@@ -484,7 +497,7 @@ func (dm *DependencyManager) installPip(ctx context.Context, spec string) (Insta
 		dm.addLog(DepLogEntry{Kind: DepKindPip, Level: DepLogError, Message: msg})
 		return InstallDepResult{Kind: DepKindPip}, fmt.Errorf("%s", msg)
 	}
-	args := []string{"pip", "install", "--python", dm.venvDir(), specForPip(spec)}
+	args := []string{"pip", "install", "--upgrade", "--python", dm.venvDir(), specForPip(spec)}
 	_, stderr, runErr := dm.runCommand(ctx, uvPath, args, dm.pythonDir(), DepKindPip)
 	if runErr != nil {
 		msg := fmt.Sprintf("uv pip install 失败：%v%s", runErr, depErrTail(stderr))
@@ -545,10 +558,10 @@ func (dm *DependencyManager) runCommand(ctx context.Context, command string, arg
 	}
 	// 进程组：便于超时时按组清理 npm/uv 的孙进程（标准档不会引入 bwrap）。
 	ApplySandbox(cmd, SandboxOptions{
-		Enabled:       true,
-		SecurityMode:  SecurityModeStandard,
-		RuntimeDir:    dm.runtimeDir,
-		NetworkMode:   NetworkAccessInherit,
+		Enabled:      true,
+		SecurityMode: SecurityModeStandard,
+		RuntimeDir:   dm.runtimeDir,
+		NetworkMode:  NetworkAccessInherit,
 	})
 	// 超时/取消时：先向进程组发 SIGTERM（优雅），WaitDelay 后 exec 运行时强制 SIGKILL。
 	cmd.Cancel = func() error {
@@ -558,8 +571,9 @@ func (dm *DependencyManager) runCommand(ctx context.Context, command string, arg
 	cmd.WaitDelay = depKillGrace
 	// 复用 env 构造：剥离敏感父进程变量、注入包仓库镜像、前置 runtime PATH。
 	cmd.Env = BuildChildEnvWithOptions(os.Environ(), nil, dm.policy(), ChildEnvOptions{
-		Mode:       SecurityModeStandard,
-		RuntimeDir: dm.runtimeDir,
+		Mode:                 SecurityModeStandard,
+		RuntimeDir:           dm.runtimeDir,
+		PackageManagerCaches: true,
 	}, PathPrefixes(dm.runtimeDir)...)
 
 	// runBounded 负责启动、逐行读取（写日志）、限时回收（防孙进程持管道泄漏 goroutine）。
@@ -701,12 +715,10 @@ func depErrTail(stderr string) string {
 	return "\n" + strings.Join(lines, "\n")
 }
 
-// pipBuiltinNames 返回需要过滤掉的 pip 自带/标准库包名（小写）。
-func pipBuiltinNames() map[string]struct{} {
-	list := []string{
-		"pip", "setuptools", "wheel", "packaging", "attrs", "certifi",
-		"idna", "requests", "urllib3", "charset-normalizer",
-	}
+// pipBootstrapNames 返回创建 venv 时的基础管理工具。其余包（包括 requests、
+// urllib3、certifi 等）都是用户可管理依赖，必须完整展示。
+func pipBootstrapNames() map[string]struct{} {
+	list := []string{"pip", "setuptools", "wheel"}
 	m := make(map[string]struct{}, len(list))
 	for _, n := range list {
 		m[n] = struct{}{}

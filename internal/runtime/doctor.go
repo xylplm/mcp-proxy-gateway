@@ -34,6 +34,8 @@ type Summary struct {
 	PathPrefixes             []string            `json:"pathPrefixes,omitempty"`
 	LayoutReady              bool                `json:"layoutReady"`
 	ProcessHardening         bool                `json:"processHardening"`
+	ManagementSupported      bool                `json:"managementSupported"`
+	ManagementReason         string              `json:"managementReason,omitempty"`
 	Sandbox                  SandboxCapabilities `json:"sandbox"`
 	Catalog                  []CatalogPackage    `json:"catalog,omitempty"`
 	InstalledPackages        []InstallRecord     `json:"installedPackages,omitempty"`
@@ -49,7 +51,7 @@ type Summary struct {
 // 已装包列表不在此返回（可能较慢，且每次 summary 拉取都会执行 npm/uv）；
 // 前端通过 GET /runtime/deps?kind=... 单独按需获取。
 type DepsStatus struct {
-	DepProgress *DepProgress `json:"depProgress,omitempty"`
+	DepProgress *DepProgress  `json:"depProgress,omitempty"`
 	DepLogs     []DepLogEntry `json:"depLogs,omitempty"`
 	DepError    string        `json:"depError,omitempty"`
 }
@@ -118,6 +120,7 @@ func BuildSummary(
 	installProgress *InstallProgress,
 	installLogs []InstallLogEntry,
 	installError string,
+	support RuntimeManagementSupport,
 ) Summary {
 	policy = NormalizePolicy(policy)
 	allowlist := policy.CommandAllowlist
@@ -179,6 +182,8 @@ func BuildSummary(
 		PathPrefixes:             append([]string{}, pathPrefixes...),
 		LayoutReady:              layoutReady,
 		ProcessHardening:         policy.ProcessHardening,
+		ManagementSupported:      support.Supported,
+		ManagementReason:         support.Reason,
 		Sandbox:                  DescribeSandbox(),
 		Catalog:                  catalog,
 		InstalledPackages:        installed,
@@ -196,12 +201,14 @@ type Service struct {
 	policyFn     func() Policy
 	dataDirFn    func() string
 	runtimeDirFn func() string
+	supportFn    func() RuntimeManagementSupport
 
 	instMu         sync.Mutex
 	installer_     *Installer
 	depMu          sync.Mutex
 	depMgr_        *DependencyManager
 	depMgrDir      string
+	operationMu    sync.Mutex // 串行化运行时包与依赖的读写，避免生命周期互相覆盖
 	layoutMu       sync.Mutex
 	layoutDir      string
 	preflightMu    sync.Mutex
@@ -229,6 +236,17 @@ func NewService(policyFn func() Policy, dataDirFn func() string, runtimeDirFn fu
 		runtimeDirFn:   runtimeDirFn,
 		preflightCache: make(map[string]preflightCacheEntry),
 	}
+}
+
+func (s *Service) managementSupport() RuntimeManagementSupport {
+	if s != nil && s.supportFn != nil {
+		return s.supportFn()
+	}
+	return ManagedRuntimeSupport()
+}
+
+func (s *Service) requireManagementSupport() error {
+	return requireManagedRuntimeSupport(s.managementSupport())
 }
 
 // Policy 返回当前策略快照。
@@ -292,7 +310,7 @@ func (s *Service) depManager() *DependencyManager {
 // Summary 返回管理台摘要。
 func (s *Service) Summary() Summary {
 	if s == nil {
-		return BuildSummary(DefaultPolicy(), nil, "", "", nil, nil, nil, nil, nil, "")
+		return BuildSummary(DefaultPolicy(), nil, "", "", nil, nil, nil, nil, nil, "", RuntimeManagementSupport{})
 	}
 	policy := s.Policy()
 	dataDir := ""
@@ -300,13 +318,21 @@ func (s *Service) Summary() Summary {
 		dataDir = s.dataDirFn()
 	}
 	runtimeDir := s.RuntimeDir()
-	s.ensureRuntimeLayout(runtimeDir)
+	support := s.managementSupport()
+	if support.Supported {
+		s.ensureRuntimeLayout(runtimeDir)
+	}
 	prefixes := PathPrefixes(runtimeDir)
 	doctor := NewDoctor(func(file string) (string, error) {
 		return LookPathWithPrefixes(file, prefixes, exec.LookPath)
 	})
 	inst := s.installer()
+	// 复用同一份 state 构造目录与已装列表，避免重复读状态文件。
 	state := inst.loadState()
+	catalog := inst.catalogWithState(state)
+	if !support.Supported {
+		markCatalogUnsupported(catalog)
+	}
 	progress := inst.currentProgress()
 	logs := inst.Logs()
 	lastErr := inst.lastInstallError()
@@ -316,11 +342,12 @@ func (s *Service) Summary() Summary {
 		dataDir,
 		runtimeDir,
 		prefixes,
-		inst.catalogWithState(state),
+		catalog,
 		state.Packages,
 		progress,
 		logs,
 		lastErr,
+		support,
 	)
 	// 依赖管理状态：仅当存在 runtimeDir 时填充（npm/pip 依赖 Node/uv 已安装）。
 	if runtimeDir != "" {
@@ -354,13 +381,28 @@ func (s *Service) Catalog() []CatalogPackage {
 	if s == nil {
 		return nil
 	}
-	return s.installer().CatalogWithStatus()
+	catalog := s.installer().CatalogWithStatus()
+	if !s.managementSupport().Supported {
+		markCatalogUnsupported(catalog)
+	}
+	return catalog
+}
+
+// markCatalogUnsupported 在不支持受管变更的环境中把目录项统一标记为不可安装，
+// 目录本身仍可读，便于用户看到官方镜像里能装什么。
+func markCatalogUnsupported(catalog []CatalogPackage) {
+	for i := range catalog {
+		catalog[i].Supported = false
+	}
 }
 
 // PreviewInstall 预览安装。
 func (s *Service) PreviewInstall(packageID string) (CatalogPackage, error) {
 	if s == nil {
 		return CatalogPackage{}, fmtUnavailable("运行环境服务未就绪")
+	}
+	if err := s.requireManagementSupport(); err != nil {
+		return CatalogPackage{}, err
 	}
 	return s.installer().PreviewInstall(packageID)
 }
@@ -373,6 +415,11 @@ func (s *Service) InstallPackage(ctx context.Context, packageID string) (Install
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if err := s.requireManagementSupport(); err != nil {
+		return InstallResult{}, err
+	}
+	s.operationMu.Lock()
+	defer s.operationMu.Unlock()
 	res, err := s.installer().Install(ctx, packageID)
 	if err == nil {
 		s.InvalidatePreflightCache()
@@ -385,6 +432,11 @@ func (s *Service) UninstallPackage(packageID string) error {
 	if s == nil {
 		return fmtUnavailable("运行环境服务未就绪")
 	}
+	if err := s.requireManagementSupport(); err != nil {
+		return err
+	}
+	s.operationMu.Lock()
+	defer s.operationMu.Unlock()
 	err := s.installer().Uninstall(packageID)
 	if err == nil {
 		s.InvalidatePreflightCache()
@@ -397,6 +449,11 @@ func (s *Service) ListDeps(ctx context.Context, kind DepKind) (ListDepsResult, e
 	if s == nil {
 		return ListDepsResult{Kind: kind, Items: []Dependency{}}, fmtUnavailable("运行环境服务未就绪")
 	}
+	if err := s.requireManagementSupport(); err != nil {
+		return ListDepsResult{Kind: kind, Items: []Dependency{}}, err
+	}
+	s.operationMu.Lock()
+	defer s.operationMu.Unlock()
 	return s.depManager().ListDeps(ctx, kind)
 }
 
@@ -405,7 +462,17 @@ func (s *Service) InstallDep(ctx context.Context, kind DepKind, spec string) (In
 	if s == nil {
 		return InstallDepResult{Kind: kind}, fmtUnavailable("运行环境服务未就绪")
 	}
-	return s.depManager().InstallDep(ctx, kind, spec)
+	if err := s.requireManagementSupport(); err != nil {
+		return InstallDepResult{Kind: kind}, err
+	}
+	s.operationMu.Lock()
+	defer s.operationMu.Unlock()
+	result, err := s.depManager().InstallDep(ctx, kind, spec)
+	if err == nil {
+		invalidatePathPrefixes(s.RuntimeDir())
+		s.InvalidatePreflightCache()
+	}
+	return result, err
 }
 
 // UninstallDep 卸载一个第三方包。
@@ -413,7 +480,17 @@ func (s *Service) UninstallDep(ctx context.Context, kind DepKind, name string) (
 	if s == nil {
 		return InstallDepResult{Kind: kind}, fmtUnavailable("运行环境服务未就绪")
 	}
-	return s.depManager().UninstallDep(ctx, kind, name)
+	if err := s.requireManagementSupport(); err != nil {
+		return InstallDepResult{Kind: kind}, err
+	}
+	s.operationMu.Lock()
+	defer s.operationMu.Unlock()
+	result, err := s.depManager().UninstallDep(ctx, kind, name)
+	if err == nil {
+		invalidatePathPrefixes(s.RuntimeDir())
+		s.InvalidatePreflightCache()
+	}
+	return result, err
 }
 
 // KnownToolCatalog 返回可声明依赖工具字典。

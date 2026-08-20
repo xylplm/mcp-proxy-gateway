@@ -63,6 +63,10 @@ test('runtime volume guide helpers', () => {
   assert.equal(shouldShowRuntimeGuide({ missingCount: 2, runtimeDir: '/data/runtime' }), true)
   assert.equal(shouldShowRuntimeGuide({ missingCount: 0, runtimeDir: '/data/runtime' }), false)
   assert.equal(shouldShowRuntimeGuide({ missingCount: 1, runtimeDir: '' }), false)
+  assert.equal(
+    shouldShowRuntimeGuide({ missingCount: 1, runtimeDir: '/data/runtime', managementSupported: false }),
+    false,
+  )
   const steps = runtimeGuideSteps({ runtimeDir: '/data/runtime', pathPrefixes: [] })
   assert.equal(steps.length, 3)
   assert.match(steps[0], /预置安装|bin/)

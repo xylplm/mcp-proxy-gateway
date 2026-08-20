@@ -103,7 +103,7 @@ MCP Proxy Gateway 是一个自托管的 MCP 能力网关。它负责把分散在
 | 后端 | Go 1.25、Gin、GORM、pgx/PostgreSQL、go-redis/v9、robfig/cron/v3、golang-jwt/v5、MCP Go SDK |
 | 前端 | Vue 3、Vite、TypeScript、Tailwind CSS、Pinia、Vue Router、ApexCharts |
 | 存储 | PostgreSQL 业务数据与分区统计表；Redis 工具缓存、限流计数、统计缓冲 |
-| 部署 | GitHub Actions 预编译 linux/amd64 与 linux/arm64 二进制，Alpine 运行镜像，多架构 Docker Hub 发布 |
+| 部署 | GitHub Actions 预编译 linux/amd64 与 linux/arm64 二进制，Debian bookworm-slim/glibc 运行镜像，多架构 Docker Hub 发布 |
 
 ## 快速开始
 
@@ -185,21 +185,22 @@ docker run -d --name mcp-proxy-gateway \
 | 标签 | 说明 |
 | --- | --- |
 | `latest` / `1.0.YYYYMMDDHHmm` | **精简（默认）**：无 Node/Python；可用管理台预置安装或数据卷放入工具 |
-| `full` / `1.0.YYYYMMDDHHmm-full` | **完整**：内置 Node.js + npm + Python3，本地 stdio 开箱即用 |
+| `full` / `1.0.YYYYMMDDHHmm-full` | **完整**：内置 Node.js 24 LTS + npm/npx + Python3，本地 stdio 开箱即用 |
 
 ```bash
 # 精简版（默认，体积小；远程 MCP / 自行装运行时）
 docker pull xylplm/mcp-proxy-gateway:latest
 docker pull xylplm/mcp-proxy-gateway:1.0.202606071302
 
-# 完整版（内置 Node.js + Python3，本地 stdio 开箱即用）
+# 完整版（内置 Node.js 24 LTS + Python3，本地 stdio 开箱即用）
 docker pull xylplm/mcp-proxy-gateway:full
 docker pull xylplm/mcp-proxy-gateway:1.0.202606071302-full
 ```
 
 > `stdio` 上游会在网关进程旁启动本地子进程：
-> - **默认 `:latest` 精简镜像**不含 Node / Python / uv。可在管理台「运行环境」**预置安装**，或放入数据卷 `$MPG_DATA_DIR/runtime`。
-> - **`:full` 完整镜像**已内置 Node.js（含 npm/npx）与 Python3，适合模板与本地 MCP 拿来即用；仍可用预置安装补充 uv 等。
+> - **默认 `:latest` 精简镜像**不含 Node / Python / uv；可通过管理台「运行环境」预置安装 Node/uv，或将工具放入数据卷 `$MPG_DATA_DIR/runtime`。
+> - **`:full` 完整镜像**已内置 Node.js 24 LTS（含 npm/npx）与 Python3，适合模板与本地 MCP 拿来即用；仍可预置安装 uv。内置 Node 与受管预置安装使用同一份官方 tarball（同版本同校验和），不会出现两份版本不一致的 node。
+> - 受管 Node、uv、npm、pip 的安装、卸载和依赖管理仅支持官方 `linux/amd64`、`linux/arm64` Docker/OCI 镜像。原生 Windows/macOS 与 Windows 容器不支持；Docker Desktop 仅在 Linux containers 引擎运行官方镜像时支持。
 > 详见 [docs/runtime.md](docs/runtime.md)。远程 SSE、Streamable HTTP、WebSocket 与 OpenAPI 上游不依赖本地工具。
 
 ## 服务入口
@@ -239,7 +240,7 @@ Authorization: Bearer <your-api-key>
 | `MPG_REDIS_ADDR` | 是 | 无 | Redis 地址，例如 `host:6379` |
 | `MPG_REDIS_PASSWORD` | 否 | 空 | Redis 密码 |
 | `MPG_DATA_DIR` | 否 | `/data` | YAML 配置与本地持久化目录 |
-| `MPG_RUNTIME_DIR` | 否 | `{MPG_DATA_DIR}/runtime` | 本地 stdio 工具卷目录（`bin` / `node` / `python` / `uv` 等） |
+| `MPG_RUNTIME_DIR` | 否 | `{MPG_DATA_DIR}/runtime` | 本地 stdio 工具卷目录（`bin` / `node` / `npm` / `python` / `uv` / `cache` 等） |
 
 其余配置保存在 `MPG_DATA_DIR` 下的 YAML 文件中，并可通过管理台修改：
 
@@ -356,7 +357,7 @@ mcp-proxy-gateway/
 │   ├── transport/          # 上游传输适配
 │   └── xiaozhi/            # 小智 AI 接入
 ├── web/                    # Vue 3 管理台
-├── Dockerfile              # 精简 Alpine 镜像（默认 :latest）
+├── Dockerfile              # 精简 Debian bookworm-slim/glibc 镜像（默认 :latest）
 ├── Dockerfile.full         # 完整镜像（:full，内置 Node/Python）
 └── .github/workflows/      # 发布流水线
 ```

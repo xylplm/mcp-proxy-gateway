@@ -95,6 +95,8 @@ type Installer struct {
 	catalog func() []PackageSpec
 	// now 可注入时间。
 	now func() time.Time
+	// saveStateFn 可注入以验证状态写入失败时的生命周期回滚。
+	saveStateFn func(InstallState) error
 
 	mu         sync.Mutex // 串行化安装，避免并发写同一目录
 	progressMu sync.RWMutex
@@ -185,19 +187,22 @@ func (in *Installer) Install(ctx context.Context, packageID string) (InstallResu
 	}
 
 	state := in.loadState()
-	if ok, _ := state.find(spec.ID); ok {
-		// 若关键工具已在 PATH 前缀中可用，视为复用。
-		if in.toolsPresent(spec.Tools) {
-			in.addLog(InstallLogEntry{Phase: "preparing", Level: InstallLogSuccess, Message: spec.Name + " 已存在且工具可用，跳过下载"})
-			return InstallResult{
-				ID:         spec.ID,
-				Name:       spec.Name,
-				Version:    spec.Version,
-				Tools:      append([]string{}, spec.Tools...),
-				RuntimeDir: in.runtimeDir,
-				Reused:     true,
-			}, nil
-		}
+	if installed, _ := state.find(spec.ID); installed && in.packageToolsPresent(spec) {
+		in.addLog(InstallLogEntry{Phase: "preparing", Level: InstallLogSuccess, Message: spec.Name + " 已存在且受管工具完整，跳过下载"})
+		return InstallResult{
+			ID:         spec.ID,
+			Name:       spec.Name,
+			Version:    spec.Version,
+			Tools:      append([]string{}, spec.Tools...),
+			RuntimeDir: in.runtimeDir,
+			Reused:     true,
+		}, nil
+	}
+	if _, recorded := state.currentKind(spec.Kind); !recorded && in.packageDirHasFiles(spec) {
+		msg := fmt.Sprintf("检测到未记录的 %s 目录内容，已拒绝覆盖；请先备份或清理后再安装", spec.Name)
+		in.setLastError(msg)
+		in.addLog(InstallLogEntry{Phase: "preparing", Level: InstallLogError, Message: msg})
+		return InstallResult{}, fmt.Errorf("%s", msg)
 	}
 
 	if ctx == nil {
@@ -263,14 +268,20 @@ func (in *Installer) Install(ctx context.Context, packageID string) (InstallResu
 	}
 
 	in.updateProgressPhase("placing")
-	if err := in.placePackage(spec, extractDir); err != nil {
+	replacement, err := in.placePackage(spec, extractDir)
+	if err != nil {
 		in.setLastError(err.Error())
 		in.addLog(InstallLogEntry{Phase: "placing", Level: InstallLogError, Message: err.Error()})
 		return InstallResult{}, err
 	}
+	rollbackPlacement := func() {
+		rollbackTreeReplacement(replacement)
+		invalidatePathPrefixes(in.runtimeDir)
+	}
 	invalidatePathPrefixes(in.runtimeDir)
-	if !in.toolsPresent(spec.Tools) {
-		msg := fmt.Sprintf("%s 安装后工具不完整：未找到 %s", spec.Name, strings.Join(in.missingTools(spec.Tools), "、"))
+	if !in.packageToolsPresent(spec) {
+		msg := fmt.Sprintf("%s 安装后受管目录内工具不完整：未找到 %s", spec.Name, strings.Join(in.missingPackageTools(spec), "、"))
+		rollbackPlacement()
 		in.setLastError(msg)
 		in.addLog(InstallLogEntry{Phase: "placing", Level: InstallLogError, Message: msg})
 		return InstallResult{}, fmt.Errorf("%s", msg)
@@ -289,18 +300,29 @@ func (in *Installer) Install(ctx context.Context, packageID string) (InstallResu
 	state = in.loadState()
 	state.removeKindExcept(spec.Kind, spec.ID)
 	state.upsert(rec)
-	if err := in.saveState(state); err != nil {
+	if err := in.persistState(state); err != nil {
+		rollbackPlacement()
 		msg := fmt.Sprintf("写入安装状态失败：%v", err)
 		in.setLastError(msg)
 		in.addLog(InstallLogEntry{Phase: "placing", Level: InstallLogError, Message: msg})
 		return InstallResult{}, fmt.Errorf("写入安装状态失败：%w", err)
 	}
 
+	cleanupTreeReplacement(replacement)
 	in.addLog(InstallLogEntry{
 		Phase:   "placing",
 		Level:   InstallLogSuccess,
 		Message: spec.Name + " " + spec.Version + " 安装完成",
 	})
+	// 状态已提交后再提示遮蔽，避免用户以为安装失败；不改动 runtime/bin 下的用户文件。
+	for _, shadowed := range in.shadowedTools(spec) {
+		in.addLog(InstallLogEntry{
+			Phase:   "placing",
+			Level:   InstallLogInfo,
+			Message: fmt.Sprintf("%s 命令仍优先解析到受管目录之外的文件，本次安装的版本不会生效；如需使用受管版本请移除该文件", shadowed.tool),
+			Source:  shadowed.path,
+		})
+	}
 	return InstallResult{
 		ID:         spec.ID,
 		Name:       spec.Name,
@@ -437,25 +459,39 @@ func (in *Installer) Uninstall(packageID string) error {
 		return fmt.Errorf("运行时目录未配置")
 	}
 	state := in.loadState()
+	if installed, _ := state.find(spec.ID); !installed {
+		return fmt.Errorf("%s %s 尚未由受管安装器安装，已保留现有目录", spec.Name, spec.Version)
+	}
 	if active, ok := state.currentKind(spec.Kind); ok && active.ID != spec.ID {
 		return fmt.Errorf("当前 %s 版本为 %s，不能卸载非当前版本", spec.Name, active.Version)
 	}
-	switch spec.Kind {
-	case PackageKindNode:
-		_ = os.RemoveAll(filepath.Join(in.runtimeDir, RuntimeSubdirNode))
-	case PackageKindUV:
-		_ = os.RemoveAll(filepath.Join(in.runtimeDir, RuntimeSubdirUV))
-		// 清理 bin 下可能由 uv 安装的 shim（仅删除同名工具，避免误删用户文件时过于激进：只删 uv/uvx）
-		for _, name := range []string{"uv", "uvx", "uv.exe", "uvx.exe"} {
-			_ = os.Remove(filepath.Join(in.runtimeDir, RuntimeSubdirBin, name))
-		}
-	default:
-		return fmt.Errorf("不支持卸载类型 %q", spec.Kind)
-	}
 
+	target := filepath.Join(in.runtimeDir, RuntimeSubdirNode)
+	if spec.Kind == PackageKindUV {
+		target = filepath.Join(in.runtimeDir, RuntimeSubdirUV)
+	}
+	backup, err := temporarySibling(target, "uninstall")
+	if err != nil {
+		return fmt.Errorf("准备卸载 %s 失败：%w", spec.Name, err)
+	}
+	if err := os.Rename(target, backup); err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("受管 %s 目录不存在，未更新安装状态", spec.Name)
+		}
+		return fmt.Errorf("移除 %s 失败：%w", spec.Name, err)
+	}
 	state.remove(spec.ID)
+	if err := in.persistState(state); err != nil {
+		if restoreErr := os.Rename(backup, target); restoreErr != nil {
+			return fmt.Errorf("写入卸载状态失败：%w；恢复 %s 失败：%v", err, spec.Name, restoreErr)
+		}
+		return fmt.Errorf("写入卸载状态失败：%w", err)
+	}
+	if err := os.RemoveAll(backup); err != nil {
+		return fmt.Errorf("%s 已卸载，但清理旧文件失败：%w", spec.Name, err)
+	}
 	invalidatePathPrefixes(in.runtimeDir)
-	return in.saveState(state)
+	return nil
 }
 
 // ListInstalled 返回已安装记录。
@@ -512,19 +548,66 @@ func (in *Installer) findPackage(id string) (PackageSpec, bool) {
 	return PackageSpec{}, false
 }
 
-func (in *Installer) toolsPresent(tools []string) bool {
-	return len(in.missingTools(tools)) == 0
+func (in *Installer) packageBinDir(spec PackageSpec) string {
+	switch spec.Kind {
+	case PackageKindNode:
+		return filepath.Join(in.runtimeDir, RuntimeSubdirNode, "bin")
+	case PackageKindUV:
+		return filepath.Join(in.runtimeDir, RuntimeSubdirUV, "bin")
+	default:
+		return ""
+	}
 }
 
-func (in *Installer) missingTools(tools []string) []string {
+func (in *Installer) packageToolsPresent(spec PackageSpec) bool {
+	return len(in.missingPackageTools(spec)) == 0
+}
+
+func (in *Installer) missingPackageTools(spec PackageSpec) []string {
+	binDir := in.packageBinDir(spec)
+	if binDir == "" {
+		return append([]string{}, spec.Tools...)
+	}
+	return missingToolsInDir(binDir, spec.Tools)
+}
+
+func (in *Installer) packageDirHasFiles(spec PackageSpec) bool {
+	binDir := in.packageBinDir(spec)
+	if binDir == "" {
+		return false
+	}
+	entries, err := os.ReadDir(filepath.Dir(binDir))
+	return err == nil && len(entries) > 0
+}
+
+// shadowedTool 记录一个被受管目录之外的同名文件抢先解析的工具。
+type shadowedTool struct {
+	tool string
+	path string
+}
+
+// shadowedTools 返回受管包已就位、但 PATH 上仍有更靠前的同名可执行文件的工具。
+//
+// runtime/bin 特意排在受管目录之前，供用户手动覆盖；历史版本的安装器也曾把 uv/uvx
+// 的副本写在那里。因此升级到新版本后实际生效的可能仍是旧文件。这里只做探测并提示真实
+// 生效路径，不删除用户目录下的文件。返回顺序跟随 spec.Tools，保持日志稳定。
+func (in *Installer) shadowedTools(spec PackageSpec) []shadowedTool {
+	binDir := in.packageBinDir(spec)
+	if binDir == "" || len(spec.Tools) == 0 {
+		return nil
+	}
 	prefixes := PathPrefixes(in.runtimeDir)
-	missing := make([]string, 0)
-	for _, tool := range tools {
-		if _, err := LookPathWithPrefixes(tool, prefixes, nil); err != nil {
-			missing = append(missing, tool)
+	var shadowed []shadowedTool
+	for _, tool := range spec.Tools {
+		resolved, err := LookPathWithPrefixes(tool, prefixes, nil)
+		if err != nil {
+			continue
+		}
+		if pathKey(filepath.Dir(resolved)) != pathKey(binDir) {
+			shadowed = append(shadowed, shadowedTool{tool: tool, path: resolved})
 		}
 	}
-	return missing
+	return shadowed
 }
 
 // downloadSource 描述一个可尝试的下载来源（官方优先，镜像兜底）。
@@ -653,64 +736,49 @@ func (in *Installer) downloadFile(ctx context.Context, rawURL, dest, wantSHA str
 	return nil
 }
 
-func (in *Installer) placePackage(spec PackageSpec, extractDir string) error {
+func (in *Installer) placePackage(spec PackageSpec, extractDir string) (treeReplacement, error) {
 	switch spec.Kind {
 	case PackageKindNode:
 		return in.placeNode(extractDir)
 	case PackageKindUV:
-		return in.placeUV(extractDir)
+		return in.placeUV(spec, extractDir)
 	default:
-		return fmt.Errorf("未知包类型 %q", spec.Kind)
+		return treeReplacement{}, fmt.Errorf("未知包类型 %q", spec.Kind)
 	}
 }
 
-func (in *Installer) placeNode(extractDir string) error {
-	// 官方 tarball/zip 顶层为 node-vX.Y.Z-...
+func (in *Installer) placeNode(extractDir string) (treeReplacement, error) {
+	// 官方 Linux tarball 顶层为 node-vX.Y.Z-...；受管安装仅支持官方 Linux Docker/OCI 镜像。
 	root, err := findSingleTopDir(extractDir)
 	if err != nil {
-		return err
+		return treeReplacement{}, err
 	}
-	// 需要 node/bin 或 Windows 根目录下 node.exe
+	// Linux 发行包必须已有 bin；归档解压会跳过 npm/npx 符号链接，下面按固定官方布局恢复。
 	if _, err := os.Stat(filepath.Join(root, "bin")); err != nil {
-		// Windows zip: 可执行文件在根目录
-		if _, err2 := os.Stat(filepath.Join(root, "node.exe")); err2 != nil {
-			return fmt.Errorf("Node 发行包布局无法识别")
-		}
-		// Normalize the Windows layout while the package is still in the
-		// extraction directory, so a preparation failure cannot affect target.
-		binDir := filepath.Join(root, "bin")
-		if err := os.MkdirAll(binDir, 0o755); err != nil {
-			return fmt.Errorf("准备 Node bin 目录失败：%w", err)
-		}
-		for _, name := range []string{"node.exe", "npm.cmd", "npx.cmd", "node", "npm", "npx"} {
-			src := filepath.Join(root, name)
-			if st, statErr := os.Stat(src); statErr == nil && !st.IsDir() {
-				if copyErr := copyFile(src, filepath.Join(binDir, name), st.Mode()); copyErr != nil {
-					return fmt.Errorf("准备 Node 可执行文件失败：%w", copyErr)
-				}
-			}
-		}
-	} else if err := restoreNodeLaunchers(root); err != nil {
-		return err
+		return treeReplacement{}, fmt.Errorf("Node Linux 发行包布局无法识别")
+	}
+	if err := restoreNodeLaunchers(root); err != nil {
+		return treeReplacement{}, err
 	}
 	if missing := missingToolsInDir(filepath.Join(root, "bin"), []string{"node", "npm", "npx"}); len(missing) > 0 {
-		return fmt.Errorf("Node 发行包工具不完整：未找到 %s", strings.Join(missing, "、"))
+		return treeReplacement{}, fmt.Errorf("Node 发行包工具不完整：未找到 %s", strings.Join(missing, "、"))
 	}
 	target := filepath.Join(in.runtimeDir, RuntimeSubdirNode)
 	staging := target + ".staging"
 	_ = os.RemoveAll(staging)
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-		return err
+		return treeReplacement{}, err
 	}
 	// 先落到 staging，成功后再原子替换，避免半安装状态。
 	if err := renameOrCopyTree(root, staging); err != nil {
 		_ = os.RemoveAll(staging)
-		return fmt.Errorf("安装 Node 失败：%w", err)
+		return treeReplacement{}, fmt.Errorf("安装 Node 失败：%w", err)
 	}
-	if err := replaceStagedTree(staging, target); err != nil {
-		return fmt.Errorf("安装 Node 失败：%w", err)
+	replacement, err := replaceStagedTreeWithBackup(staging, target)
+	if err != nil {
+		return treeReplacement{}, fmt.Errorf("安装 Node 失败：%w", err)
 	}
-	return nil
+	return replacement, nil
 }
 
 // restoreNodeLaunchers 只恢复 Node 官方布局中固定的 npm/npx launcher。
@@ -756,67 +824,39 @@ func missingToolsInDir(dir string, tools []string) []string {
 	return missing
 }
 
-func (in *Installer) placeUV(extractDir string) error {
-	// uv 压缩包通常直接包含 uv / uvx 可执行文件
-	candidates, err := findExecutablesNamed(extractDir, []string{"uv", "uvx", "uv.exe", "uvx.exe"})
+func (in *Installer) placeUV(spec PackageSpec, extractDir string) (treeReplacement, error) {
+	// uv Linux 压缩包直接包含 uv / uvx 可执行文件。
+	candidates, err := findExecutablesNamed(extractDir, spec.Tools)
 	if err != nil || len(candidates) == 0 {
-		return fmt.Errorf("uv 发行包中未找到可执行文件")
+		return treeReplacement{}, fmt.Errorf("uv 发行包中未找到可执行文件")
 	}
 	target := filepath.Join(in.runtimeDir, RuntimeSubdirUV)
 	staging := target + ".staging"
 	_ = os.RemoveAll(staging)
-	if err := os.MkdirAll(filepath.Join(staging, "bin"), 0o755); err != nil {
-		return err
+	binDir := filepath.Join(staging, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		return treeReplacement{}, err
 	}
-	binRoot := filepath.Join(in.runtimeDir, RuntimeSubdirBin)
-	if err := os.MkdirAll(binRoot, 0o755); err != nil {
+	for _, src := range candidates {
+		base := filepath.Base(src)
+		st, statErr := os.Stat(src)
+		if statErr != nil || st.IsDir() {
+			continue
+		}
+		if err := copyFile(src, filepath.Join(binDir, base), st.Mode()); err != nil {
+			_ = os.RemoveAll(staging)
+			return treeReplacement{}, fmt.Errorf("准备 uv 运行时失败：%w", err)
+		}
+	}
+	if missing := missingToolsInDir(binDir, spec.Tools); len(missing) > 0 {
 		_ = os.RemoveAll(staging)
-		return fmt.Errorf("准备 uv 工具目录失败：%w", err)
+		return treeReplacement{}, fmt.Errorf("uv 发行包工具不完整：未找到 %s", strings.Join(missing, "、"))
 	}
-	shimStaging, err := os.MkdirTemp(filepath.Dir(binRoot), ".uv-bin-staging-")
+	replacement, err := replaceStagedTreeWithBackup(staging, target)
 	if err != nil {
-		_ = os.RemoveAll(staging)
-		return fmt.Errorf("创建 uv shim 临时目录失败：%w", err)
+		return treeReplacement{}, fmt.Errorf("安装 uv 运行时失败：%w", err)
 	}
-	defer os.RemoveAll(shimStaging)
-
-	for _, src := range candidates {
-		base := filepath.Base(src)
-		dst := filepath.Join(staging, "bin", base)
-		st, _ := os.Stat(src)
-		mode := os.FileMode(0o755)
-		if st != nil {
-			mode = st.Mode()
-		}
-		if err := copyFile(src, dst, mode); err != nil {
-			_ = os.RemoveAll(staging)
-			return err
-		}
-		if err := copyFile(src, filepath.Join(shimStaging, base), mode); err != nil {
-			_ = os.RemoveAll(staging)
-			return fmt.Errorf("准备 uv 工具 shim 失败：%w", err)
-		}
-	}
-	replacements := make([]fileReplacement, 0, len(candidates))
-	for _, src := range candidates {
-		base := filepath.Base(src)
-		replacement, err := replaceStagedFileWithBackup(filepath.Join(shimStaging, base), filepath.Join(binRoot, base))
-		if err != nil {
-			rollbackFileReplacements(replacements)
-			return fmt.Errorf("更新 uv 工具 shim 失败：%w", err)
-		}
-		replacements = append(replacements, replacement)
-	}
-	if err := replaceStagedTree(staging, target); err != nil {
-		rollbackFileReplacements(replacements)
-		return fmt.Errorf("安装 uv 运行时失败：%w", err)
-	}
-	for _, replacement := range replacements {
-		if replacement.backup != "" {
-			_ = os.Remove(replacement.backup)
-		}
-	}
-	return nil
+	return replacement, nil
 }
 
 func (in *Installer) statePath() string {
@@ -837,6 +877,13 @@ func (in *Installer) loadState() InstallState {
 		st.Packages = []InstallRecord{}
 	}
 	return st
+}
+
+func (in *Installer) persistState(st InstallState) error {
+	if in != nil && in.saveStateFn != nil {
+		return in.saveStateFn(st)
+	}
+	return in.saveState(st)
 }
 
 func (in *Installer) saveState(st InstallState) error {
@@ -861,8 +908,8 @@ func (in *Installer) saveState(st InstallState) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	// Windows 上目标存在时 Rename 可能失败，先删再改。
-	_ = os.Remove(path)
+	// 暂存文件与状态文件同目录，单次 rename 即原子替换：失败时旧状态完整保留，
+	// 也不存在状态文件短暂缺失的窗口。
 	return os.Rename(tmpName, path)
 }
 
@@ -1174,86 +1221,73 @@ func renameOrCopyTree(src, dst string) error {
 	return copyTree(src, dst)
 }
 
-// replaceStagedTree replaces target only after staging is complete. The old
-// target is moved aside first so a failed replacement can restore it, which is
-// especially important on Windows where renaming over an existing directory
-// is not supported.
-func replaceStagedTree(staging, target string) error {
-	defer func() { _ = os.RemoveAll(staging) }()
-
-	if _, err := os.Lstat(target); err != nil {
-		if os.IsNotExist(err) {
-			if err := os.Rename(staging, target); err != nil {
-				return err
-			}
-			return nil
-		}
-		return err
-	}
-
-	backup, err := temporarySibling(target, "backup")
-	if err != nil {
-		return err
-	}
-	if err := os.Rename(target, backup); err != nil {
-		return fmt.Errorf("备份现有运行时失败：%w", err)
-	}
-
-	if err := os.Rename(staging, target); err != nil {
-		if restoreErr := os.Rename(backup, target); restoreErr != nil {
-			return fmt.Errorf("替换运行时失败：%w；恢复旧版本失败：%v", err, restoreErr)
-		}
-		return err
-	}
-	_ = os.RemoveAll(backup)
-	return nil
-}
-
-type fileReplacement struct {
+// treeReplacement 记录一次目录替换的回滚信息：backup 为被移开的旧目录，
+// hadTarget 表示替换前目标是否已存在。提交用 cleanupTreeReplacement，
+// 回滚用 rollbackTreeReplacement。
+type treeReplacement struct {
 	target    string
 	backup    string
 	hadTarget bool
 }
 
-func replaceStagedFileWithBackup(staging, target string) (fileReplacement, error) {
-	replacement := fileReplacement{target: target}
-	defer func() { _ = os.Remove(staging) }()
+// replaceStagedTree replaces target only after staging is complete and commits
+// immediately. The old target is moved aside first so a failed replacement can
+// restore it. Callers that need to roll back after later steps fail should use
+// replaceStagedTreeWithBackup instead.
+func replaceStagedTree(staging, target string) error {
+	replacement, err := replaceStagedTreeWithBackup(staging, target)
+	if err != nil {
+		return err
+	}
+	cleanupTreeReplacement(replacement)
+	return nil
+}
+
+func replaceStagedTreeWithBackup(staging, target string) (treeReplacement, error) {
+	replacement := treeReplacement{target: target}
+	defer func() { _ = os.RemoveAll(staging) }()
+
+	if _, err := os.Lstat(target); err != nil {
+		if os.IsNotExist(err) {
+			if err := os.Rename(staging, target); err != nil {
+				return treeReplacement{}, err
+			}
+			return replacement, nil
+		}
+		return treeReplacement{}, err
+	}
+
 	backup, err := temporarySibling(target, "backup")
 	if err != nil {
-		return replacement, err
+		return treeReplacement{}, err
 	}
-	_, targetErr := os.Lstat(target)
-	hasTarget := targetErr == nil
-	if targetErr != nil && !os.IsNotExist(targetErr) {
-		_ = os.Remove(backup)
-		return replacement, targetErr
+	if err := os.Rename(target, backup); err != nil {
+		return treeReplacement{}, fmt.Errorf("备份现有运行时失败：%w", err)
 	}
-	if hasTarget {
-		if err := os.Rename(target, backup); err != nil {
-			_ = os.Remove(backup)
-			return replacement, err
-		}
-		replacement.backup = backup
-		replacement.hadTarget = true
-	}
+	replacement.backup = backup
+	replacement.hadTarget = true
 	if err := os.Rename(staging, target); err != nil {
-		if hasTarget {
-			if restoreErr := os.Rename(backup, target); restoreErr != nil {
-				return replacement, fmt.Errorf("替换文件失败：%w；恢复旧文件失败：%v", err, restoreErr)
-			}
+		if restoreErr := os.Rename(backup, target); restoreErr != nil {
+			return treeReplacement{}, fmt.Errorf("替换运行时失败：%w；恢复旧版本失败：%v", err, restoreErr)
 		}
-		return fileReplacement{target: target}, err
+		return treeReplacement{}, err
 	}
 	return replacement, nil
 }
 
-func rollbackFileReplacements(replacements []fileReplacement) {
-	for i := len(replacements) - 1; i >= 0; i-- {
-		replacement := replacements[i]
-		_ = os.RemoveAll(replacement.target)
-		if replacement.hadTarget && replacement.backup != "" {
-			_ = os.Rename(replacement.backup, replacement.target)
-		}
+func cleanupTreeReplacement(replacement treeReplacement) {
+	if replacement.hadTarget && replacement.backup != "" {
+		_ = os.RemoveAll(replacement.backup)
+	}
+}
+
+func rollbackTreeReplacement(replacement treeReplacement) {
+	if replacement.target == "" {
+		return
+	}
+	_ = os.RemoveAll(replacement.target)
+	if replacement.hadTarget && replacement.backup != "" {
+		_ = os.Rename(replacement.backup, replacement.target)
 	}
 }
 

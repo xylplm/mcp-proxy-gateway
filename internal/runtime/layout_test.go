@@ -34,7 +34,7 @@ func TestEnsureRuntimeLayoutAndPathPrefixes(t *testing.T) {
 	if err := EnsureRuntimeLayout(rt); err != nil {
 		t.Fatalf("EnsureRuntimeLayout: %v", err)
 	}
-	for _, sub := range []string{"bin", "node", "python", "uv", "cache", "state"} {
+	for _, sub := range []string{"bin", "node", "npm", "python", "uv", "cache", "state"} {
 		st, err := os.Stat(filepath.Join(rt, sub))
 		if err != nil || !st.IsDir() {
 			t.Fatalf("missing dir %s: %v", sub, err)
@@ -71,6 +71,17 @@ func TestEnsureRuntimeLayoutAndPathPrefixes(t *testing.T) {
 	prefs = PathPrefixes(rt)
 	if len(prefs) < 2 {
 		t.Fatalf("expected bin+node/bin, got %v", prefs)
+	}
+	if prefs[1] != filepath.Join(rt, RuntimeSubdirNode, "bin") {
+		t.Fatalf("node prefix order=%v", prefs)
+	}
+	if err := os.MkdirAll(filepath.Join(rt, RuntimeSubdirNpm, "node_modules", ".bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	invalidatePathPrefixes(rt)
+	prefs = PathPrefixes(rt)
+	if len(prefs) < 3 || prefs[2] != filepath.Join(rt, RuntimeSubdirNpm, "node_modules", ".bin") {
+		t.Fatalf("npm CLI prefix must follow node/bin: %v", prefs)
 	}
 }
 

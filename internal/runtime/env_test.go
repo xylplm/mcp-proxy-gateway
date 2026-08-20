@@ -1,6 +1,8 @@
 package runtime
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -257,5 +259,64 @@ func TestBuildChildEnvPrependsRuntimePath(t *testing.T) {
 	}
 	if env2["PATH"] != "/only" {
 		t.Fatalf("user PATH should win, got %q", env2["PATH"])
+	}
+}
+
+func TestBuildChildEnvRuntimeVariablesAndModuleLookup(t *testing.T) {
+	t.Parallel()
+	runtimeDir := filepath.Join("/data", "runtime")
+	parent := []string{
+		"PATH=/usr/bin",
+		"NODE_PATH=/parent/modules",
+	}
+	user := map[string]string{"NODE_PATH": "/upstream/modules"}
+	out := BuildChildEnvWithOptions(parent, user, DefaultPolicy(), ChildEnvOptions{
+		Mode:       SecurityModeStandard,
+		RuntimeDir: runtimeDir,
+	}, filepath.Join(runtimeDir, RuntimeSubdirNode, "bin"))
+	env := envMapFrom(t, out)
+	managedModules := filepath.Join(runtimeDir, RuntimeSubdirNpm, "node_modules")
+	if env["MPG_RUNTIME_DIR"] != runtimeDir {
+		t.Fatalf("MPG_RUNTIME_DIR=%q", env["MPG_RUNTIME_DIR"])
+	}
+	if !strings.HasPrefix(env["NODE_PATH"], managedModules+string(os.PathListSeparator)) {
+		t.Fatalf("managed module path must be first, NODE_PATH=%q", env["NODE_PATH"])
+	}
+	if !strings.Contains(env["NODE_PATH"], "/upstream/modules") {
+		t.Fatalf("standard mode should retain explicit upstream module lookup: %q", env["NODE_PATH"])
+	}
+}
+
+func TestBuildChildEnvStrictModeResetsNodePathAndAddsCaches(t *testing.T) {
+	t.Parallel()
+	runtimeDir := filepath.Join("/data", "runtime")
+	out := BuildChildEnvWithOptions(
+		[]string{"PATH=/usr/bin", "NODE_PATH=/parent/modules"},
+		map[string]string{"NODE_PATH": "/upstream/modules"},
+		DefaultPolicy(),
+		ChildEnvOptions{
+			Mode:                 SecurityModeStrict,
+			RuntimeDir:           runtimeDir,
+			PackageManagerCaches: true,
+		},
+	)
+	env := envMapFrom(t, out)
+	cacheDir := filepath.Join(runtimeDir, RuntimeSubdirCache)
+	managedModules := filepath.Join(runtimeDir, RuntimeSubdirNpm, "node_modules")
+	if env["MPG_RUNTIME_DIR"] != runtimeDir {
+		t.Fatalf("MPG_RUNTIME_DIR=%q", env["MPG_RUNTIME_DIR"])
+	}
+	if env["NODE_PATH"] != managedModules {
+		t.Fatalf("strict NODE_PATH=%q, want %q", env["NODE_PATH"], managedModules)
+	}
+	for key, want := range map[string]string{
+		"npm_config_cache": filepath.Join(cacheDir, "npm"),
+		"NPM_CONFIG_CACHE": filepath.Join(cacheDir, "npm"),
+		"UV_CACHE_DIR":     filepath.Join(cacheDir, "uv"),
+		"XDG_CACHE_HOME":   cacheDir,
+	} {
+		if env[key] != want {
+			t.Fatalf("%s=%q, want %q", key, env[key], want)
+		}
 	}
 }

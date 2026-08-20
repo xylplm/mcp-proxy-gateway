@@ -55,9 +55,14 @@ export function runtimeBinDir(
 
 /** 工具缺失时是否展示卷路径引导。 */
 export function shouldShowRuntimeGuide(
-  summary: Pick<RuntimeSummary, 'missingCount' | 'runtimeDir'>,
+  summary: Pick<RuntimeSummary, 'missingCount' | 'runtimeDir'> &
+    Partial<Pick<RuntimeSummary, 'managementSupported'>>,
 ): boolean {
-  return (summary.missingCount ?? 0) > 0 && !!summary.runtimeDir?.trim()
+  return (
+    summary.managementSupported !== false &&
+    (summary.missingCount ?? 0) > 0 &&
+    !!summary.runtimeDir?.trim()
+  )
 }
 
 export function runtimeGuideSteps(
