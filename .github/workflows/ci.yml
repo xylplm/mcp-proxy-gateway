@@ -1,0 +1,86 @@
+# 持续校验（CI）：每次 push 与 PR 自动运行，只做校验，不产出任何制品。
+#
+# 与 release.yml 的分工：
+#   ci.yml      —— 自动触发，快速反馈。不推镜像、不打 tag、不建 Release。
+#   release.yml —— 仅手动触发，负责真实发版。
+#
+# 为什么需要它：受管运行时等大量测试用 t.Skip 跳过 Windows（依赖符号链接、
+# Unix 执行位、/bin/sh 夹具），开发机跑 go test 看不出问题。没有自动 CI 时，
+# 这类回归只能在手动发版时才暴露。
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+# 同一分支的新 push 取消仍在进行的旧运行，避免排队浪费。
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: 后端校验
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v7
+
+      - name: 安装 Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test ./... -count=1
+
+      - name: gofmt 格式检查（仅警告）
+        continue-on-error: true
+        run: |
+          unformatted="$(gofmt -l . | grep -v '^web/node_modules/' || true)"
+          if [ -n "$unformatted" ]; then
+            echo "::warning::以下文件未通过 gofmt 格式检查："
+            echo "$unformatted"
+          else
+            echo "gofmt 格式检查通过。"
+          fi
+
+  frontend:
+    name: 前端校验
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v7
+
+      - name: 安装 Node 24
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: 依赖安装
+        working-directory: ./web
+        run: npm ci
+
+      - name: ESLint
+        working-directory: ./web
+        run: npm run lint
+
+      - name: 单元测试
+        working-directory: ./web
+        run: npm run test:unit
+
+      # 含 vue-tsc 类型检查，能拦住只在类型层面出现的破坏。
+      - name: 构建
+        working-directory: ./web
+        run: npm run build
