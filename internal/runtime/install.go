@@ -797,8 +797,12 @@ func restoreNodeLaunchers(root string) error {
 		} else if !os.IsNotExist(err) {
 			return fmt.Errorf("检查 Node %s launcher 失败：%w", launcher.name, err)
 		}
+		// 链接值沿用官方布局的相对形式（bin/ 上跳一级到 lib/），整树移动到
+		// runtime/node 后依然有效。
 		targetRel := filepath.Join("..", "lib", "node_modules", "npm", "bin", launcher.target)
-		targetPath, err := safeJoin(filepath.Join(root, "bin"), targetRel)
+		// 校验以发行包根为基准：safeJoin 是归档条目名的净化器，会拒绝一切以 .. 开头的
+		// 路径，因此这里必须传包内相对路径，而不是上面那个带 .. 的链接值。
+		targetPath, err := safeJoin(root, filepath.Join("lib", "node_modules", "npm", "bin", launcher.target))
 		if err != nil {
 			return fmt.Errorf("Node %s launcher 目标非法：%w", launcher.name, err)
 		}

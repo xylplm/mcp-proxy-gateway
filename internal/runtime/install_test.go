@@ -183,6 +183,32 @@ func TestInstallUVFromFakeServer(t *testing.T) {
 	}
 }
 
+// safeJoin 是归档条目名净化器，会拒绝一切以 .. 开头的路径；而 npm/npx launcher 的官方
+// 链接值恰好是 ../lib/...，一旦拿它去做校验，受管 Node 安装会 100% 失败在补 launcher 这步。
+//
+// 上面的完整用例依赖 Unix 符号链接、在 Windows 上会跳过，导致这类回归在开发机上不可见。
+// 本用例不创建符号链接，因此全平台可跑：只断言不会因路径校验被拒（Windows 无符号链接
+// 权限时会失败在 os.Symlink，属于另一类错误，不影响本断言）。
+func TestRestoreNodeLaunchersAcceptsOfficialLayoutTarget(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "node-v24.19.0-linux-x64")
+	if err := os.MkdirAll(filepath.Join(root, "lib", "node_modules", "npm", "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"npm-cli.js", "npx-cli.js"} {
+		if err := os.WriteFile(filepath.Join(root, "lib", "node_modules", "npm", "bin", name), []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := restoreNodeLaunchers(root); err != nil {
+		if strings.Contains(err.Error(), "目标非法") || strings.Contains(err.Error(), "目标缺失") {
+			t.Fatalf("官方布局的 launcher 目标必须通过校验，却被拒绝：%v", err)
+		}
+	}
+}
+
 func TestRestoreNodeLaunchersFromSkippedSymlinks(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Node tar launcher test requires Unix symlinks")
