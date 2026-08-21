@@ -208,7 +208,7 @@ func TestFilterCreateRejectsOverLimit(t *testing.T) {
 	const apiKeyID = "key-1"
 
 	// 先填满至上限 100 条。
-	for i := 0; i < domain.MaxFilterRulesPerScope; i++ {
+	for i := range domain.MaxFilterRulesPerScope {
 		if _, err := mgr.Create(context.Background(), CreateFilterInput{
 			APIKeyID: apiKeyID,
 			Pattern:  fmt.Sprintf("tool-%d", i),
@@ -241,7 +241,7 @@ func TestFilterCreateRejectsOverLimit(t *testing.T) {
 func TestFilterCreateLimitIsPerAPIKey(t *testing.T) {
 	mgr, _ := newTestFilterManager()
 
-	for i := 0; i < domain.MaxFilterRulesPerScope; i++ {
+	for i := range domain.MaxFilterRulesPerScope {
 		if _, err := mgr.Create(context.Background(), CreateFilterInput{
 			APIKeyID: "key-full",
 			Pattern:  fmt.Sprintf("t-%d", i),
@@ -266,7 +266,7 @@ func TestFilterCreateAppendsSortOrder(t *testing.T) {
 	mgr, _ := newTestFilterManager()
 	const apiKeyID = "key-1"
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		got, err := mgr.Create(context.Background(), CreateFilterInput{
 			APIKeyID: apiKeyID,
 			Pattern:  fmt.Sprintf("p-%d", i),

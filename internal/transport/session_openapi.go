@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -548,9 +549,7 @@ func resolveOpenAPISchemaWithState(schema any, doc openAPIDocument, seen map[str
 		}
 		if resolved, ok := doc.Components.Schemas[name]; ok {
 			nextSeen := make(map[string]bool, len(seen)+1)
-			for key, value := range seen {
-				nextSeen[key] = value
-			}
+			maps.Copy(nextSeen, seen)
 			nextSeen[name] = true
 			return resolveOpenAPISchemaWithState(resolved, doc, nextSeen, depth+1)
 		}

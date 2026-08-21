@@ -180,7 +180,7 @@ func TestBackoffReconnectorMaxOutOfRangeClampedToBoundary(t *testing.T) {
 	})
 	// 推进足够多次（2^17=131072s > 86400s）应封顶到上界 86400s。
 	var last time.Duration
-	for i := 0; i < 18; i++ {
+	for range 18 {
 		last, _ = r.NextDelay()
 	}
 	if last != 86400*time.Second {
@@ -196,7 +196,7 @@ func TestBackoffReconnectorMaxBelowLowerBoundFallsBackToDefault(t *testing.T) {
 		Multiplier: 2,
 	})
 	var last time.Duration
-	for i := 0; i < 13; i++ {
+	for range 13 {
 		last, _ = r.NextDelay()
 	}
 	if last != 3600*time.Second {

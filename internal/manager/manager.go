@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
 	"strings"
 	"sync"
 	"time"
@@ -427,9 +428,7 @@ func (m *Manager) validateConfig(cfg domain.UpstreamConfig) (domain.UpstreamConf
 		cfg.Tags = normalized
 	}
 	if normalized, rateLimitFields := normalizeRateLimits(cfg.RateLimits); len(rateLimitFields) > 0 {
-		for k, v := range rateLimitFields {
-			fields[k] = v
-		}
+		maps.Copy(fields, rateLimitFields)
 	} else {
 		cfg.RateLimits = normalized
 	}
@@ -522,9 +521,7 @@ func (m *Manager) toUpstream(row *store.UpstreamRow) domain.Upstream {
 // 确保字段级校验错误不丢失（Req 2.2）。
 func mergeFields(fields map[string]string, err error) {
 	if apiErr, ok := err.(*domain.APIError); ok && len(apiErr.Fields) > 0 {
-		for k, v := range apiErr.Fields {
-			fields[k] = v
-		}
+		maps.Copy(fields, apiErr.Fields)
 		return
 	}
 	fields["connParams"] = err.Error()

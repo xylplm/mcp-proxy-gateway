@@ -152,7 +152,7 @@ func TestProbeStartup_PartialFailureRecordsReason(t *testing.T) {
 // assertFailureLogged 校验日志中存在一条对应组件/名称且 status=failed 的失败记录。
 func assertFailureLogged(t *testing.T, logOut, component, name string) {
 	t.Helper()
-	for _, line := range strings.Split(strings.TrimSpace(logOut), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(logOut), "\n") {
 		if line == "" {
 			continue
 		}

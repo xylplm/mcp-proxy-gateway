@@ -74,7 +74,7 @@ func smTool(name, desc string) domain.ToolDef {
 // smTools 构造 n 个名称为 tool_0..tool_{n-1} 的测试工具。
 func smTools(n int) []domain.ToolDef {
 	out := make([]domain.ToolDef, 0, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		out = append(out, smTool(fmt.Sprintf("tool_%d", i), fmt.Sprintf("第 %d 个工具", i)))
 	}
 	return out

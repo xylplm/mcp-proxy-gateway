@@ -51,7 +51,7 @@ func genConnParams(t *rapid.T, label string) map[string]any {
 	}
 	n := rapid.IntRange(1, 3).Draw(t, label+"_n")
 	m := make(map[string]any, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		m[fmt.Sprintf("p%d", i)] = rapid.String().Draw(t, fmt.Sprintf("%s_v%d", label, i))
 	}
 	return m
@@ -185,7 +185,7 @@ func genValidBusinessConfig(t *rapid.T) BusinessConfig {
 	nUp := rapid.IntRange(0, 3).Draw(t, "nUpstreams")
 	bc.Upstreams = make([]UpstreamEntry, 0, nUp)
 	upstreamIDs := make([]string, 0, nUp)
-	for i := 0; i < nUp; i++ {
+	for i := range nUp {
 		upID := fmt.Sprintf("upstream-%d-%s", i, genNonEmptyToken(t, fmt.Sprintf("upID%d", i)))
 		upstreamIDs = append(upstreamIDs, upID)
 		var credential string
@@ -208,18 +208,18 @@ func genValidBusinessConfig(t *rapid.T) BusinessConfig {
 	}
 	nAlias := rapid.IntRange(0, 4).Draw(t, "nAlias")
 	bc.AliasRules = make([]domain.AliasRule, 0, nAlias)
-	for i := 0; i < nAlias; i++ {
+	for i := range nAlias {
 		bc.AliasRules = append(bc.AliasRules, genValidAliasRule(t, upstreamIDs, fmt.Sprintf("alias%d", i)))
 	}
 	nMCPFilter := rapid.IntRange(0, 4).Draw(t, "nMCPFilter")
 	bc.MCPFilterRules = make([]domain.FilterRule, 0, nMCPFilter)
-	for i := 0; i < nMCPFilter; i++ {
+	for i := range nMCPFilter {
 		bc.MCPFilterRules = append(bc.MCPFilterRules, genValidFilterRule(t, upstreamIDs, fmt.Sprintf("mcpFilter%d", i)))
 	}
 
 	nKey := rapid.IntRange(0, 3).Draw(t, "nKeys")
 	bc.APIKeys = make([]APIKeyEntry, 0, nKey)
-	for i := 0; i < nKey; i++ {
+	for i := range nKey {
 		entry := APIKeyEntry{
 			Meta: store.APIKey{
 				ID:        fmt.Sprintf("key-%d-%s", i, genNonEmptyToken(t, fmt.Sprintf("keyID%d", i))),
@@ -232,12 +232,12 @@ func genValidBusinessConfig(t *rapid.T) BusinessConfig {
 			},
 		}
 		nFilter := rapid.IntRange(0, 2).Draw(t, fmt.Sprintf("nKeyFilter%d", i))
-		for j := 0; j < nFilter; j++ {
+		for j := range nFilter {
 			entry.FilterRules = append(entry.FilterRules,
 				genValidFilterRule(t, nil, fmt.Sprintf("keyFilter%d_%d", i, j)))
 		}
 		nACL := rapid.IntRange(0, 3).Draw(t, fmt.Sprintf("nACL%d", i))
-		for j := 0; j < nACL; j++ {
+		for j := range nACL {
 			entry.ACLCIDRs = append(entry.ACLCIDRs,
 				rapid.SampledFrom(validCIDRs).Draw(t, fmt.Sprintf("acl%d_%d", i, j)))
 		}

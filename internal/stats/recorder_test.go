@@ -46,7 +46,8 @@ func (b *fakeBuffer) Push(_ context.Context, items ...string) error {
 	return nil
 }
 
-func (b *fakeBuffer) PopBatch(_ context.Context, max int) ([]string, error) {
+// 参数命名避开内置 max，否则同作用域内无法再调用该内置函数。
+func (b *fakeBuffer) PopBatch(_ context.Context, limit int) ([]string, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.popCount++
@@ -56,10 +57,7 @@ func (b *fakeBuffer) PopBatch(_ context.Context, max int) ([]string, error) {
 	if len(b.items) == 0 {
 		return nil, nil
 	}
-	n := max
-	if n > len(b.items) {
-		n = len(b.items)
-	}
+	n := min(limit, len(b.items))
 	// RPOP 自尾部取出 n 个。
 	out := make([]string, 0, n)
 	for i := 0; i < n; i++ {
@@ -74,6 +72,20 @@ func (b *fakeBuffer) remaining() int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return len(b.items)
+}
+
+// pushCalls / popCalls 供断言读取调用计数。worker 在后台 goroutine 里持锁自增这两个
+// 计数，断言侧必须同样持锁读取，否则构成数据竞争（-race 下会失败）。
+func (b *fakeBuffer) pushCalls() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.pushCnt
+}
+
+func (b *fakeBuffer) popCalls() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.popCount
 }
 
 // fakeWriter 是 StatWriter 的内存实现：累计落库记录；可注入写入失败与阻塞。
@@ -119,6 +131,13 @@ func (w *fakeWriter) panics() int {
 	return w.panicCnt
 }
 
+// insertCalls 供断言读取 Insert 调用次数；与 panics 同理必须持锁读。
+func (w *fakeWriter) insertCalls() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.calls
+}
+
 // sampleRecord 构造一条测试用调用统计记录。
 func sampleRecord(original string) store.CallStatRecord {
 	return store.CallStatRecord{
@@ -159,7 +178,7 @@ func TestRecordAsyncDoesNotBlockWhenWriterBlocks(t *testing.T) {
 	// 连续非阻塞提交：即便 worker 卡在 Insert，提交也应在很短时间内全部返回。
 	done := make(chan struct{})
 	go func() {
-		for i := 0; i < 8; i++ {
+		for range 8 {
 			r.RecordAsync(context.Background(), sampleRecord("t"))
 		}
 		close(done)
@@ -182,7 +201,7 @@ func TestRecordAsyncDropsWhenQueueFull(t *testing.T) {
 	// 提交远超容量的记录；多余的应被静默丢弃且不阻塞。
 	done := make(chan struct{})
 	go func() {
-		for i := 0; i < 100; i++ {
+		for range 100 {
 			r.RecordAsync(context.Background(), sampleRecord("t"))
 		}
 		close(done)
@@ -208,13 +227,13 @@ func TestWorkerFlushesThroughBufferToDB(t *testing.T) {
 	defer r.Stop()
 
 	const n = 7
-	for i := 0; i < n; i++ {
+	for range n {
 		r.RecordAsync(context.Background(), sampleRecord("tool"))
 	}
 
 	waitFor(t, 2*time.Second, func() bool { return writer.count() == n })
 
-	if buffer.pushCnt == 0 {
+	if buffer.pushCalls() == 0 {
 		t.Error("应至少经过一次 LPUSH 缓冲（Req 16.8）")
 	}
 	if buffer.remaining() != 0 {
@@ -229,7 +248,7 @@ func TestWorkerDirectWriteWithoutBuffer(t *testing.T) {
 	r.Start(context.Background())
 	defer r.Stop()
 
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		r.RecordAsync(context.Background(), sampleRecord("tool"))
 	}
 	waitFor(t, 2*time.Second, func() bool { return writer.count() == 5 })
@@ -243,12 +262,12 @@ func TestInsertFailureSilentlyDropped(t *testing.T) {
 	r.Start(context.Background())
 	defer r.Stop()
 
-	for i := 0; i < 4; i++ {
+	for range 4 {
 		r.RecordAsync(context.Background(), sampleRecord("tool"))
 	}
 
 	// 等待 worker 至少尝试落库若干次；落库恒失败，记录被丢弃，count 始终为 0。
-	waitFor(t, 2*time.Second, func() bool { return writer.calls > 0 })
+	waitFor(t, 2*time.Second, func() bool { return writer.insertCalls() > 0 })
 	if writer.count() != 0 {
 		t.Errorf("落库失败的记录不应被计入，got=%d", writer.count())
 	}
@@ -264,10 +283,10 @@ func TestPushFailureSilentlyDropped(t *testing.T) {
 	r.Start(context.Background())
 	defer r.Stop()
 
-	for i := 0; i < 4; i++ {
+	for range 4 {
 		r.RecordAsync(context.Background(), sampleRecord("tool"))
 	}
-	waitFor(t, 2*time.Second, func() bool { return buffer.pushCnt > 0 })
+	waitFor(t, 2*time.Second, func() bool { return buffer.pushCalls() > 0 })
 	// Push 恒失败：记录未进入缓冲，亦无从落库。
 	time.Sleep(50 * time.Millisecond)
 	if writer.count() != 0 {
@@ -283,10 +302,10 @@ func TestPopFailureSilentlyDropped(t *testing.T) {
 	r.Start(context.Background())
 	defer r.Stop()
 
-	for i := 0; i < 4; i++ {
+	for range 4 {
 		r.RecordAsync(context.Background(), sampleRecord("tool"))
 	}
-	waitFor(t, 2*time.Second, func() bool { return buffer.popCount > 0 })
+	waitFor(t, 2*time.Second, func() bool { return buffer.popCalls() > 0 })
 	if writer.count() != 0 {
 		t.Errorf("RPOP 失败时不应有记录落库，got=%d", writer.count())
 	}
@@ -301,7 +320,7 @@ func TestStopDrainsRemainingRecords(t *testing.T) {
 	r.Start(context.Background())
 
 	const n = 5
-	for i := 0; i < n; i++ {
+	for range n {
 		r.RecordAsync(context.Background(), sampleRecord("tool"))
 	}
 	r.Stop() // 触发收尾落库并等待 worker 退出

@@ -111,8 +111,7 @@ func refreshFailure(ctx context.Context, cause error) error {
 	case errors.Is(cause, context.DeadlineExceeded) || (ctx != nil && errors.Is(ctx.Err(), context.DeadlineExceeded)):
 		code = domain.CodeUpstreamTimeout
 	default:
-		var apiErr *domain.APIError
-		if errors.As(cause, &apiErr) {
+		if apiErr, ok := errors.AsType[*domain.APIError](cause); ok {
 			code = apiErr.Code
 		}
 	}

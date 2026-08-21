@@ -118,10 +118,7 @@ func TestProperty15SucceedResetsFailureCount(t *testing.T) {
 		}
 
 		// 状态依据归一化阈值判定：归一化后阈值 == 1 时单次失败即 suspended，否则 unavailable。
-		effThreshold := nextThreshold
-		if effThreshold < 1 {
-			effThreshold = 1
-		}
+		effThreshold := max(nextThreshold, 1)
 		wantState := domain.ConnUnavailable
 		if effThreshold == 1 {
 			wantState = domain.ConnSuspended

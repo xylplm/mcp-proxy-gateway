@@ -767,7 +767,7 @@ func (s *Store) nextAvailableVersionUnlocked(id, current string) (string, error)
 	if n < 1 {
 		n = 0
 	}
-	for i := 0; i < MaxVersions+10000; i++ {
+	for range MaxVersions + 10000 {
 		n++
 		candidate := fmt.Sprintf("v%d", n)
 		if _, err := os.Stat(s.versionDir(id, candidate)); os.IsNotExist(err) {

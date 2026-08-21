@@ -2,9 +2,9 @@ package store
 
 import (
 	"context"
-	"crypto/rand"
 	"errors"
-	"fmt"
+	"strings"
+	"uuid"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
@@ -80,17 +80,23 @@ func (r *Repositories) WithTransaction(ctx context.Context, fn func(*Repositorie
 	})
 }
 
-// newUUID 生成一个版本 4 的随机 UUID 字符串。
+// newUUID 生成一条新记录的主键。
 //
 // 主键由应用侧生成，便于在持久化前即获得标识并返回给调用方，避免依赖数据库默认值。
+//
+// 用版本 7 而非版本 4：v7 的高 48 位是毫秒时间戳，生成的标识整体按时间递增，写入
+// PostgreSQL 主键索引时接近顺序追加而非随机散布，可减少 B-tree 页分裂与写放大。
+//
+// 本函数的调用方都是管理动作驱动的低频配置表（上游、别名与屏蔽规则、工具策略、
+// API Key 及其白名单、安全封禁），行数量级不大，索引收益有限；换用标准库实现的主要
+// 目的是去掉自制的位操作与格式校验。高写入量的 call_stat 系列与 audit_log 走的是
+// 复合主键与 bigserial，不经此处。
+//
+// 代价是标识本身透露了记录的创建时间。这些标识只在管理端可见（对外 MCP 只输出工具的
+// name/description/inputSchema，不带任何主键），且创建时间本就是管理台展示的字段，
+// 不构成新的信息暴露；API Key 的明文另由 crypto/rand 生成，与此处无关。
 func newUUID() string {
-	var b [16]byte
-	// crypto/rand.Read 在常规平台上不会失败；即便失败也只会得到全零字节，
-	// 仍是合法的 UUID 值，不影响主键唯一性以外的正确性。
-	_, _ = rand.Read(b[:])
-	b[6] = (b[6] & 0x0f) | 0x40 // 版本号 4
-	b[8] = (b[8] & 0x3f) | 0x80 // variant 10xx
-	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+	return uuid.NewV7().String()
 }
 
 // parseUUID 校验 UUID 字符串；空串视为 SQL NULL 场景，原样返回空串。
@@ -117,27 +123,15 @@ func nullableUUID(s string) (*string, error) {
 	return &uid, nil
 }
 
+// isUUID 判定字符串是否为标准 36 字符形式的 UUID（大小写不敏感）。
+//
+// 标准库 uuid.Parse 另外接受 "{...}" 与 "urn:uuid:..." 两种带修饰的写法，比这里需要的
+// 宽松：它们解析出的标识与裸写法完全相同，一旦放行，同一条记录就会存在多种字符串表示，
+// 从而绕过按字符串做的去重与等值判断（例如 uniqueValidUUIDs 的按串去重）。因此在解析
+// 成功之外，额外要求输入本身就是规范形式。
 func isUUID(s string) bool {
-	if len(s) != 36 {
-		return false
-	}
-	for i, ch := range s {
-		switch i {
-		case 8, 13, 18, 23:
-			if ch != '-' {
-				return false
-			}
-		default:
-			if !isHex(ch) {
-				return false
-			}
-		}
-	}
-	return true
-}
-
-func isHex(ch rune) bool {
-	return ch >= '0' && ch <= '9' || ch >= 'a' && ch <= 'f' || ch >= 'A' && ch <= 'F'
+	id, err := uuid.Parse(s)
+	return err == nil && id.String() == strings.ToLower(s)
 }
 
 // classifyWrite 将写操作（INSERT/UPDATE）的驱动错误映射为统一领域错误。
@@ -154,8 +148,7 @@ func classifyWrite(err error, conflictMsg, notFoundMsg string) error {
 	if errors.Is(err, gorm.ErrForeignKeyViolated) {
 		return domain.NewError(domain.CodeNotFound, notFoundMsg)
 	}
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) {
+	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok {
 		switch pgErr.Code {
 		case pgUniqueViolation:
 			return domain.NewError(domain.CodeConflict, conflictMsg)

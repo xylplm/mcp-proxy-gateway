@@ -86,7 +86,7 @@ func (h panicEndpointHandler) CallTool(context.Context, string, json.RawMessage)
 type fakeConnector struct {
 	mu sync.Mutex
 
-	serveCalls   int32
+	serveCalls   atomic.Int32
 	lastEndpoint string
 	lastHandler  EndpointHandler
 
@@ -106,7 +106,7 @@ func newFakeConnector() *fakeConnector {
 }
 
 func (f *fakeConnector) Serve(ctx context.Context, endpoint string, handler EndpointHandler) error {
-	atomic.AddInt32(&f.serveCalls, 1)
+	f.serveCalls.Add(1)
 	f.mu.Lock()
 	f.lastEndpoint = endpoint
 	f.lastHandler = handler
@@ -318,8 +318,8 @@ func TestStartConnectsWhenEnabled(t *testing.T) {
 	if fc.lastEndpoint != "ws://endpoint.example/mcp" {
 		t.Fatalf("Serve 收到的 endpoint 不正确：%q", fc.lastEndpoint)
 	}
-	if atomic.LoadInt32(&fc.serveCalls) != 1 {
-		t.Fatalf("期望 Serve 被调用 1 次，实际 %d", atomic.LoadInt32(&fc.serveCalls))
+	if fc.serveCalls.Load() != 1 {
+		t.Fatalf("期望 Serve 被调用 1 次，实际 %d", fc.serveCalls.Load())
 	}
 }
 
@@ -340,8 +340,8 @@ func TestStartNoConnectWhenDisabled(t *testing.T) {
 	if c.Running() {
 		t.Fatal("未启用时不应运行连接循环")
 	}
-	if atomic.LoadInt32(&fc.serveCalls) != 0 {
-		t.Fatalf("未启用时不应建立连接，Serve 调用次数=%d", atomic.LoadInt32(&fc.serveCalls))
+	if fc.serveCalls.Load() != 0 {
+		t.Fatalf("未启用时不应建立连接，Serve 调用次数=%d", fc.serveCalls.Load())
 	}
 }
 
@@ -376,10 +376,10 @@ func TestStopClosesConnectionAndStopsReconnect(t *testing.T) {
 	}
 
 	// 记录此刻调用次数，确认停用后不再发起新的重连。
-	callsAfterStop := atomic.LoadInt32(&fc.serveCalls)
+	callsAfterStop := fc.serveCalls.Load()
 	time.Sleep(100 * time.Millisecond)
-	if atomic.LoadInt32(&fc.serveCalls) != callsAfterStop {
-		t.Fatalf("Stop 后不应再重连，Serve 调用次数从 %d 变为 %d", callsAfterStop, atomic.LoadInt32(&fc.serveCalls))
+	if fc.serveCalls.Load() != callsAfterStop {
+		t.Fatalf("Stop 后不应再重连，Serve 调用次数从 %d 变为 %d", callsAfterStop, fc.serveCalls.Load())
 	}
 }
 
@@ -435,7 +435,7 @@ func TestReconnectStopsWhenNoReconnect(t *testing.T) {
 	}
 
 	// noReconnect 下应仅尝试连接一次。
-	if got := atomic.LoadInt32(&fc.serveCalls); got != 1 {
+	if got := fc.serveCalls.Load(); got != 1 {
 		t.Fatalf("noReconnect 下应仅连接 1 次，实际 %d", got)
 	}
 }

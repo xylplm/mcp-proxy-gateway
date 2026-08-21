@@ -1,6 +1,7 @@
 package syslog
 
 import (
+	"maps"
 	"strings"
 	"sync"
 	"time"
@@ -147,9 +148,7 @@ func cloneEntry(entry Entry) Entry {
 		return entry
 	}
 	attrs := make(map[string]any, len(entry.Attrs))
-	for k, v := range entry.Attrs {
-		attrs[k] = v
-	}
+	maps.Copy(attrs, entry.Attrs)
 	entry.Attrs = attrs
 	return entry
 }

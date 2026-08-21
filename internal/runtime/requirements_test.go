@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -47,12 +48,7 @@ func TestKnownToolsExposeInferenceMetadata(t *testing.T) {
 }
 
 func containsString(items []string, want string) bool {
-	for _, item := range items {
-		if item == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(items, want)
 }
 
 func TestResolveEffectiveToolsManualAndAuto(t *testing.T) {

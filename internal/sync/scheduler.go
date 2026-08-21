@@ -76,16 +76,16 @@ func NewScheduler() *Scheduler {
 
 type slogCronLogger struct{}
 
-func (slogCronLogger) Info(msg string, keysAndValues ...interface{}) {
+func (slogCronLogger) Info(msg string, keysAndValues ...any) {
 	slog.Default().Info("cron "+msg, normalizeCronLogAttrs(keysAndValues...)...)
 }
 
-func (slogCronLogger) Error(err error, msg string, keysAndValues ...interface{}) {
+func (slogCronLogger) Error(err error, msg string, keysAndValues ...any) {
 	attrs := append([]any{"error", err}, normalizeCronLogAttrs(keysAndValues...)...)
 	slog.Default().Error("cron "+msg, attrs...)
 }
 
-func normalizeCronLogAttrs(keysAndValues ...interface{}) []any {
+func normalizeCronLogAttrs(keysAndValues ...any) []any {
 	out := make([]any, 0, len(keysAndValues))
 	for i := 0; i < len(keysAndValues); i += 2 {
 		key, ok := keysAndValues[i].(string)

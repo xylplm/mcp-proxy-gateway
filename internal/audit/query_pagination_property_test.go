@@ -18,7 +18,7 @@ func genAuditRows() *rapid.Generator[[]store.AuditRecord] {
 		n := rapid.IntRange(0, 60).Draw(t, "记录数")
 		rows := make([]store.AuditRecord, 0, n)
 		cur := fixedNow
-		for i := 0; i < n; i++ {
+		for i := range n {
 			// 增量为 0 时与上一条同刻，>0 时严格更晚。
 			deltaSec := rapid.IntRange(0, 120).Draw(t, "时间增量秒")
 			cur = cur.Add(time.Duration(deltaSec) * time.Second)

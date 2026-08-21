@@ -101,10 +101,7 @@ func (r *testAuditRepo) List(_ context.Context, page, pageSize int, query Query)
 	if offset >= len(sorted) {
 		return []store.AuditRecord{}, nil
 	}
-	end := offset + pageSize
-	if end > len(sorted) {
-		end = len(sorted)
-	}
+	end := min(offset+pageSize, len(sorted))
 	return append([]store.AuditRecord{}, sorted[offset:end]...), nil
 }
 

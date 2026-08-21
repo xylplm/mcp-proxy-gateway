@@ -268,7 +268,7 @@ exit 0`
 
 func TestDepLogsRingBuffer(t *testing.T) {
 	dm := NewDependencyManager(t.TempDir(), nil)
-	for i := 0; i < maxDepLogs+50; i++ {
+	for range maxDepLogs + 50 {
 		dm.addLog(DepLogEntry{Kind: DepKindNpm, Level: DepLogInfo, Message: "e"})
 	}
 	if len(dm.Logs()) != maxDepLogs {
@@ -282,7 +282,7 @@ func TestBoundedBufferEnforcesLimit(t *testing.T) {
 	const limit = 64
 	bb := newBoundedBuffer(limit)
 	// 写入远超上限的行。
-	for i := 0; i < 1000; i++ {
+	for range 1000 {
 		bb.appendLine("0123456789") // 11 bytes/line（含 \n）
 	}
 	if bb.n > limit {
@@ -302,7 +302,7 @@ func TestBoundedBufferExactLimit(t *testing.T) {
 	t.Parallel()
 	const limit = 30 // 3 lines of "a\n" = 2 bytes each
 	bb := newBoundedBuffer(limit)
-	for i := 0; i < 15; i++ {
+	for range 15 {
 		bb.appendLine("a") // 2 bytes each
 	}
 	// 前 15 行 = 30 bytes 恰好填满。
@@ -329,7 +329,7 @@ func TestDepLogsSnapshotCopied(t *testing.T) {
 func TestDependencyLogsStayCappedWhileAppendingManyLines(t *testing.T) {
 	t.Parallel()
 	dm := NewDependencyManager(t.TempDir(), nil)
-	for i := 0; i < maxDepLogs*5+7; i++ {
+	for i := range maxDepLogs*5 + 7 {
 		dm.addLog(DepLogEntry{Kind: DepKindNpm, Level: DepLogInfo, Message: fmt.Sprintf("line-%d", i)})
 	}
 	logs := dm.Logs()

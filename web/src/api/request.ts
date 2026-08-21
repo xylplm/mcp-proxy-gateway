@@ -116,14 +116,22 @@ request.interceptors.response.use(
       new ApiError(body.message || '请求失败', body.code, response.status, extractFields(body.data)),
     )
   },
-  (error: unknown) => {
+  async (error: unknown) => {
     if (axios.isAxiosError(error)) {
       const status = error.response?.status
-      const body = error.response?.data as Envelope | undefined
+      let body = error.response?.data as Envelope | undefined
 
       if (status === 401) {
-        // 鉴权失败/令牌失效：清除本地会话并重定向到登录页
+        // 鉴权失败/令牌失效：清除本地会话并重定向到登录页。
+        // 该判断只依赖状态码，故放在解析响应体之前。
         redirectToLogin()
+      }
+
+      // responseType 为 blob 的请求（如诊断导出）失败时，响应体同样是 Blob 而非解析后的
+      // 信封，直接取 message 会得到 undefined、把后端中文提示丢成 axios 的英文兜底文案。
+      // 这里先把 Blob 读成文本再按信封解析。
+      if (body instanceof Blob) {
+        body = await parseEnvelopeFromBlob(body)
       }
 
       const message =
@@ -134,6 +142,16 @@ request.interceptors.response.use(
     return Promise.reject(error)
   },
 )
+
+/** 把 blob 形式的错误响应体解析为统一信封；非 JSON 或结构不符时返回 undefined。 */
+async function parseEnvelopeFromBlob(blob: Blob): Promise<Envelope | undefined> {
+  try {
+    const parsed = JSON.parse(await blob.text()) as Envelope
+    return typeof parsed?.code === 'number' ? parsed : undefined
+  } catch {
+    return undefined
+  }
+}
 
 /**
  * 泛型请求：直接返回业务数据 T（已由响应拦截器解包信封）。

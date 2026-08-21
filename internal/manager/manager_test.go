@@ -1228,12 +1228,12 @@ func TestWaitForAvailableCoalescesConcurrentDemandReconnect(t *testing.T) {
 
 	const waiters = 32
 	results := make(chan error, waiters)
-	for i := 0; i < waiters; i++ {
+	for range waiters {
 		go func() {
 			results <- m.WaitForAvailable(context.Background(), "up-demand-singleflight")
 		}()
 	}
-	for i := 0; i < waiters; i++ {
+	for range waiters {
 		if err := <-results; err != nil {
 			t.Fatalf("并发等待自动恢复不应失败：%v", err)
 		}

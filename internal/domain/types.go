@@ -112,7 +112,7 @@ type ToolSourceView struct {
 	TemporarilyDegraded bool               `json:"temporarilyDegraded,omitempty"`
 	DegradationReason   string             `json:"degradationReason,omitempty"`
 	DegradationUntil    *time.Time         `json:"degradationUntil,omitempty"`
-	RateLimits          UpstreamRateLimits `json:"rateLimits,omitempty"`
+	RateLimits          UpstreamRateLimits `json:"rateLimits"`
 }
 
 // ToolDetail 是管理台工具列表的只读详情视图。
@@ -142,7 +142,7 @@ type UpstreamConfig struct {
 	// AutoSync 表示是否对该上游开启工具列表自动同步。
 	AutoSync bool `json:"autoSync"`
 	// RateLimits 为该上游的调用频率与周期额度限制；未启用时不参与调用路由判定。
-	RateLimits UpstreamRateLimits `json:"rateLimits,omitempty"`
+	RateLimits UpstreamRateLimits `json:"rateLimits"`
 }
 
 // UpstreamTestResult 表示对一份未持久化上游配置做临时连通性测试的结果。

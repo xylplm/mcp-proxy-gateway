@@ -27,7 +27,7 @@ func newQueryService(t *testing.T, repo *testAuditRepo, pageSizeDefault int) *Se
 // 因此倒序排列后最新（OccurredAt 最大、ID 最大）者在前。返回写入后各记录的发生时间切片。
 func seedRecords(repo *testAuditRepo, n int) []time.Time {
 	times := make([]time.Time, 0, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		at := fixedNow.Add(time.Duration(i) * time.Minute)
 		repo.rows = append(repo.rows, store.AuditRecord{
 			ID:         int64(i + 1),

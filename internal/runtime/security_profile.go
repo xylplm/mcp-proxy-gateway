@@ -3,6 +3,7 @@ package runtime
 import (
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -319,8 +320,7 @@ func ValidateSecurityProfile(raw any) (SecurityProfile, error) {
 		return SecurityProfile{}, fmt.Errorf("包白名单最多 128 项")
 	}
 	for _, pkg := range p.PackageAllowlist {
-		if strings.HasSuffix(pkg, "/*") {
-			base := strings.TrimSuffix(pkg, "/*")
+		if base, ok := strings.CutSuffix(pkg, "/*"); ok {
 			if base == "" || strings.Contains(base, "://") || strings.ContainsAny(base, " \t") {
 				return SecurityProfile{}, fmt.Errorf("非法包白名单项 %q", pkg)
 			}
@@ -822,10 +822,5 @@ func riskLevelFor(mode StdioSecurityMode, eff EffectiveSecurity) string {
 
 func containsName(list []string, name string) bool {
 	name = strings.ToLower(name)
-	for _, x := range list {
-		if x == name {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(list, name)
 }

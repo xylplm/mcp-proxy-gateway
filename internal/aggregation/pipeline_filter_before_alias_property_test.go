@@ -116,7 +116,7 @@ func p7GenBundles() *rapid.Generator[[]upstreamBundle] {
 	return rapid.Custom(func(t *rapid.T) []upstreamBundle {
 		n := rapid.IntRange(1, 3).Draw(t, "numUpstreams")
 		bundles := make([]upstreamBundle, n)
-		for i := 0; i < n; i++ {
+		for i := range n {
 			bundles[i] = upstreamBundle{
 				upstreamID: fmt.Sprintf("u%d", i),
 				sortOrder:  rapid.IntRange(0, 5).Draw(t, fmt.Sprintf("sortOrder_%d", i)),

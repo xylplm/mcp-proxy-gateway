@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -386,6 +387,10 @@ type Router struct {
 	scripts ScriptService
 	// scriptRefMu 串行化脚本删除与可能写入 scriptRef 的低频管理操作，避免悬空引用。
 	scriptRefMu sync.Mutex
+	// goroutineLeakInFlight 保证同一时刻只有一次协程泄漏采集在进行。采集会抢占
+	// runtime/pprof 的包级锁并触发一轮垃圾回收，重复请求若排队进入会各自再触发一轮，
+	// 故以「拒绝」而非「排队」应对并发。
+	goroutineLeakInFlight atomic.Bool
 }
 
 // RuntimeEnvironmentService 为管理台「运行环境」页的窄接口。

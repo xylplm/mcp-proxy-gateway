@@ -166,9 +166,7 @@ func (s *PeriodicSyncer) runUpstreams(ctx context.Context, predicate func(domain
 		if !predicate(up) {
 			continue
 		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			defer func() {
 				if recovered := recover(); recovered != nil {
 					safego.LogRecovered(s.logger, "上游同步 worker panic 已恢复", recovered, "upstreamID", up.ID)
@@ -176,7 +174,7 @@ func (s *PeriodicSyncer) runUpstreams(ctx context.Context, predicate func(domain
 			}()
 			// action 内部已记录成功/跳过/失败事件，错误无需在此再处理。
 			_, _ = action(ctx, up.ID)
-		}()
+		})
 	}
 	wg.Wait()
 }

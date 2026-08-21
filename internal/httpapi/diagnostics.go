@@ -2,7 +2,10 @@ package httpapi
 
 import (
 	"context"
+	"net/http"
 	"runtime"
+	"runtime/pprof"
+	"strconv"
 	"strings"
 	"time"
 
@@ -24,8 +27,8 @@ type diagnosticsBundle struct {
 	FormatVersion        string                    `json:"formatVersion"`
 	GeneratedAt          time.Time                 `json:"generatedAt"`
 	Runtime              diagnosticsRuntime        `json:"runtime"`
-	Settings             diagnosticsSettings       `json:"settings,omitempty"`
-	RuntimeServer        config.ServerConfig       `json:"runtimeServer,omitempty"`
+	Settings             diagnosticsSettings       `json:"settings"`
+	RuntimeServer        config.ServerConfig       `json:"runtimeServer"`
 	Upstreams            []diagnosticsUpstream     `json:"upstreams,omitempty"`
 	ToolSummaries        []upstreamToolSummary     `json:"toolSummaries,omitempty"`
 	SecuritySummary      *store.SecuritySummary    `json:"securitySummary,omitempty"`
@@ -94,8 +97,98 @@ type diagnosticsCollectError struct {
 	Message string `json:"message"`
 }
 
+// goroutineLeakProfileName 是 Go 1.27 起随 runtime/pprof 一并提供的 goroutine 泄漏 profile 名。
+const goroutineLeakProfileName = "goroutineleak"
+
+// 协程泄漏 profile 支持的输出级别。
+//
+// 只开放这两级，是因为 runtime/pprof 在 debug >= 2 时会跳过泄漏过滤、退化为全量协程转储
+// （等价于普通 goroutine profile）——那与本端点的语义不符，会让正常运行的常驻 worker 被
+// 当成泄漏，故不予放行。需要全量协程栈是另一件事，不该由这个端点承担。
+const (
+	// goroutineLeakDebugBinary 输出 protobuf 二进制，供 go tool pprof 离线分析。
+	goroutineLeakDebugBinary = 0
+	// goroutineLeakDebugText 输出可直接阅读的文本，含泄漏计数头部与各泄漏协程的调用栈。
+	goroutineLeakDebugText = 1
+)
+
 func (r *Router) registerDiagnosticsRoutes(g *gin.RouterGroup) {
 	g.GET("/diagnostics/export", r.exportDiagnostics)
+	g.GET("/diagnostics/goroutine-leaks", r.exportGoroutineLeaks)
+}
+
+// exportGoroutineLeaks 导出 goroutine 泄漏 profile。
+//
+// 「泄漏」在此有严格含义：goroutine 阻塞在某个并发原语（channel、Mutex、Cond 等）上，
+// 而该原语已无法被任何可运行的 goroutine 触达，因此永远不可能被唤醒。运行时借垃圾回收
+// 的可达性分析判定，故覆盖不到经全局变量可达的原语——检出即确为泄漏，未检出不代表没有。
+//
+// 本网关有多类长生命周期 goroutine（上游连接重连循环、统计与审计落库 worker、周期同步
+// 调度、小智接入连接），正是这个 profile 的适用场景。
+//
+// 该端点仅注册在管理员 JWT 之下，不进对外 MCP 路由：输出含全部相关 goroutine 的调用栈，
+// 属内部实现细节，不应对外暴露。
+//
+// 采集会抢占 runtime/pprof 的包级锁并触发一轮垃圾回收，属较重操作：仅供排查时手动调用，
+// 不宜作为轮询监控项，且同一时刻只允许一次（并发请求直接以 429 拒绝，而非排队各自再触发
+// 一轮 GC）。
+func (r *Router) exportGoroutineLeaks(c *gin.Context) {
+	profile := pprof.Lookup(goroutineLeakProfileName)
+	if profile == nil {
+		respondError(c, domain.NewError(domain.CodeInternal, "当前 Go 运行时未提供协程泄漏 profile"))
+		return
+	}
+
+	debug, ok := parseGoroutineLeakDebugLevel(c.Query("debug"))
+	if !ok {
+		respondError(c, domain.NewValidationError("导出参数非法", map[string]string{
+			"debug": "只能为 0（pprof 二进制格式）或 1（文本格式）",
+		}))
+		return
+	}
+
+	if !r.goroutineLeakInFlight.CompareAndSwap(false, true) {
+		respondError(c, domain.NewError(domain.CodeRateLimited, "已有一次协程泄漏采集在进行，请稍后重试"))
+		return
+	}
+	defer r.goroutineLeakInFlight.Store(false)
+
+	binary := debug == goroutineLeakDebugBinary
+	contentType := "text/plain; charset=utf-8"
+	if binary {
+		contentType = "application/octet-stream"
+		filename := "mpg-goroutine-leaks-" + time.Now().Format("20060102-150405") + ".pprof"
+		c.Header("Content-Disposition", `attachment; filename="`+filename+`"`)
+	}
+	c.Header("Content-Type", contentType)
+	c.Header("Cache-Control", "no-store")
+	c.Header("X-Content-Type-Options", "nosniff")
+	c.Status(http.StatusOK)
+
+	if err := profile.WriteTo(c.Writer, debug); err != nil {
+		// 响应头已发出，无法再改回错误状态码。文本格式下把原因追加到末尾便于当场看到；
+		// 二进制格式下不能追加——中文尾巴会让 go tool pprof 报出与真实原因无关的解析错误，
+		// 截断的响应体本身就是失败信号。两种情况都记入系统日志以便事后归因。
+		if !binary {
+			_, _ = c.Writer.WriteString("\n采集协程泄漏 profile 失败：" + err.Error() + "\n")
+		}
+		_ = c.Error(err)
+	}
+}
+
+// parseGoroutineLeakDebugLevel 解析输出级别；空值默认文本格式。
+//
+// 只接受 0 与 1，原因见 goroutineLeakDebugText 的说明。
+func parseGoroutineLeakDebugLevel(raw string) (int, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return goroutineLeakDebugText, true
+	}
+	level, err := strconv.Atoi(raw)
+	if err != nil || (level != goroutineLeakDebugBinary && level != goroutineLeakDebugText) {
+		return 0, false
+	}
+	return level, true
 }
 
 func (r *Router) exportDiagnostics(c *gin.Context) {

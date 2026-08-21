@@ -181,7 +181,7 @@ func TestProperty10InvokeUnknownToolRejected(t *testing.T) {
 		aliasesByUp := make(map[string][]domain.AliasRule, n)
 		mcpFiltersByUp := make(map[string][]domain.FilterRule, n)
 
-		for i := 0; i < n; i++ {
+		for i := range n {
 			id := fmt.Sprintf("u%d", i)
 			cacheTools[id] = rapid.SliceOfN(p10GenTool(), 0, 4).Draw(t, fmt.Sprintf("tools_%d", i))
 			ups = append(ups, domain.Upstream{

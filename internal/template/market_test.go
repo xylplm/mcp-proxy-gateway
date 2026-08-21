@@ -2,6 +2,7 @@ package template
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -250,10 +251,8 @@ func TestBuiltinTemplateMetadataTags(t *testing.T) {
 
 func assertTemplateMetaContains[T comparable](t *testing.T, values []T, want T) {
 	t.Helper()
-	for _, value := range values {
-		if value == want {
-			return
-		}
+	if slices.Contains(values, want) {
+		return
 	}
 	t.Fatalf("标签列表 %v 未包含 %v", values, want)
 }

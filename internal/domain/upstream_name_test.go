@@ -41,7 +41,7 @@ func TestSuggestCopyNameAlwaysUnique(t *testing.T) {
 	t.Parallel()
 
 	existing := []string{"服务 副本"}
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		name := SuggestCopyName("服务", existing)
 		for _, item := range existing {
 			if strings.EqualFold(strings.TrimSpace(item), strings.TrimSpace(name)) {

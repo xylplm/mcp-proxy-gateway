@@ -239,10 +239,7 @@ func (c *Connection) clearScheduledRetry() {
 // suspended，调用方都会使用该方法，因此 suspended 是降频状态而非永久停止状态。
 func (c *Connection) waitBackoff(ctx context.Context, policy RetryPolicy) bool {
 	state, _, failures := c.snapshot()
-	attempt := failures - 1
-	if attempt < 0 {
-		attempt = 0
-	}
+	attempt := max(failures-1, 0)
 	delay := ComputeBackoff(attempt, policy.InitialBackoff, policy.MaxBackoff, policy.Multiplier)
 	// suspended 代表已经告警的长期故障：立即降为最大间隔的持续探测，而不是继续
 	// 在指数曲线中高频拨号；真实调用仍可受冷却保护地提前唤醒一次。
@@ -385,9 +382,7 @@ func (m *Manager) startLoop(c *Connection) {
 	c.publishLocked()
 	c.mu.Unlock()
 
-	m.loopWG.Add(1)
-	go func() {
-		defer m.loopWG.Done()
+	m.loopWG.Go(func() {
 		defer close(done)
 		defer func() {
 			c.mu.Lock()
@@ -406,7 +401,7 @@ func (m *Manager) startLoop(c *Connection) {
 			}
 		}()
 		m.runLoop(ctx, c)
-	}()
+	})
 }
 
 func (m *Manager) stopLoop(c *Connection) {

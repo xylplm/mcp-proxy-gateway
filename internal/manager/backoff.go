@@ -97,7 +97,7 @@ func ComputeBackoff(attempt int, initial, max time.Duration, multiplier int) tim
 	}
 
 	mult := time.Duration(multiplier)
-	for i := 0; i < attempt; i++ {
+	for range attempt {
 		// 若再乘以 multiplier 会达到或超过上限（或可能溢出），直接钳到上限。
 		// backoff <= max/mult（整数下取整）可保证 backoff*mult <= max，既防溢出又防越界。
 		if backoff > max/mult {

@@ -117,7 +117,7 @@ func p2GenBundles() *rapid.Generator[[]upstreamBundle] {
 		}
 
 		bundles := make([]upstreamBundle, n)
-		for i := 0; i < n; i++ {
+		for i := range n {
 			bundles[i] = upstreamBundle{
 				upstreamID: fmt.Sprintf("u%d", i),
 				sortOrder:  order[i],

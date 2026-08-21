@@ -46,18 +46,14 @@ func p26ValidValue(t *rapid.T, ph Placeholder, label string) string {
 	case ParamInt:
 		return strconv.Itoa(rapid.IntRange(0, 100000).Draw(t, label))
 	default: // ParamString / ParamSecret
-		min := r.MinLen
-		if min < 1 {
-			min = 1
+		// 命名避开内置 min/max，否则同作用域内无法再调用这两个内置函数。
+		minLen := max(r.MinLen, 1)
+		maxLen := r.MaxLen
+		if maxLen == 0 || maxLen > 32 {
+			maxLen = 32
 		}
-		max := r.MaxLen
-		if max == 0 || max > 32 {
-			max = 32
-		}
-		if max < min {
-			max = min
-		}
-		n := rapid.IntRange(min, max).Draw(t, label)
+		maxLen = max(maxLen, minLen)
+		n := rapid.IntRange(minLen, maxLen).Draw(t, label)
 		return strings.Repeat("a", n)
 	}
 }

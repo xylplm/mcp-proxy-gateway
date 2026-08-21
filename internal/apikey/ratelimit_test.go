@@ -42,12 +42,9 @@ func (f *fakeCounter) Reserve(_ context.Context, items []RateReservation) (bool,
 	return true, 0, nil
 }
 
-// ptrInt 返回指向所给整数的指针，便于构造可选的限流配置字段。
-func ptrInt(v int) *int { return &v }
-
 // metaWithLimit 构造一个配置了速率上限与窗口的 API Key 元数据。
 func metaWithLimit(id string, limit, windowS int) Metadata {
-	return Metadata{ID: id, RateLimit: ptrInt(limit), RateWindowS: ptrInt(windowS)}
+	return Metadata{ID: id, RateLimit: new(limit), RateWindowS: new(windowS)}
 }
 
 // TestAllow_NoLimitConfigured 验证未配置上限的 API Key 不被限流（Req 21.4）。
@@ -58,7 +55,7 @@ func TestAllow_NoLimitConfigured(t *testing.T) {
 
 	// RateLimit 为 nil：不限流。
 	key := Metadata{ID: "k1"}
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		allowed, err := limiter.Allow(context.Background(), key, now)
 		if err != nil {
 			t.Fatalf("第 %d 次调用返回错误：%v", i, err)
@@ -81,10 +78,10 @@ func TestAllow_NonPositiveConfigTreatedAsNoLimit(t *testing.T) {
 	now := time.Unix(1000, 0)
 
 	cases := []Metadata{
-		{ID: "zero-limit", RateLimit: ptrInt(0), RateWindowS: ptrInt(60)},
-		{ID: "neg-limit", RateLimit: ptrInt(-1), RateWindowS: ptrInt(60)},
-		{ID: "zero-window", RateLimit: ptrInt(5), RateWindowS: ptrInt(0)},
-		{ID: "nil-window", RateLimit: ptrInt(5)},
+		{ID: "zero-limit", RateLimit: new(0), RateWindowS: new(60)},
+		{ID: "neg-limit", RateLimit: new(-1), RateWindowS: new(60)},
+		{ID: "zero-window", RateLimit: new(5), RateWindowS: new(0)},
+		{ID: "nil-window", RateLimit: new(5)},
 	}
 	for _, key := range cases {
 		allowed, err := limiter.Allow(context.Background(), key, now)
@@ -104,7 +101,7 @@ func TestAllow_WithinLimit(t *testing.T) {
 	now := time.Unix(1000, 0)
 	key := metaWithLimit("k1", 5, 60)
 
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		allowed, err := limiter.Allow(context.Background(), key, now)
 		if err != nil {
 			t.Fatalf("第 %d 次调用返回错误：%v", i, err)
@@ -130,7 +127,7 @@ func TestAllow_ExceedLimitRejected(t *testing.T) {
 	key := metaWithLimit("k1", 3, 60)
 
 	// 前 3 次放行。
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		allowed, _ := limiter.Allow(context.Background(), key, now)
 		if !allowed {
 			t.Fatalf("窗口内第 %d 次请求（未超上限 3）被拒，应放行", i+1)
@@ -157,7 +154,7 @@ func TestAllow_NextWindowRecovers(t *testing.T) {
 
 	// 第一窗口：用尽配额并触发一次拒绝。
 	w1 := time.Unix(1000, 0) // 窗口起点 floor(1000/60)*60 = 960
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		if allowed, _ := limiter.Allow(context.Background(), key, w1); !allowed {
 			t.Fatalf("第一窗口第 %d 次请求应放行", i+1)
 		}
@@ -171,7 +168,7 @@ func TestAllow_NextWindowRecovers(t *testing.T) {
 	if startW1, startW2 := windowStartUnix(w1, 60), windowStartUnix(w2, 60); startW1 == startW2 {
 		t.Fatalf("测试前置条件不成立：w1 与 w2 应属于不同窗口（%d == %d）", startW1, startW2)
 	}
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		allowed, err := limiter.Allow(context.Background(), key, w2)
 		if err != nil {
 			t.Fatalf("下一窗口第 %d 次调用返回错误：%v", i+1, err)
@@ -203,9 +200,9 @@ func TestAllow_DailyAndMonthlyQuota(t *testing.T) {
 	counter := newFakeCounter()
 	limiter := NewRateLimiter(counter, nil)
 	now := time.Date(2026, 6, 23, 10, 30, 0, 0, time.UTC)
-	key := Metadata{ID: "k1", QuotaPerDay: ptrInt(2), QuotaPerMonth: ptrInt(3)}
+	key := Metadata{ID: "k1", QuotaPerDay: new(2), QuotaPerMonth: new(3)}
 
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		allowed, reason, err := limiter.AllowWithReason(context.Background(), key, now)
 		if err != nil {
 			t.Fatalf("第 %d 次调用返回错误：%v", i+1, err)
@@ -233,10 +230,10 @@ func TestAllow_MonthlyQuotaDoesNotConsumeEarlierWindows(t *testing.T) {
 	now := time.Date(2026, 6, 23, 10, 30, 0, 0, time.UTC)
 	key := Metadata{
 		ID:            "k1",
-		RateLimit:     ptrInt(10),
-		RateWindowS:   ptrInt(60),
-		QuotaPerDay:   ptrInt(10),
-		QuotaPerMonth: ptrInt(1),
+		RateLimit:     new(10),
+		RateWindowS:   new(60),
+		QuotaPerDay:   new(10),
+		QuotaPerMonth: new(1),
 	}
 
 	if allowed, reason, err := limiter.AllowWithReason(context.Background(), key, now); err != nil || !allowed {

@@ -3,6 +3,7 @@ package transport
 import (
 	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
@@ -218,13 +219,7 @@ func validateURLParamKey(params map[string]any, key string, fields map[string]st
 		return
 	}
 
-	schemeOK := false
-	for _, s := range allowedSchemes {
-		if u.Scheme == s {
-			schemeOK = true
-			break
-		}
-	}
+	schemeOK := slices.Contains(allowedSchemes, u.Scheme)
 	if !schemeOK {
 		fields[fieldKey(key)] = fmt.Sprintf(
 			"连接参数 %q 协议必须为 %s",

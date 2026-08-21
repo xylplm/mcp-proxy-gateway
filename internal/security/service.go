@@ -511,7 +511,7 @@ func remoteAddrIP(remoteAddr string) string {
 }
 
 func firstForwardedIP(header string) string {
-	for _, part := range strings.Split(header, ",") {
+	for part := range strings.SplitSeq(header, ",") {
 		if ip := parseAddr(strings.TrimSpace(part)); ip != "" {
 			return ip
 		}
