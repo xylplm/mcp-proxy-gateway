@@ -191,7 +191,7 @@ func ValidateYAMLConfig(cfg YAMLConfig) error {
 
 	// 包仓库镜像：非空时必须是合法 http(s) URL（长度上限防止配置膨胀）。
 	for field, val := range map[string]string{
-		"runtime.npm_registry": cfg.Runtime.NpmRegistry,
+		"runtime.npm_registry":  cfg.Runtime.NpmRegistry,
 		"runtime.pip_index_url": cfg.Runtime.PipIndexURL,
 		"runtime.uv_index_url":  cfg.Runtime.UvIndexURL,
 	} {

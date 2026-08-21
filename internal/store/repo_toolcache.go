@@ -111,7 +111,7 @@ func (r *ToolCacheRepo) GetChangeSummary(ctx context.Context, upstreamID string)
 		Added:         model.AddedCount,
 		Removed:       model.RemovedCount,
 		SchemaChanged: model.SchemaChanged,
-		SyncedAt:       model.ChangeSyncedAt,
+		SyncedAt:      model.ChangeSyncedAt,
 	}, !model.ChangeSyncedAt.IsZero(), nil
 }
 

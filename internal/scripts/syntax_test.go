@@ -9,12 +9,12 @@ import (
 
 // fakeRunner 实现 CommandRunner，按预设返回 stdout/stderr/err。
 type fakeRunner struct {
-	stdout       string
-	stderr       string
-	err          error
-	missing      bool // 是否把 err 报告为「运行时未安装」
-	gotBase      string
-	gotArgs      []string
+	stdout  string
+	stderr  string
+	err     error
+	missing bool // 是否把 err 报告为「运行时未安装」
+	gotBase string
+	gotArgs []string
 }
 
 func (f *fakeRunner) RunCommand(_ context.Context, base string, args []string, _ string) (string, string, error) {
