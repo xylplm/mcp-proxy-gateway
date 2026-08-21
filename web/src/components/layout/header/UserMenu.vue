@@ -69,6 +69,7 @@ import { RouterLink, useRouter } from 'vue-router'
 import { computed, ref, onMounted, onUnmounted } from 'vue'
 import { useSessionStore } from '@/stores/session'
 import { getCurrentAdmin } from '@/api/auth'
+import { resetRuntimeCapability } from '@/composables/useRuntimeCapability'
 
 const router = useRouter()
 const session = useSessionStore()
@@ -99,10 +100,12 @@ const closeDropdown = () => {
   dropdownOpen.value = false
 }
 
-/** 退出登录：清除会话并跳转登录页。 */
+/** 退出登录：清除会话与运行时能力缓存，跳转登录页。 */
 const signOut = () => {
   closeDropdown()
   session.clearSession()
+  // 镜像能力随部署而变，换账号/换实例登录时应重新探测，避免沿用上一次的门控结果。
+  resetRuntimeCapability()
   void router.push({ name: 'login' })
 }
 

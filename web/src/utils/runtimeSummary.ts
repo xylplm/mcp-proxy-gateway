@@ -1,15 +1,4 @@
-import type { RuntimeCatalogPackage, RuntimeSummary, RuntimeToolStatus } from '../api/runtime'
-
-export function findRuntimePackageForTool(
-  toolName: string,
-  catalog: RuntimeCatalogPackage[] | null | undefined,
-): RuntimeCatalogPackage | undefined {
-  const name = toolName.trim().toLowerCase()
-  if (!name || !catalog) return undefined
-  return catalog.find(
-    (pkg) => pkg.supported && (pkg.tools || []).some((tool) => tool.toLowerCase() === name),
-  )
-}
+import type { RuntimeSummary, RuntimeToolStatus } from '../api/runtime'
 
 export function toolStatusLabel(tool: RuntimeToolStatus): string {
   if (tool.warning) return '权限不足'
@@ -53,13 +42,18 @@ export function runtimeBinDir(
   return root.endsWith('/') || root.endsWith('\\') ? `${root}bin` : `${root}/bin`
 }
 
-/** 工具缺失时是否展示卷路径引导。 */
+/**
+ * 工具缺失时是否展示卷路径引导。
+ *
+ * 精简镜像没有本地运行时，引导用户往 bin 里放文件只会制造无效操作，
+ * 这类环境应改为提示切换完整镜像。
+ */
 export function shouldShowRuntimeGuide(
   summary: Pick<RuntimeSummary, 'missingCount' | 'runtimeDir'> &
-    Partial<Pick<RuntimeSummary, 'managementSupported'>>,
+    Partial<Pick<RuntimeSummary, 'localRuntimeSupported'>>,
 ): boolean {
   return (
-    summary.managementSupported !== false &&
+    summary.localRuntimeSupported !== false &&
     (summary.missingCount ?? 0) > 0 &&
     !!summary.runtimeDir?.trim()
   )
@@ -70,26 +64,10 @@ export function runtimeGuideSteps(
 ): string[] {
   const bin = runtimeBinDir(summary) || `${summary.runtimeDir ?? ''}/bin`
   return [
-    `使用本页「预置安装」一键安装官方 Node / uv，或手动将可执行文件放入 ${bin}`,
-    '也可使用 node/bin、python/bin、uv/bin 等发行版布局',
-    '安装完成后点击「刷新探测」（Docker 入口 PATH 变更需重启容器）',
+    `完整镜像已内置 Node / Python / uv；如需覆盖版本，把可执行文件放入 ${bin}`,
+    '放入后需确保有可执行权限（chmod +x），同名文件优先于镜像自带版本',
+    '完成后点击「刷新探测」（容器入口 PATH 变更需重启容器）',
   ]
-}
-
-export function packageStatusLabel(
-  pkg: Pick<RuntimeCatalogPackage, 'installed' | 'supported'>,
-): string {
-  if (pkg.installed) return '已安装'
-  if (!pkg.supported) return '当前平台不可用'
-  return '可安装'
-}
-
-export function packageStatusTone(
-  pkg: Pick<RuntimeCatalogPackage, 'installed' | 'supported'>,
-): 'success' | 'warning' | 'muted' {
-  if (pkg.installed) return 'success'
-  if (!pkg.supported) return 'muted'
-  return 'warning'
 }
 
 export function sandboxHardeningLabel(

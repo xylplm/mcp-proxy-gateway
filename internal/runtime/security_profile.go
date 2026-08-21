@@ -595,7 +595,7 @@ func DetectSelfInstallIntent(command string, args []string) error {
 		// install / i / add：出现在包管理器子命令位置
 		if al == "install" || al == "i" || (pm && al == "add") {
 			if pm || i == 0 {
-				return fmt.Errorf("严格安全模式禁止脚本自装包类参数（如 install）；请使用运行环境预置安装")
+				return fmt.Errorf("严格安全模式禁止脚本自装包类参数（如 install）；请在运行环境的依赖管理中预先安装")
 			}
 		}
 	}
@@ -618,7 +618,7 @@ func DetectSelfInstallIntent(command string, args []string) error {
 	}
 	// 单独一个 install
 	if joined == "install" || joined == "i" {
-		return fmt.Errorf("严格安全模式禁止脚本自装包类参数（如 install）；请使用运行环境预置安装")
+		return fmt.Errorf("严格安全模式禁止脚本自装包类参数（如 install）；请在运行环境的依赖管理中预先安装")
 	}
 	return nil
 }

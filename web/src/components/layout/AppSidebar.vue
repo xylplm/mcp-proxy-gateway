@@ -87,6 +87,7 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import {
   GridIcon,
@@ -107,12 +108,14 @@ import {
   DraftIcon,
 } from '@/icons'
 import { useSidebar } from '@/composables/useSidebar'
+import { useRuntimeCapability } from '@/composables/useRuntimeCapability'
 
 const route = useRoute()
 
 const { isExpanded, isMobileOpen, isHovered, closeMobileSidebar } = useSidebar()
+const { localRuntimeSupported } = useRuntimeCapability()
 
-const menuGroups = [
+const allMenuGroups = [
   {
     title: '总览',
     items: [
@@ -185,6 +188,8 @@ const menuGroups = [
         icon: DraftIcon,
         name: '脚本中心',
         path: '/scripts',
+        // 受管脚本要靠 Node / Python 执行，精简镜像里没有解释器可用。
+        requiresLocalRuntime: true,
       },
       {
         icon: ErrorHexaIcon,
@@ -209,6 +214,18 @@ const menuGroups = [
     ],
   },
 ]
+
+// 精简镜像没有本地运行时，隐藏依赖解释器的入口；空分组一并去掉避免留下孤立标题。
+const menuGroups = computed(() =>
+  allMenuGroups
+    .map((group) => ({
+      ...group,
+      items: group.items.filter(
+        (item) => !('requiresLocalRuntime' in item) || localRuntimeSupported.value,
+      ),
+    }))
+    .filter((group) => group.items.length > 0),
+)
 
 const isActive = (path: string) => {
   if (path === '/') return route.path === '/'

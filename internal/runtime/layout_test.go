@@ -34,10 +34,16 @@ func TestEnsureRuntimeLayoutAndPathPrefixes(t *testing.T) {
 	if err := EnsureRuntimeLayout(rt); err != nil {
 		t.Fatalf("EnsureRuntimeLayout: %v", err)
 	}
-	for _, sub := range []string{"bin", "node", "npm", "python", "uv", "cache", "state"} {
+	for _, sub := range []string{"bin", "npm", "pip", "cache"} {
 		st, err := os.Stat(filepath.Join(rt, sub))
 		if err != nil || !st.IsDir() {
 			t.Fatalf("missing dir %s: %v", sub, err)
+		}
+	}
+	// 解释器由镜像提供，卷内不再有受管发行版与安装状态目录。
+	for _, sub := range []string{"node", "python", "uv", "state"} {
+		if _, err := os.Stat(filepath.Join(rt, sub)); !os.IsNotExist(err) {
+			t.Fatalf("managed runtime dir %s should not exist: %v", sub, err)
 		}
 	}
 	readme := filepath.Join(rt, RuntimeReadmeName)
@@ -56,32 +62,70 @@ func TestEnsureRuntimeLayoutAndPathPrefixes(t *testing.T) {
 		t.Fatalf("readme should not be overwritten, got %q", b)
 	}
 
-	// 仅 bin 存在有效工具路径前缀时
+	// 只有 bin 存在时前缀列表只含 bin（npm/pip 的可执行目录尚未生成）。
 	prefs := PathPrefixes(rt)
-	if len(prefs) < 1 || prefs[0] != filepath.Join(rt, "bin") {
+	if len(prefs) != 1 || prefs[0] != filepath.Join(rt, RuntimeSubdirBin) {
 		t.Fatalf("prefixes=%v", prefs)
 	}
-	// 创建 node/bin 后应进入列表
-	if err := os.MkdirAll(filepath.Join(rt, "node", "bin"), 0o755); err != nil {
+	// 用户手放目录必须始终排第一，其后依次是 npm CLI 与 pip 脚本。
+	if err := os.MkdirAll(filepath.Join(rt, RuntimeSubdirPip, "bin"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	pathPrefixesCache.Lock()
 	pathPrefixesCache.at = time.Time{}
 	pathPrefixesCache.Unlock()
 	prefs = PathPrefixes(rt)
-	if len(prefs) < 2 {
-		t.Fatalf("expected bin+node/bin, got %v", prefs)
-	}
-	if prefs[1] != filepath.Join(rt, RuntimeSubdirNode, "bin") {
-		t.Fatalf("node prefix order=%v", prefs)
+	if len(prefs) != 2 || prefs[1] != filepath.Join(rt, RuntimeSubdirPip, "bin") {
+		t.Fatalf("expected bin+pip/bin, got %v", prefs)
 	}
 	if err := os.MkdirAll(filepath.Join(rt, RuntimeSubdirNpm, "node_modules", ".bin"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	invalidatePathPrefixes(rt)
 	prefs = PathPrefixes(rt)
-	if len(prefs) < 3 || prefs[2] != filepath.Join(rt, RuntimeSubdirNpm, "node_modules", ".bin") {
-		t.Fatalf("npm CLI prefix must follow node/bin: %v", prefs)
+	want := []string{
+		filepath.Join(rt, RuntimeSubdirBin),
+		filepath.Join(rt, RuntimeSubdirNpm, "node_modules", ".bin"),
+		filepath.Join(rt, RuntimeSubdirPip, "bin"),
+	}
+	if strings.Join(prefs, "|") != strings.Join(want, "|") {
+		t.Fatalf("prefix order=%v, want %v", prefs, want)
+	}
+}
+
+// 严格档要求可执行文件落在运行时卷内。每个 PATH 前缀反推出的根都必须包含该前缀，
+// 且不能越出运行时目录 —— 否则要么把卷内工具误判越界，要么把卷外目录放进白名单。
+func TestRuntimeRootOfPrefixStaysWithinRuntimeDir(t *testing.T) {
+	t.Parallel()
+	for _, rt := range []string{
+		filepath.Join("tmp", "runtime"),
+		// 运行时目录本身叫 pip/npm：按目录名回推会错误地跳到父目录。
+		filepath.Join("tmp", "pip"),
+		filepath.Join("tmp", "npm"),
+	} {
+		want := filepath.Clean(rt)
+		for _, prefix := range runtimePathCandidates(rt) {
+			root := runtimeRootOfPrefix(prefix)
+			if !pathInRoot(filepath.Clean(prefix), root) {
+				t.Fatalf("runtimeDir=%q prefix %q not inside root %q", rt, prefix, root)
+			}
+			if !pathInRoot(root, want) {
+				t.Fatalf("runtimeDir=%q prefix %q => root %q escapes runtime dir", rt, prefix, root)
+			}
+		}
+	}
+}
+
+// npm 的 .bin 条目是指向 ../<pkg>/bin/*.js 的符号链接，根必须宽到 node_modules，
+// 否则解析后的真实路径会被判为越界。
+func TestRuntimeRootOfPrefixCoversNpmBinSymlinkTargets(t *testing.T) {
+	t.Parallel()
+	rt := filepath.Join("tmp", "runtime")
+	prefix := filepath.Join(rt, RuntimeSubdirNpm, "node_modules", ".bin")
+	root := runtimeRootOfPrefix(prefix)
+	target := filepath.Join(rt, RuntimeSubdirNpm, "node_modules", "some-pkg", "bin", "cli.js")
+	if !pathInRoot(target, root) {
+		t.Fatalf("root %q does not cover symlink target %q", root, target)
 	}
 }
 

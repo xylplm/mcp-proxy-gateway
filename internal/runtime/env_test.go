@@ -273,7 +273,7 @@ func TestBuildChildEnvRuntimeVariablesAndModuleLookup(t *testing.T) {
 	out := BuildChildEnvWithOptions(parent, user, DefaultPolicy(), ChildEnvOptions{
 		Mode:       SecurityModeStandard,
 		RuntimeDir: runtimeDir,
-	}, filepath.Join(runtimeDir, RuntimeSubdirNode, "bin"))
+	}, filepath.Join(runtimeDir, RuntimeSubdirBin))
 	env := envMapFrom(t, out)
 	managedModules := filepath.Join(runtimeDir, RuntimeSubdirNpm, "node_modules")
 	if env["MPG_RUNTIME_DIR"] != runtimeDir {
@@ -284,6 +284,26 @@ func TestBuildChildEnvRuntimeVariablesAndModuleLookup(t *testing.T) {
 	}
 	if !strings.Contains(env["NODE_PATH"], "/upstream/modules") {
 		t.Fatalf("standard mode should retain explicit upstream module lookup: %q", env["NODE_PATH"])
+	}
+	// pip 依赖区不用 venv，只有 PYTHONPATH 指向 runtime/pip 才能被镜像自带解释器 import。
+	if env["PYTHONPATH"] != PipTargetDir(runtimeDir) {
+		t.Fatalf("PYTHONPATH=%q, want %q", env["PYTHONPATH"], PipTargetDir(runtimeDir))
+	}
+}
+
+func TestBuildChildEnvKeepsUpstreamPythonPathAfterVolumeDeps(t *testing.T) {
+	t.Parallel()
+	runtimeDir := filepath.Join("/data", "runtime")
+	out := BuildChildEnvWithOptions(
+		[]string{"PATH=/usr/bin", "PYTHONPATH=/parent/py"},
+		map[string]string{"PYTHONPATH": "/upstream/py"},
+		DefaultPolicy(),
+		ChildEnvOptions{Mode: SecurityModeStandard, RuntimeDir: runtimeDir},
+	)
+	env := envMapFrom(t, out)
+	want := PipTargetDir(runtimeDir) + string(os.PathListSeparator) + "/upstream/py"
+	if env["PYTHONPATH"] != want {
+		t.Fatalf("PYTHONPATH=%q, want %q", env["PYTHONPATH"], want)
 	}
 }
 
@@ -308,6 +328,10 @@ func TestBuildChildEnvStrictModeResetsNodePathAndAddsCaches(t *testing.T) {
 	}
 	if env["NODE_PATH"] != managedModules {
 		t.Fatalf("strict NODE_PATH=%q, want %q", env["NODE_PATH"], managedModules)
+	}
+	// 严格档只保留卷内依赖根，不接受父进程或上游声明的额外 Python 模块搜索路径。
+	if env["PYTHONPATH"] != PipTargetDir(runtimeDir) {
+		t.Fatalf("strict PYTHONPATH=%q, want %q", env["PYTHONPATH"], PipTargetDir(runtimeDir))
 	}
 	for key, want := range map[string]string{
 		"npm_config_cache": filepath.Join(cacheDir, "npm"),

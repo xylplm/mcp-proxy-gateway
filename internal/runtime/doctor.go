@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,31 +20,27 @@ type ToolStatus struct {
 
 // Summary 为管理台「运行环境」摘要。
 type Summary struct {
-	StdioEnabled             bool                `json:"stdioEnabled"`
-	CommandAllowlist         []string            `json:"commandAllowlist"`
-	StrictCommandAllowlist   []string            `json:"strictCommandAllowlist,omitempty"`
-	StrictPackageAllowlist   []string            `json:"strictPackageAllowlist,omitempty"`
-	DefaultStdioSecurityMode StdioSecurityMode   `json:"defaultStdioSecurityMode"`
-	GlobalFileRoots          []string            `json:"globalFileRoots,omitempty"`
-	StrictPathOnlyRuntime    bool                `json:"strictPathOnlyRuntime"`
-	Tools                    []ToolStatus        `json:"tools"`
-	AvailableCount           int                 `json:"availableCount"`
-	MissingCount             int                 `json:"missingCount"`
-	DataDir                  string              `json:"dataDir,omitempty"`
-	RuntimeDir               string              `json:"runtimeDir,omitempty"`
-	PathPrefixes             []string            `json:"pathPrefixes,omitempty"`
-	LayoutReady              bool                `json:"layoutReady"`
-	ProcessHardening         bool                `json:"processHardening"`
-	ManagementSupported      bool                `json:"managementSupported"`
-	ManagementReason         string              `json:"managementReason,omitempty"`
-	Sandbox                  SandboxCapabilities `json:"sandbox"`
-	Catalog                  []CatalogPackage    `json:"catalog,omitempty"`
-	InstalledPackages        []InstallRecord     `json:"installedPackages,omitempty"`
-	InstallProgress          *InstallProgress    `json:"installProgress,omitempty"`
-	InstallLogs              []InstallLogEntry   `json:"installLogs,omitempty"`
-	InstallError             string              `json:"installError,omitempty"`
-	Deps                     *DepsStatus         `json:"deps,omitempty"`
-	RiskNotes                []string            `json:"riskNotes"`
+	StdioEnabled             bool              `json:"stdioEnabled"`
+	CommandAllowlist         []string          `json:"commandAllowlist"`
+	StrictCommandAllowlist   []string          `json:"strictCommandAllowlist,omitempty"`
+	StrictPackageAllowlist   []string          `json:"strictPackageAllowlist,omitempty"`
+	DefaultStdioSecurityMode StdioSecurityMode `json:"defaultStdioSecurityMode"`
+	GlobalFileRoots          []string          `json:"globalFileRoots,omitempty"`
+	StrictPathOnlyRuntime    bool              `json:"strictPathOnlyRuntime"`
+	Tools                    []ToolStatus      `json:"tools"`
+	AvailableCount           int               `json:"availableCount"`
+	MissingCount             int               `json:"missingCount"`
+	DataDir                  string            `json:"dataDir,omitempty"`
+	RuntimeDir               string            `json:"runtimeDir,omitempty"`
+	PathPrefixes             []string          `json:"pathPrefixes,omitempty"`
+	LayoutReady              bool              `json:"layoutReady"`
+	ProcessHardening         bool              `json:"processHardening"`
+	// ImageFlavor 仅供展示与问题排查；功能门控请用 LocalRuntimeSupported。
+	ImageFlavor           string              `json:"imageFlavor"`
+	LocalRuntimeSupported bool                `json:"localRuntimeSupported"`
+	Sandbox               SandboxCapabilities `json:"sandbox"`
+	Deps                  *DepsStatus         `json:"deps,omitempty"`
+	RiskNotes             []string            `json:"riskNotes"`
 }
 
 // DepsStatus 汇总依赖管理（npm/pip）的进行中状态。
@@ -115,12 +112,7 @@ func BuildSummary(
 	tools []ToolStatus,
 	dataDir, runtimeDir string,
 	pathPrefixes []string,
-	catalog []CatalogPackage,
-	installed []InstallRecord,
-	installProgress *InstallProgress,
-	installLogs []InstallLogEntry,
-	installError string,
-	support RuntimeManagementSupport,
+	flavor ImageFlavor,
 ) Summary {
 	policy = NormalizePolicy(policy)
 	allowlist := policy.CommandAllowlist
@@ -155,15 +147,17 @@ func BuildSummary(
 		"本地运行安全档位（标准 / 严格 / 完全放行）可按上游收敛命令、文件路径与自装包意图；当前为策略约束，不是内核沙箱。",
 		"严格模式下 npx/uvx 可执行，但目标包/工具必须落在包白名单内（支持 @scope/*）。",
 		"远程 SSE / HTTP / WebSocket / OpenAPI 上游不依赖本页工具探测。",
-		"预置安装仅允许内置目录中的 Node / uv 固定版本，禁止任意 URL 或 npm 包名。",
+		"Node / Python / uv 由镜像提供，不在运行期下载；数据卷只保存 npm / pip 共享依赖。",
 	}
-	if !policy.StdioEnabled {
+	if !flavor.LocalRuntimeSupported() {
+		notes = append([]string{"当前为精简镜像，不含本地运行时，仅可使用远程与 OpenAPI 上游。"}, notes...)
+	} else if !policy.StdioEnabled {
 		notes = append([]string{"本地 stdio 上游已禁用，仅可使用远程与 OpenAPI 上游。"}, notes...)
 	}
-	if missing > 0 && runtimeDir != "" {
+	if missing > 0 && runtimeDir != "" && flavor.LocalRuntimeSupported() {
 		binHint := filepath.Join(runtimeDir, RuntimeSubdirBin)
 		notes = append(notes,
-			"可将工具放入 "+binHint+"，或使用本页「预置安装」拉取官方 Node / uv；完成后刷新探测即可。",
+			"完整镜像已内置 Node / Python / uv；如需覆盖版本，可将可执行文件放入 "+binHint+" 后刷新探测。",
 		)
 	}
 	return Summary{
@@ -182,33 +176,25 @@ func BuildSummary(
 		PathPrefixes:             append([]string{}, pathPrefixes...),
 		LayoutReady:              layoutReady,
 		ProcessHardening:         policy.ProcessHardening,
-		ManagementSupported:      support.Supported,
-		ManagementReason:         support.Reason,
+		ImageFlavor:              string(flavor),
+		LocalRuntimeSupported:    flavor.LocalRuntimeSupported(),
 		Sandbox:                  DescribeSandbox(),
-		Catalog:                  catalog,
-		InstalledPackages:        installed,
-		InstallProgress:          installProgress,
-		InstallLogs:              installLogs,
-		InstallError:             installError,
 		RiskNotes:                notes,
 	}
 }
 
-// Service 聚合策略读取、探测与受控安装，供 HTTP 与 transport 注入。
-//
-// 持有单一 Installer 实例，保证安装/卸载串行化，避免并发写卷。
+// Service 聚合策略读取、工具探测与依赖管理，供 HTTP 与 transport 注入。
 type Service struct {
 	policyFn     func() Policy
 	dataDirFn    func() string
 	runtimeDirFn func() string
-	supportFn    func() RuntimeManagementSupport
+	// flavorFn 可注入以便测试精简镜像下的门控行为。
+	flavorFn func() ImageFlavor
 
-	instMu         sync.Mutex
-	installer_     *Installer
 	depMu          sync.Mutex
-	depMgr_        *DependencyManager
+	depMgr         *DependencyManager
 	depMgrDir      string
-	operationMu    sync.Mutex // 串行化运行时包与依赖的读写，避免生命周期互相覆盖
+	depOpMu        sync.Mutex // 串行化依赖读写，避免并发 npm/uv 互相覆盖
 	layoutMu       sync.Mutex
 	layoutDir      string
 	preflightMu    sync.Mutex
@@ -238,15 +224,16 @@ func NewService(policyFn func() Policy, dataDirFn func() string, runtimeDirFn fu
 	}
 }
 
-func (s *Service) managementSupport() RuntimeManagementSupport {
-	if s != nil && s.supportFn != nil {
-		return s.supportFn()
+// Flavor 返回当前镜像形态。
+func (s *Service) Flavor() ImageFlavor {
+	if s != nil && s.flavorFn != nil {
+		return s.flavorFn()
 	}
-	return ManagedRuntimeSupport()
+	return CurrentImageFlavor()
 }
 
-func (s *Service) requireManagementSupport() error {
-	return requireManagedRuntimeSupport(s.managementSupport())
+func (s *Service) requireLocalRuntime() error {
+	return requireLocalRuntime(s.Flavor())
 }
 
 // Policy 返回当前策略快照。
@@ -278,20 +265,6 @@ func (s *Service) RuntimeDir() string {
 	return ResolveRuntimeDir(dataDir, os.Getenv("MPG_RUNTIME_DIR"))
 }
 
-// installer 返回绑定当前 runtimeDir 的共享 Installer（目录变更时重建）。
-func (s *Service) installer() *Installer {
-	if s == nil {
-		return NewInstaller("", nil)
-	}
-	dir := s.RuntimeDir()
-	s.instMu.Lock()
-	defer s.instMu.Unlock()
-	if s.installer_ == nil || s.installer_.runtimeDir != dir {
-		s.installer_ = NewInstaller(dir, nil)
-	}
-	return s.installer_
-}
-
 // depManager 返回绑定当前 runtimeDir 与策略的共享依赖管理器（目录变更时重建）。
 func (s *Service) depManager() *DependencyManager {
 	if s == nil {
@@ -300,17 +273,17 @@ func (s *Service) depManager() *DependencyManager {
 	dir := s.RuntimeDir()
 	s.depMu.Lock()
 	defer s.depMu.Unlock()
-	if s.depMgr_ == nil || s.depMgrDir != dir {
-		s.depMgr_ = NewDependencyManager(dir, s.policyFn)
+	if s.depMgr == nil || s.depMgrDir != dir {
+		s.depMgr = NewDependencyManager(dir, s.policyFn)
 		s.depMgrDir = dir
 	}
-	return s.depMgr_
+	return s.depMgr
 }
 
 // Summary 返回管理台摘要。
 func (s *Service) Summary() Summary {
 	if s == nil {
-		return BuildSummary(DefaultPolicy(), nil, "", "", nil, nil, nil, nil, nil, "", RuntimeManagementSupport{})
+		return BuildSummary(DefaultPolicy(), nil, "", "", nil, CurrentImageFlavor())
 	}
 	policy := s.Policy()
 	dataDir := ""
@@ -318,39 +291,22 @@ func (s *Service) Summary() Summary {
 		dataDir = s.dataDirFn()
 	}
 	runtimeDir := s.RuntimeDir()
-	support := s.managementSupport()
-	if support.Supported {
-		s.ensureRuntimeLayout(runtimeDir)
-	}
+	flavor := s.Flavor()
+	s.ensureRuntimeLayout(runtimeDir)
 	prefixes := PathPrefixes(runtimeDir)
 	doctor := NewDoctor(func(file string) (string, error) {
 		return LookPathWithPrefixes(file, prefixes, exec.LookPath)
 	})
-	inst := s.installer()
-	// 复用同一份 state 构造目录与已装列表，避免重复读状态文件。
-	state := inst.loadState()
-	catalog := inst.catalogWithState(state)
-	if !support.Supported {
-		markCatalogUnsupported(catalog)
-	}
-	progress := inst.currentProgress()
-	logs := inst.Logs()
-	lastErr := inst.lastInstallError()
 	summary := BuildSummary(
 		policy,
 		doctor.Probe(),
 		dataDir,
 		runtimeDir,
 		prefixes,
-		catalog,
-		state.Packages,
-		progress,
-		logs,
-		lastErr,
-		support,
+		flavor,
 	)
-	// 依赖管理状态：仅当存在 runtimeDir 时填充（npm/pip 依赖 Node/uv 已安装）。
-	if runtimeDir != "" {
+	// 依赖管理状态：精简镜像无本地运行时，不填充。
+	if runtimeDir != "" && flavor.LocalRuntimeSupported() {
 		dm := s.depManager()
 		summary.Deps = &DepsStatus{
 			DepProgress: dm.currentProgress(),
@@ -376,97 +332,29 @@ func (s *Service) ensureRuntimeLayout(runtimeDir string) {
 	}
 }
 
-// Catalog 返回预置包目录与安装状态。
-func (s *Service) Catalog() []CatalogPackage {
-	if s == nil {
-		return nil
-	}
-	catalog := s.installer().CatalogWithStatus()
-	if !s.managementSupport().Supported {
-		markCatalogUnsupported(catalog)
-	}
-	return catalog
-}
-
-// markCatalogUnsupported 在不支持受管变更的环境中把目录项统一标记为不可安装，
-// 目录本身仍可读，便于用户看到官方镜像里能装什么。
-func markCatalogUnsupported(catalog []CatalogPackage) {
-	for i := range catalog {
-		catalog[i].Supported = false
-	}
-}
-
-// PreviewInstall 预览安装。
-func (s *Service) PreviewInstall(packageID string) (CatalogPackage, error) {
-	if s == nil {
-		return CatalogPackage{}, fmtUnavailable("运行环境服务未就绪")
-	}
-	if err := s.requireManagementSupport(); err != nil {
-		return CatalogPackage{}, err
-	}
-	return s.installer().PreviewInstall(packageID)
-}
-
-// InstallPackage 执行受控安装（进程内串行）。
-func (s *Service) InstallPackage(ctx context.Context, packageID string) (InstallResult, error) {
-	if s == nil {
-		return InstallResult{}, fmtUnavailable("运行环境服务未就绪")
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if err := s.requireManagementSupport(); err != nil {
-		return InstallResult{}, err
-	}
-	s.operationMu.Lock()
-	defer s.operationMu.Unlock()
-	res, err := s.installer().Install(ctx, packageID)
-	if err == nil {
-		s.InvalidatePreflightCache()
-	}
-	return res, err
-}
-
-// UninstallPackage 卸载预置包（进程内串行）。
-func (s *Service) UninstallPackage(packageID string) error {
-	if s == nil {
-		return fmtUnavailable("运行环境服务未就绪")
-	}
-	if err := s.requireManagementSupport(); err != nil {
-		return err
-	}
-	s.operationMu.Lock()
-	defer s.operationMu.Unlock()
-	err := s.installer().Uninstall(packageID)
-	if err == nil {
-		s.InvalidatePreflightCache()
-	}
-	return err
-}
-
 // ListDeps 列出某类运行时已安装的第三方包。
 func (s *Service) ListDeps(ctx context.Context, kind DepKind) (ListDepsResult, error) {
 	if s == nil {
-		return ListDepsResult{Kind: kind, Items: []Dependency{}}, fmtUnavailable("运行环境服务未就绪")
+		return ListDepsResult{Kind: kind, Items: []Dependency{}}, errServiceUnavailable
 	}
-	if err := s.requireManagementSupport(); err != nil {
+	if err := s.requireLocalRuntime(); err != nil {
 		return ListDepsResult{Kind: kind, Items: []Dependency{}}, err
 	}
-	s.operationMu.Lock()
-	defer s.operationMu.Unlock()
+	s.depOpMu.Lock()
+	defer s.depOpMu.Unlock()
 	return s.depManager().ListDeps(ctx, kind)
 }
 
 // InstallDep 安装/升级一个第三方包。
 func (s *Service) InstallDep(ctx context.Context, kind DepKind, spec string) (InstallDepResult, error) {
 	if s == nil {
-		return InstallDepResult{Kind: kind}, fmtUnavailable("运行环境服务未就绪")
+		return InstallDepResult{Kind: kind}, errServiceUnavailable
 	}
-	if err := s.requireManagementSupport(); err != nil {
+	if err := s.requireLocalRuntime(); err != nil {
 		return InstallDepResult{Kind: kind}, err
 	}
-	s.operationMu.Lock()
-	defer s.operationMu.Unlock()
+	s.depOpMu.Lock()
+	defer s.depOpMu.Unlock()
 	result, err := s.depManager().InstallDep(ctx, kind, spec)
 	if err == nil {
 		invalidatePathPrefixes(s.RuntimeDir())
@@ -478,13 +366,13 @@ func (s *Service) InstallDep(ctx context.Context, kind DepKind, spec string) (In
 // UninstallDep 卸载一个第三方包。
 func (s *Service) UninstallDep(ctx context.Context, kind DepKind, name string) (InstallDepResult, error) {
 	if s == nil {
-		return InstallDepResult{Kind: kind}, fmtUnavailable("运行环境服务未就绪")
+		return InstallDepResult{Kind: kind}, errServiceUnavailable
 	}
-	if err := s.requireManagementSupport(); err != nil {
+	if err := s.requireLocalRuntime(); err != nil {
 		return InstallDepResult{Kind: kind}, err
 	}
-	s.operationMu.Lock()
-	defer s.operationMu.Unlock()
+	s.depOpMu.Lock()
+	defer s.depOpMu.Unlock()
 	result, err := s.depManager().UninstallDep(ctx, kind, name)
 	if err == nil {
 		invalidatePathPrefixes(s.RuntimeDir())
@@ -503,10 +391,5 @@ func (s *Service) ValidateStdioCommand(command string) error {
 	return ValidateCommand(command, s.Policy())
 }
 
-func fmtUnavailable(msg string) error {
-	return &simpleError{s: msg}
-}
-
-type simpleError struct{ s string }
-
-func (e *simpleError) Error() string { return e.s }
+// errServiceUnavailable 用于 Service 为 nil 的防御分支（正常接线不会出现）。
+var errServiceUnavailable = errors.New("运行环境服务未就绪")

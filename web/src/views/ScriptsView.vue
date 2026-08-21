@@ -32,8 +32,10 @@ import {
 } from '@/utils/scripts'
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
+import { useRuntimeCapability } from '@/composables/useRuntimeCapability'
 
 const toast = useToast()
+const { localRuntimeSupported } = useRuntimeCapability()
 const { confirm } = useConfirm()
 
 const scripts = ref<ScriptItem[]>([])
@@ -450,6 +452,29 @@ onMounted(load)
 <template>
   <AdminLayout>
     <PageBreadcrumb pageTitle="脚本中心" />
+
+    <!-- 精简镜像没有解释器，脚本可以编辑但无法运行。侧边栏已隐藏本页入口，
+         直接访问 URL 时仍需说明，避免用户排查一个不会成功的执行失败。 -->
+    <section
+      v-if="!localRuntimeSupported"
+      class="border-warning-200 bg-warning-50/60 dark:border-warning-500/20 dark:bg-warning-500/5 mb-5 rounded-2xl border p-5 shadow-sm"
+    >
+      <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">
+        当前镜像无法运行脚本
+      </h3>
+      <p class="mt-1 max-w-3xl text-sm leading-6 text-gray-600 dark:text-gray-300">
+        精简镜像（<code class="font-mono text-xs">:slim</code>）不含 Node 与 Python
+        解释器，脚本仍可编辑与保存，但执行必然失败。需要运行脚本请改用完整镜像
+        <code class="font-mono text-xs">:latest</code> 或
+        <code class="font-mono text-xs">:full</code>，数据卷可直接复用。
+      </p>
+      <router-link
+        to="/runtime"
+        class="text-brand-600 dark:text-brand-300 mt-3 inline-block text-sm font-medium underline underline-offset-2"
+      >
+        查看运行环境说明
+      </router-link>
+    </section>
 
     <section
       class="rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03]"

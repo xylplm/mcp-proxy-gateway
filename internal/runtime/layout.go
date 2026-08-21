@@ -17,17 +17,51 @@ var pathPrefixesCache struct {
 	prefixes []string
 }
 
-// 卷内运行时目录子路径（稳定契约，供 entrypoint / 文档 / P1b 共用）。
+// 卷内运行时目录子路径（稳定契约，供 entrypoint / 文档共用）。
+//
+// Node / Python / uv 解释器本身由镜像提供，不落在数据卷里；卷只保存
+// 用户自放的可执行文件与 npm / pip 共享依赖。
 const (
-	RuntimeSubdirBin    = "bin"
-	RuntimeSubdirNode   = "node"
-	RuntimeSubdirNpm    = "npm"
-	RuntimeSubdirPython = "python"
-	RuntimeSubdirUV     = "uv"
-	RuntimeSubdirCache  = "cache"
-	RuntimeSubdirState  = "state"
-	RuntimeReadmeName   = "README.txt"
+	// RuntimeSubdirBin 用户手动放置的可执行文件，PATH 优先级最高。
+	RuntimeSubdirBin = "bin"
+	// RuntimeSubdirNpm npm 共享依赖前缀（node_modules 与 node_modules/.bin）。
+	RuntimeSubdirNpm = "npm"
+	// RuntimeSubdirPip pip 共享依赖目录（uv pip --target，顶层即 site-packages，脚本在 bin/）。
+	RuntimeSubdirPip = "pip"
+	// RuntimeSubdirCache npm / uv 缓存，避免写入容器临时层。
+	RuntimeSubdirCache = "cache"
+	RuntimeReadmeName  = "README.txt"
 )
+
+// runtimeLayoutSubdirs 是 EnsureRuntimeLayout 创建的目录集合（稳定顺序）。
+func runtimeLayoutSubdirs() []string {
+	return []string{
+		RuntimeSubdirBin,
+		RuntimeSubdirNpm,
+		RuntimeSubdirPip,
+		RuntimeSubdirCache,
+	}
+}
+
+// runtimePathCandidates 返回运行时卷内可能提供可执行文件的目录（稳定顺序，含不存在项）。
+//
+// 与 runtimeIntermediateDirs 成对维护：每个候选项从自身往上走过若干中间目录后
+// 必须回到 runtimeDir，严格档的运行时根判定才成立。
+func runtimePathCandidates(runtimeDir string) []string {
+	return []string{
+		filepath.Join(runtimeDir, RuntimeSubdirBin),
+		filepath.Join(runtimeDir, RuntimeSubdirNpm, "node_modules", ".bin"),
+		filepath.Join(runtimeDir, RuntimeSubdirPip, "bin"),
+	}
+}
+
+// runtimePathSuffixes 返回 PATH 前缀相对运行时根的路径后缀。
+//
+// 与 runtimePathCandidates 同源，供严格档由前缀反推运行时根使用，
+// 避免两处各自维护一份布局知识。
+func runtimePathSuffixes() []string {
+	return runtimePathCandidates("")
+}
 
 // ResolveRuntimeDir 解析运行时根目录。
 //
@@ -61,16 +95,7 @@ func EnsureRuntimeLayout(runtimeDir string) error {
 	if runtimeDir == "" {
 		return nil
 	}
-	subs := []string{
-		RuntimeSubdirBin,
-		RuntimeSubdirNode,
-		RuntimeSubdirNpm,
-		RuntimeSubdirPython,
-		RuntimeSubdirUV,
-		RuntimeSubdirCache,
-		RuntimeSubdirState,
-	}
-	for _, sub := range subs {
+	for _, sub := range runtimeLayoutSubdirs() {
 		if err := os.MkdirAll(filepath.Join(runtimeDir, sub), 0o755); err != nil {
 			return err
 		}
@@ -86,25 +111,21 @@ func EnsureRuntimeLayout(runtimeDir string) error {
 }
 
 func runtimeReadmeContent(runtimeDir string) string {
-	return "MCP Proxy Gateway — Linux 容器受管运行时目录\n" +
+	return "MCP Proxy Gateway — 卷内运行时目录\n" +
 		"\n" +
-		"本目录仅由官方 Linux Docker/OCI 镜像管理。原生 Windows/macOS 和 Windows 容器不支持\n" +
-		"运行环境页的安装、卸载和依赖管理；Windows/macOS Docker Desktop 请使用 Linux 容器引擎。\n" +
-		"\n" +
-		"将 Node / Python / uv 等可执行文件放入本目录后，stdio 上游即可被探测与启动。\n" +
+		"Node / Python / uv / uvx 由完整镜像（:latest / :full）内置，不在运行期下载。\n" +
+		"精简镜像（:slim）不含任何本地运行时，仅支持远程与 OpenAPI 上游。\n" +
 		"本目录位于数据卷内，容器更新不会丢失。\n" +
 		"\n" +
-		"推荐布局：\n" +
-		"  bin/           用户手动放置的直接可执行文件（优先加入 PATH）\n" +
-		"  node/bin/      受管 Node 发行版\n" +
-		"  npm/           受管 npm 共享依赖、node_modules 与 CLI shim\n" +
-		"  python/bin/    用户手动放置的 Python 发行版\n" +
-		"  uv/bin/        受管 uv 发行版\n" +
-		"  cache/         npm / uv 受管缓存\n" +
-		"  state/         受管安装状态\n" +
+		"布局：\n" +
+		"  bin/                      用户手动放置的可执行文件（PATH 优先级最高）\n" +
+		"  npm/node_modules/         npm 共享依赖；node_modules/.bin 自动加入 PATH\n" +
+		"  pip/                      pip 共享依赖（顶层即 site-packages，自动加入 PYTHONPATH）\n" +
+		"  pip/bin/                  pip 包提供的命令行脚本，自动加入 PATH\n" +
+		"  cache/                    npm / uv 下载缓存\n" +
 		"\n" +
-		"npm 共享依赖适用于受管 CLI 与 CommonJS 兼容查询；ESM 项目应维护自己的本地依赖。\n" +
-		"pip 依赖管理需要镜像中可用 Python（官方 :full 镜像已提供）。\n" +
+		"npm 共享依赖适用于 CLI 与 CommonJS 兼容查询；ESM 项目应维护自己的本地依赖。\n" +
+		"需要覆盖镜像自带版本时，把可执行文件放入 bin/ 即可优先生效。\n" +
 		"\n" +
 		"当前路径：" + runtimeDir + "\n" +
 		"放置文件后请刷新运行环境探测。也可设置 MPG_RUNTIME_DIR 覆盖本目录位置。\n"
@@ -138,13 +159,7 @@ func PathPrefixes(runtimeDir string) []string {
 	}
 	pathPrefixesCache.RUnlock()
 
-	candidates := []string{
-		filepath.Join(runtimeDir, RuntimeSubdirBin),
-		filepath.Join(runtimeDir, RuntimeSubdirNode, "bin"),
-		filepath.Join(runtimeDir, RuntimeSubdirNpm, "node_modules", ".bin"),
-		filepath.Join(runtimeDir, RuntimeSubdirPython, "bin"),
-		filepath.Join(runtimeDir, RuntimeSubdirUV, "bin"),
-	}
+	candidates := runtimePathCandidates(runtimeDir)
 	out := make([]string, 0, len(candidates))
 	for _, dir := range candidates {
 		st, err := os.Stat(dir)

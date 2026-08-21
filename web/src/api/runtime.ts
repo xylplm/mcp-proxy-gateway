@@ -1,5 +1,8 @@
 /**
- * 运行环境（本地 stdio 能力探测 + 受控预置安装）API。
+ * 运行环境（本地 stdio 能力探测 + 卷内 npm/pip 共享依赖管理）API。
+ *
+ * Node / Python / uv 由镜像内置，不存在运行期下载安装；精简镜像（:slim）不含
+ * 本地运行时，由 summary.localRuntimeSupported 统一门控相关功能。
  */
 import request from '@/api/request'
 import type { AxiosRequestConfig } from 'axios'
@@ -22,30 +25,8 @@ export interface SandboxCapabilities {
   description: string
 }
 
-export interface RuntimeCatalogPackage {
-  id: string
-  name: string
-  version: string
-  description: string
-  kind: string
-  tools: string[]
-  supported: boolean
-  installed: boolean
-  installedAt?: string
-  assetGoos?: string
-  assetGoarch?: string
-}
-
-export interface RuntimeInstallRecord {
-  id: string
-  name: string
-  version: string
-  kind: string
-  installedAt: string
-  goos: string
-  goarch: string
-  tools: string[]
-}
+/** 镜像形态：full 内置 Node/Python/uv，slim 仅网关本体。 */
+export type RuntimeImageFlavor = 'full' | 'slim'
 
 export interface RuntimeSummary {
   stdioEnabled: boolean
@@ -63,48 +44,14 @@ export interface RuntimeSummary {
   pathPrefixes?: string[]
   layoutReady?: boolean
   processHardening?: boolean
-  /** 仅官方 Linux Docker/OCI 镜像可变更受管运行时与依赖。 */
-  managementSupported: boolean
-  managementReason?: string
+  /** 镜像形态，仅供展示与排查；功能门控请用 localRuntimeSupported。 */
+  imageFlavor?: RuntimeImageFlavor | string
+  /** 本镜像是否提供本地运行时（stdio 上游、npm/pip 依赖管理、脚本中心）。 */
+  localRuntimeSupported: boolean
   sandbox?: SandboxCapabilities
-  catalog?: RuntimeCatalogPackage[]
-  installedPackages?: RuntimeInstallRecord[]
-  installProgress?: {
-    packageId: string
-    phase: string
-    bytes: number
-    total: number
-    startedAt: string
-  }
-  /** 最近一次安装的结构化日志（成功/失败各阶段），最早在前。 */
-  installLogs?: RuntimeInstallLogEntry[]
-  /** 最近一次安装失败原因（进度清空后仍保留，便于排查）。 */
-  installError?: string
   /** 依赖管理（npm/pip）状态。 */
   deps?: RuntimeDepsStatus
   riskNotes: string[]
-}
-
-/** 安装日志条目级别。 */
-export type RuntimeInstallLogLevel = 'info' | 'success' | 'error'
-
-/** 运行时安装结构化日志条目（对应后端 InstallLogEntry）。 */
-export interface RuntimeInstallLogEntry {
-  phase: string
-  level: RuntimeInstallLogLevel
-  message: string
-  source?: string
-  bytes?: number
-  at: string
-}
-
-export interface RuntimeInstallResult {
-  id: string
-  name: string
-  version: string
-  tools: string[]
-  runtimeDir: string
-  reused: boolean
 }
 
 /** 依赖类型：npm / pip。 */
@@ -188,35 +135,6 @@ export async function getRuntimeSummary(): Promise<RuntimeSummary> {
   return res.data
 }
 
-export async function getRuntimeCatalog(): Promise<RuntimeCatalogPackage[]> {
-  const res = await request.get<RuntimeCatalogPackage[]>('/runtime/catalog')
-  return res.data
-}
-
-export async function previewRuntimeInstall(packageId: string): Promise<RuntimeCatalogPackage> {
-  const res = await request.post<RuntimeCatalogPackage>('/runtime/install/preview', { packageId })
-  return res.data
-}
-
-/** 安装可能较久，单独提高超时。 */
-export async function installRuntimePackage(packageId: string): Promise<RuntimeInstallResult> {
-  const cfg: AxiosRequestConfig = { timeout: 12 * 60 * 1000 }
-  const res = await request.post<RuntimeInstallResult>('/runtime/install', { packageId }, cfg)
-  return res.data
-}
-
-export async function uninstallRuntimePackage(
-  packageId: string,
-): Promise<{ uninstalled: boolean; packageId: string }> {
-  const res = await request.post<{ uninstalled: boolean; packageId: string }>(
-    '/runtime/uninstall',
-    {
-      packageId,
-    },
-  )
-  return res.data
-}
-
 /** 列出某类运行时已安装的第三方包。 */
 export async function listRuntimeDeps(kind: RuntimeDepKind): Promise<RuntimeListDepsResult> {
   const res = await request.get<RuntimeListDepsResult>('/runtime/deps', { params: { kind } })
@@ -261,7 +179,6 @@ export interface RuntimeKnownTool {
   name: string
   label: string
   description?: string
-  packageId?: string
   inferFrom?: string[]
   templateRuntimes?: string[]
 }
@@ -272,15 +189,12 @@ export interface RuntimePreflightItem {
   required: boolean
   available: boolean
   path?: string
-  fixable: boolean
-  packageId?: string
   message?: string
   warning?: string
 }
 
 export interface RuntimePreflightAction {
-  type: 'install' | 'open_runtime' | 'open_settings' | string
-  packageId?: string
+  type: 'open_runtime' | 'open_settings' | string
   label: string
 }
 

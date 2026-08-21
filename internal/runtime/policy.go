@@ -1,5 +1,7 @@
 // Package runtime 提供 stdio 本地运行时的安全策略、命令校验、环境清理、
-// 卷路径解析、受控预置安装与进程级加固。
+// 卷路径解析、npm/pip 共享依赖管理与进程级加固。
+//
+// 解释器（Node / Python / uv）由镜像内置，本包不做运行期下载安装。
 //
 // 边界：
 //   - 不提供任意 shell / 任意 URL 装包；
@@ -66,7 +68,8 @@ func DefaultCommandAllowlist() []string {
 }
 
 // DefaultProbeTools 为管理台 Doctor 探测的逻辑工具名。
-// 只探测镜像可能提供或可受管安装的工具，避免出现用户无法补齐的永久缺失项。
+// 只探测完整镜像内置或用户可放入 runtime/bin 的工具，
+// 避免出现用户无法补齐的永久缺失项。
 func DefaultProbeTools() []string {
 	return []string{
 		"node",

@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
-	"sort"
 	"strings"
 	"time"
 )
@@ -28,8 +27,6 @@ type KnownTool struct {
 	Name        string `json:"name"`
 	Label       string `json:"label"`
 	Description string `json:"description"`
-	// PackageID 非空表示可通过预置安装补齐。
-	PackageID string `json:"packageId,omitempty"`
 	// InferFrom 与 TemplateRuntimes 供管理台做输入期间的乐观提示；
 	// 实际预检仍以本包的 InferToolsFromCommand 为准。
 	InferFrom        []string `json:"inferFrom,omitempty"`
@@ -50,17 +47,14 @@ type PreflightItem struct {
 	Required  bool   `json:"required"`
 	Available bool   `json:"available"`
 	Path      string `json:"path,omitempty"`
-	Fixable   bool   `json:"fixable"`
-	PackageID string `json:"packageId,omitempty"`
 	Message   string `json:"message,omitempty"`
 	Warning   string `json:"warning,omitempty"`
 }
 
 // PreflightAction 为可行动补齐建议。
 type PreflightAction struct {
-	Type      string `json:"type"` // install | open_runtime | open_settings
-	PackageID string `json:"packageId,omitempty"`
-	Label     string `json:"label"`
+	Type  string `json:"type"` // open_runtime | open_settings
+	Label string `json:"label"`
 }
 
 // PreflightRequest 为依赖预检入参。
@@ -103,13 +97,13 @@ type PreflightResult struct {
 // KnownTools 返回可声明/可探测的工具字典（稳定顺序）。
 func KnownTools() []KnownTool {
 	return []KnownTool{
-		{Name: "node", Label: "Node.js", Description: "Node 运行时", PackageID: DefaultNodePackageID, InferFrom: []string{"node", "npx", "npm"}, TemplateRuntimes: []string{"node"}},
-		{Name: "npx", Label: "npx", Description: "Node 包执行器", PackageID: DefaultNodePackageID, InferFrom: []string{"npx"}, TemplateRuntimes: []string{"node"}},
-		{Name: "npm", Label: "npm", Description: "Node 包管理器", PackageID: DefaultNodePackageID, InferFrom: []string{"npm"}, TemplateRuntimes: []string{"node"}},
+		{Name: "node", Label: "Node.js", Description: "Node 运行时", InferFrom: []string{"node", "npx", "npm"}, TemplateRuntimes: []string{"node"}},
+		{Name: "npx", Label: "npx", Description: "Node 包执行器", InferFrom: []string{"npx"}, TemplateRuntimes: []string{"node"}},
+		{Name: "npm", Label: "npm", Description: "Node 包管理器", InferFrom: []string{"npm"}, TemplateRuntimes: []string{"node"}},
 		{Name: "python", Label: "Python", Description: "Python 解释器", InferFrom: []string{"python"}, TemplateRuntimes: []string{"python"}},
 		{Name: "python3", Label: "Python 3", Description: "Python 3 解释器", InferFrom: []string{"python3"}, TemplateRuntimes: []string{"python"}},
-		{Name: "uv", Label: "uv", Description: "Astral uv", PackageID: "uv-0.6.14", InferFrom: []string{"uv", "uvx"}, TemplateRuntimes: []string{"uv", "uvx"}},
-		{Name: "uvx", Label: "uvx", Description: "uv 工具运行器", PackageID: "uv-0.6.14", InferFrom: []string{"uvx"}, TemplateRuntimes: []string{"uv", "uvx"}},
+		{Name: "uv", Label: "uv", Description: "Astral uv", InferFrom: []string{"uv", "uvx"}, TemplateRuntimes: []string{"uv", "uvx"}},
+		{Name: "uvx", Label: "uvx", Description: "uv 工具运行器", InferFrom: []string{"uvx"}, TemplateRuntimes: []string{"uv", "uvx"}},
 	}
 }
 
@@ -431,16 +425,13 @@ func EvaluatePreflight(req PreflightRequest, policy Policy, runtimeDir string, l
 	}
 
 	known := knownToolMap()
-	missingFixable := map[string]string{} // packageId -> label
 	allAvailable := true
 	for _, name := range effective {
 		meta := known[name]
 		item := PreflightItem{
-			Name:      name,
-			Label:     meta.Label,
-			Required:  true,
-			Fixable:   meta.PackageID != "",
-			PackageID: meta.PackageID,
+			Name:     name,
+			Label:    meta.Label,
+			Required: true,
 		}
 		if item.Label == "" {
 			item.Label = name
@@ -464,9 +455,6 @@ func EvaluatePreflight(req PreflightRequest, policy Policy, runtimeDir string, l
 			if eff.Mode == SecurityModeStrict && (eff.StrictPathOnly || policy.StrictPathOnlyRuntime) {
 				item.Message = "未在运行时卷目录中找到（严格模式不使用系统 PATH）"
 			}
-			if item.Fixable {
-				missingFixable[item.PackageID] = meta.Label
-			}
 		}
 		result.Items = append(result.Items, item)
 	}
@@ -485,20 +473,6 @@ func EvaluatePreflight(req PreflightRequest, policy Policy, runtimeDir string, l
 			Type:  "open_settings",
 			Label: "检查本地运行安全档位与文件/网络策略",
 		})
-	}
-	if len(missingFixable) > 0 {
-		pkgIDs := make([]string, 0, len(missingFixable))
-		for pkgID := range missingFixable {
-			pkgIDs = append(pkgIDs, pkgID)
-		}
-		sort.Strings(pkgIDs)
-		for _, pkgID := range pkgIDs {
-			result.Actions = append(result.Actions, PreflightAction{
-				Type:      "install",
-				PackageID: pkgID,
-				Label:     "安装 " + missingFixable[pkgID] + " 运行时",
-			})
-		}
 	}
 	if !allAvailable {
 		result.Actions = append(result.Actions, PreflightAction{

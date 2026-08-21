@@ -184,24 +184,24 @@ Images are published to Docker Hub: [`xylplm/mcp-proxy-gateway`](https://hub.doc
 
 | Tag | Description |
 | --- | --- |
-| `latest` / `1.0.YYYYMMDDHHmm` | **Slim (default)** — no Node/Python; install via admin Runtime or volume |
-| `full` / `1.0.YYYYMMDDHHmm-full` | **Full** — Node.js 24 LTS + npm/npx + Python3 built-in for local stdio MCPs |
+| `latest` / `full` / `1.0.YYYYMMDDHHmm` | **Full (default)** — Node 24 + npm/npx, Python 3.12, uv/uvx and bubblewrap built in; local stdio works out of the box |
+| `slim` / `1.0.YYYYMMDDHHmm-slim` | **Slim** — Alpine, no local runtime at all; remote and OpenAPI upstreams only |
 
 ```bash
-# Slim (default)
+# Full (default, local stdio works out of the box)
 docker pull xylplm/mcp-proxy-gateway:latest
 docker pull xylplm/mcp-proxy-gateway:1.0.202606071302
 
-# Full (Node.js 24 LTS + Python3)
-docker pull xylplm/mcp-proxy-gateway:full
-docker pull xylplm/mcp-proxy-gateway:1.0.202606071302-full
+# Slim (pure gateway aggregation, smallest image)
+docker pull xylplm/mcp-proxy-gateway:slim
+docker pull xylplm/mcp-proxy-gateway:1.0.202606071302-slim
 ```
 
 > `stdio` upstreams start local subprocesses beside the gateway:
-> - **Default `:latest` (slim)** has no Node / Python / uv. Use the admin **Runtime** controlled install for Node/uv, or drop tools into `$MPG_DATA_DIR/runtime`.
-> - **`:full`** ships Node.js 24 LTS (npm/npx) and Python3 for ready-to-use local MCPs; you can still install uv via the admin catalog. The built-in Node comes from the same official tarball as the managed install (identical version and SHA256), so the two never diverge.
-> - Managed Node, uv, npm and pip installation, removal and dependency management are supported only on the official `linux/amd64` and `linux/arm64` Docker/OCI images. Native Windows/macOS and Windows containers are unsupported; Docker Desktop is supported only with its Linux containers engine and an official image.
-> See [docs/runtime.md](docs/runtime.md). Remote SSE, Streamable HTTP, WebSocket and OpenAPI do not need local toolchains.
+> - **Default `:latest` (full)** ships Node 24 (npm/npx), Python 3.12, uv/uvx and bubblewrap, so templates and local MCPs work immediately. Runtimes are pinned by the image and never downloaded at runtime.
+> - **`:slim`** has no local runtime. The admin console hides the Script Center and filters out stdio templates and transports. Remote SSE, Streamable HTTP, WebSocket and OpenAPI upstreams are unaffected.
+> - The data volume `$MPG_DATA_DIR/runtime` only stores shared npm / pip dependencies plus executables you drop in yourself (`runtime/bin` takes precedence over the image), so container updates never lose them.
+> See [docs/runtime.md](docs/runtime.md).
 
 ## Service Endpoints
 
@@ -357,8 +357,8 @@ mcp-proxy-gateway/
 │   ├── transport/          # Upstream transport adapters
 │   └── xiaozhi/            # XiaoZhi AI integration
 ├── web/                    # Vue 3 admin console
-├── Dockerfile              # Slim Debian bookworm-slim/glibc image (default :latest)
-├── Dockerfile.full         # Full image (:full, Node + Python)
+├── Dockerfile              # Slim image (:slim, Alpine, no runtime)
+├── Dockerfile.full         # Full image (default :latest / :full, Node + Python + uv)
 └── .github/workflows/      # Release pipeline
 ```
 
@@ -370,8 +370,8 @@ The release workflow lives in `.github/workflows/release.yml` and is triggered m
 - `version`: generate `1.0.<YYYYMMDDHHmm>` in Beijing time.
 - `build-frontend`: write the frontend version, run `npm run build`, upload `web/dist`.
 - `build-backend`: build static `linux/amd64` and `linux/arm64` binaries with embedded frontend assets.
-- `docker`: slim multi-arch image (`:latest` / `:<version>`).
-- `docker-full`: full multi-arch image (`:full` / `:<version>-full` with Node/Python).
+- `docker-full`: full multi-arch image (`:latest` / `:full` / `:<version>` with Node/Python/uv).
+- `docker-slim`: slim multi-arch image (`:slim` / `:<version>-slim`).
 - `release`: create the `v<version>` Git tag and GitHub Release.
 
 Required repository secrets:

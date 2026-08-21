@@ -18,10 +18,6 @@ import (
 // 编译期确认 *rtenv.Service 满足运行环境窄接口（含路径浏览）。
 var _ RuntimeEnvironmentService = (*rtenv.Service)(nil)
 
-type runtimeInstallRequest struct {
-	PackageID string `json:"packageId"`
-}
-
 type runtimeDepRequest struct {
 	Kind string `json:"kind"`
 	Spec string `json:"spec"`
@@ -41,13 +37,9 @@ type runtimePreflightRequest struct {
 func (r *Router) registerRuntimeRoutes(g *gin.RouterGroup) {
 	rt := g.Group("/runtime")
 	rt.GET("/summary", r.runtimeSummary)
-	rt.GET("/catalog", r.runtimeCatalog)
 	rt.GET("/tools", r.runtimeTools)
 	rt.POST("/directory/inspect", r.runtimeDirectoryInspect)
 	rt.POST("/preflight", r.runtimePreflight)
-	rt.POST("/install/preview", r.runtimeInstallPreview)
-	rt.POST("/install", r.runtimeInstall)
-	rt.POST("/uninstall", r.runtimeUninstall)
 	// 依赖管理：npm/pip 第三方包的列表/安装/卸载。
 	rt.GET("/deps", r.runtimeListDeps)
 	rt.POST("/deps/install", r.runtimeInstallDep)
@@ -60,14 +52,6 @@ func (r *Router) runtimeSummary(c *gin.Context) {
 		return
 	}
 	respondOK(c, r.runtimeEnv.Summary())
-}
-
-func (r *Router) runtimeCatalog(c *gin.Context) {
-	if r.runtimeEnv == nil {
-		respondServiceUnavailable(c, "运行环境服务未就绪")
-		return
-	}
-	respondOK(c, r.runtimeEnv.Catalog())
 }
 
 func (r *Router) runtimeTools(c *gin.Context) {
@@ -180,93 +164,6 @@ func validateRuntimePreflightRequest(req runtimePreflightRequest) error {
 	return nil
 }
 
-func (r *Router) runtimeInstallPreview(c *gin.Context) {
-	if r.runtimeEnv == nil {
-		respondServiceUnavailable(c, "运行环境服务未就绪")
-		return
-	}
-	var req runtimeInstallRequest
-	if !bindJSON(c, &req) {
-		return
-	}
-	pkgID := strings.TrimSpace(req.PackageID)
-	if pkgID == "" {
-		respondError(c, domain.NewValidationError("packageId 不能为空", map[string]string{
-			"packageId": "必填",
-		}))
-		return
-	}
-	item, err := r.runtimeEnv.PreviewInstall(pkgID)
-	if err != nil {
-		if errors.Is(err, rtenv.ErrManagedRuntimeUnsupported) {
-			respondError(c, domain.NewValidationError(err.Error(), map[string]string{"packageId": err.Error()}))
-			return
-		}
-		respondError(c, domain.NewValidationError(err.Error(), map[string]string{
-			"packageId": err.Error(),
-		}))
-		return
-	}
-	respondOK(c, item)
-}
-
-func (r *Router) runtimeInstall(c *gin.Context) {
-	if r.runtimeEnv == nil {
-		respondServiceUnavailable(c, "运行环境服务未就绪")
-		return
-	}
-	var req runtimeInstallRequest
-	if !bindJSON(c, &req) {
-		return
-	}
-	pkgID := strings.TrimSpace(req.PackageID)
-	if pkgID == "" {
-		respondError(c, domain.NewValidationError("packageId 不能为空", map[string]string{
-			"packageId": "必填",
-		}))
-		return
-	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Minute)
-	defer cancel()
-	result, err := r.runtimeEnv.InstallPackage(ctx, pkgID)
-	if err != nil {
-		msg := err.Error()
-		if errors.Is(err, rtenv.ErrManagedRuntimeUnsupported) || strings.Contains(msg, "未知") || strings.Contains(msg, "校验和") {
-			respondError(c, domain.NewValidationError(msg, map[string]string{"packageId": msg}))
-			return
-		}
-		respondError(c, domain.NewError(domain.CodeInternal, "安装失败："+msg))
-		return
-	}
-	r.recordUpdate(c, audit.ResourceSetting, "runtime:install:"+result.ID)
-	respondOK(c, result)
-}
-
-func (r *Router) runtimeUninstall(c *gin.Context) {
-	if r.runtimeEnv == nil {
-		respondServiceUnavailable(c, "运行环境服务未就绪")
-		return
-	}
-	var req runtimeInstallRequest
-	if !bindJSON(c, &req) {
-		return
-	}
-	pkgID := strings.TrimSpace(req.PackageID)
-	if pkgID == "" {
-		respondError(c, domain.NewValidationError("packageId 不能为空", map[string]string{
-			"packageId": "必填",
-		}))
-		return
-	}
-	if err := r.runtimeEnv.UninstallPackage(pkgID); err != nil {
-		msg := err.Error()
-		respondError(c, domain.NewValidationError(msg, map[string]string{"packageId": msg}))
-		return
-	}
-	r.recordUpdate(c, audit.ResourceSetting, "runtime:uninstall:"+pkgID)
-	respondOK(c, gin.H{"uninstalled": true, "packageId": pkgID})
-}
-
 // runtimeListDeps 列出某类运行时已安装的第三方包。
 func (r *Router) runtimeListDeps(c *gin.Context) {
 	if r.runtimeEnv == nil {
@@ -284,7 +181,7 @@ func (r *Router) runtimeListDeps(c *gin.Context) {
 	result, err := r.runtimeEnv.ListDeps(ctx, kind)
 	if err != nil {
 		msg := err.Error()
-		if errors.Is(err, rtenv.ErrManagedRuntimeUnsupported) {
+		if errors.Is(err, rtenv.ErrLocalRuntimeUnsupported) {
 			respondError(c, domain.NewValidationError(msg, map[string]string{"kind": msg}))
 			return
 		}
@@ -323,7 +220,7 @@ func (r *Router) runtimeInstallDep(c *gin.Context) {
 	result, err := r.runtimeEnv.InstallDep(ctx, kind, spec)
 	if err != nil {
 		msg := err.Error()
-		if errors.Is(err, rtenv.ErrManagedRuntimeUnsupported) || strings.Contains(msg, "不能为空") || strings.Contains(msg, "非法") {
+		if errors.Is(err, rtenv.ErrLocalRuntimeUnsupported) || strings.Contains(msg, "不能为空") || strings.Contains(msg, "非法") {
 			respondError(c, domain.NewValidationError(msg, map[string]string{"spec": msg}))
 			return
 		}
@@ -363,7 +260,7 @@ func (r *Router) runtimeUninstallDep(c *gin.Context) {
 	result, err := r.runtimeEnv.UninstallDep(ctx, kind, name)
 	if err != nil {
 		msg := err.Error()
-		if errors.Is(err, rtenv.ErrManagedRuntimeUnsupported) || strings.Contains(msg, "不能为空") || strings.Contains(msg, "非法") {
+		if errors.Is(err, rtenv.ErrLocalRuntimeUnsupported) || strings.Contains(msg, "不能为空") || strings.Contains(msg, "非法") {
 			respondError(c, domain.NewValidationError(msg, map[string]string{"name": msg}))
 			return
 		}

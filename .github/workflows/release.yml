@@ -7,8 +7,8 @@
 #   2) version         —— 生成日期版本号 1.0.<YYYYMMDDHHmm>（北京时间）。
 #   3) build-frontend   —— 独立构建前端并上传 artifact。
 #   4) build-backend   —— 矩阵并行编译 amd64/arm64 后端二进制（依赖前端 artifact）。
-#   5) docker          —— 精简镜像 Dockerfile → :latest / :<version>（无 Node/Python）。
-#   6) docker-full     —— 完整镜像 Dockerfile.full → :full / :<version>-full（内置 Node/Python）。
+#   5) docker-full     —— 完整镜像 Dockerfile.full → :latest / :full / :<version>（默认）。
+#   6) docker-slim     —— 精简镜像 Dockerfile → :slim / :<version>-slim（无任何运行时）。
 #   7) release         —— 自动打 git tag 并创建 GitHub Release。
 #
 # 约定写死的固定值（无需环境变量/密钥）：
@@ -187,61 +187,9 @@ jobs:
           retention-days: 1
 
   # ===========================================================================
-  # Docker 精简版：默认 :latest / :<version>（无 Node/Python）。
-  # ===========================================================================
-  docker:
-    name: 构建并推送精简版镜像
-    needs: [version, build-backend]
-    runs-on: ubuntu-latest
-    steps:
-      - name: 检出代码
-        uses: actions/checkout@v7
-
-      - name: 下载 amd64 二进制
-        uses: actions/download-artifact@v8
-        with:
-          name: bin-amd64
-          path: bin/
-
-      - name: 下载 arm64 二进制
-        uses: actions/download-artifact@v8
-        with:
-          name: bin-arm64
-          path: bin/
-
-      - name: 准备 Docker 构建上下文
-        run: cp entrypoint.sh bin/
-
-      - name: Docker Setup Buildx
-        uses: docker/setup-buildx-action@v4
-
-      - name: Docker Login
-        uses: docker/login-action@v4
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Build and push Docker images
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: ./Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          provenance: false
-          tags: |
-            ${{ env.IMAGE_NAME }}:${{ needs.version.outputs.version }}
-            ${{ env.IMAGE_NAME }}:latest
-          labels: |
-            org.opencontainers.image.title=MCP Proxy Gateway
-            org.opencontainers.image.description=Slim gateway image without Node/Python (install via admin Runtime or volume)
-            org.opencontainers.image.version=${{ needs.version.outputs.version }}
-            org.opencontainers.image.source=https://github.com/xylplm/mcp-proxy-gateway
-            org.opencontainers.image.revision=${{ github.sha }}
-
-  # ===========================================================================
-  # Docker 完整版：:full / :<version>-full（内置 Node.js / npm / Python3）。
-  # 不覆盖 :latest，默认仍为精简版。apk 多架构安装依赖 QEMU。
+  # Docker 完整版（默认）：:latest / :full / :<version>。
+  # 内置 Node 24、Python 3.12、uv/uvx、bubblewrap，本地 stdio 开箱即用。
+  # 基础镜像为 python:3.12-slim，apt 多架构安装依赖 QEMU。
   # ===========================================================================
   docker-full:
     name: 构建并推送完整版镜像
@@ -289,11 +237,69 @@ jobs:
           push: true
           provenance: false
           tags: |
+            ${{ env.IMAGE_NAME }}:${{ needs.version.outputs.version }}
             ${{ env.IMAGE_NAME }}:${{ needs.version.outputs.version }}-full
+            ${{ env.IMAGE_NAME }}:latest
             ${{ env.IMAGE_NAME }}:full
           labels: |
-            org.opencontainers.image.title=MCP Proxy Gateway (Full)
-            org.opencontainers.image.description=Full gateway image with Node.js and Python3 for local stdio MCPs
+            org.opencontainers.image.title=MCP Proxy Gateway
+            org.opencontainers.image.description=Gateway with built-in Node.js, Python, uv/uvx and bubblewrap for local stdio MCPs
+            org.opencontainers.image.version=${{ needs.version.outputs.version }}
+            org.opencontainers.image.source=https://github.com/xylplm/mcp-proxy-gateway
+            org.opencontainers.image.revision=${{ github.sha }}
+
+  # ===========================================================================
+  # Docker 精简版：:slim / :<version>-slim（Alpine，不含任何本地运行时）。
+  # 不覆盖 :latest —— 默认镜像是完整版。
+  # ===========================================================================
+  docker-slim:
+    name: 构建并推送精简版镜像
+    needs: [version, build-backend]
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v7
+
+      - name: 下载 amd64 二进制
+        uses: actions/download-artifact@v8
+        with:
+          name: bin-amd64
+          path: bin/
+
+      - name: 下载 arm64 二进制
+        uses: actions/download-artifact@v8
+        with:
+          name: bin-arm64
+          path: bin/
+
+      - name: 准备 Docker 构建上下文
+        run: |
+          chmod +x bin/mpg-linux-* || true
+          ls -lh bin/
+
+      - name: Docker Setup Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Docker Login
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push slim Docker images
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: false
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ needs.version.outputs.version }}-slim
+            ${{ env.IMAGE_NAME }}:slim
+          labels: |
+            org.opencontainers.image.title=MCP Proxy Gateway (Slim)
+            org.opencontainers.image.description=Slim gateway image without any local runtime (remote and OpenAPI upstreams only)
             org.opencontainers.image.version=${{ needs.version.outputs.version }}
             org.opencontainers.image.source=https://github.com/xylplm/mcp-proxy-gateway
             org.opencontainers.image.revision=${{ github.sha }}
@@ -303,7 +309,7 @@ jobs:
   # ===========================================================================
   release:
     name: 打 tag 并发布 Release
-    needs: [version, docker, docker-full]
+    needs: [version, docker-full, docker-slim]
     runs-on: ubuntu-latest
     steps:
       - name: 检出代码
@@ -321,18 +327,22 @@ jobs:
 
             多架构 Docker 镜像（linux/amd64、linux/arm64）：
 
-            **精简版（默认，无 Node/Python）**
+            **完整版（默认，内置 Node 24 / Python 3.12 / uv、uvx / bubblewrap）**
             - `xylplm/mcp-proxy-gateway:${{ needs.version.outputs.version }}`
             - `xylplm/mcp-proxy-gateway:latest`
+            - `xylplm/mcp-proxy-gateway:full`（与 `:latest` 同一镜像，兼容旧标签）
 
-            **完整版（内置 Node.js / npm / Python3）**
-            - `xylplm/mcp-proxy-gateway:${{ needs.version.outputs.version }}-full`
-            - `xylplm/mcp-proxy-gateway:full`
+            **精简版（Alpine，不含任何本地运行时，仅远程与 OpenAPI 上游）**
+            - `xylplm/mcp-proxy-gateway:${{ needs.version.outputs.version }}-slim`
+            - `xylplm/mcp-proxy-gateway:slim`
 
             拉取示例：
             ```bash
-            # 默认精简
+            # 默认完整版，本地 stdio 开箱即用
             docker pull xylplm/mcp-proxy-gateway:${{ needs.version.outputs.version }}
-            # 本地 stdio 开箱即用
-            docker pull xylplm/mcp-proxy-gateway:full
+            # 纯网关聚合，体积最小
+            docker pull xylplm/mcp-proxy-gateway:slim
             ```
+
+            > 运行时不再在运行期下载：Node / Python / uv 由完整镜像内置，数据卷只保存
+            > npm / pip 共享依赖（`runtime/npm`、`runtime/pip`），容器更新不丢。

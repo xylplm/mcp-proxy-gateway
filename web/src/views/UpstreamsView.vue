@@ -18,7 +18,7 @@ import TemplateMarketModal from '@/components/upstreams/TemplateMarketModal.vue'
 import { useBreakpoint } from '@/composables/useBreakpoint'
 import { useConfirm } from '@/composables/useConfirm'
 import { useToast } from '@/composables/useToast'
-import { installRuntimePackage, preflightRuntime, type RuntimePreflightResult } from '@/api/runtime'
+import { preflightRuntime, type RuntimePreflightResult } from '@/api/runtime'
 import { normalizeRequirements } from '@/utils/runtimeRequirements'
 import {
   normalizeSecurityProfile,
@@ -277,7 +277,6 @@ const detailSummary = computed(() =>
 
 const detailPreflight = ref<RuntimePreflightResult | null>(null)
 const detailPreflightLoading = ref(false)
-const detailInstallingPackageId = ref('')
 let detailPreflightSeq = 0
 
 const detailIsStdio = computed(() => detailUpstream.value?.config.transport === 'stdio')
@@ -330,28 +329,6 @@ async function loadDetailPreflight(): Promise<void> {
     if (seq === detailPreflightSeq) detailPreflight.value = null
   } finally {
     if (seq === detailPreflightSeq) detailPreflightLoading.value = false
-  }
-}
-
-async function installFromDetail(packageId: string): Promise<void> {
-  if (!packageId || detailInstallingPackageId.value !== '') return
-  const ok = await confirm({
-    title: '安装运行时',
-    message: '将从官方源下载固定版本到数据卷（SHA256 校验）。官方源不可达时会自动尝试国内镜像源。完整进度与日志可在「运行环境」页查看。是否继续？',
-    confirmText: '安装',
-    tone: 'warning',
-  })
-  if (!ok) return
-  detailInstallingPackageId.value = packageId
-  try {
-    const result = await installRuntimePackage(packageId)
-    toast.success(result.reused ? `${result.name} 已存在` : `${result.name} 安装完成`)
-    await loadDetailPreflight()
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : '安装失败'
-    toast.error(`${msg}。可在「运行环境」页查看安装日志与镜像回退详情。`)
-  } finally {
-    detailInstallingPackageId.value = ''
   }
 }
 
@@ -1931,15 +1908,6 @@ function goPage(p: number): void {
                     >
                       {{ item.available ? '可用' : '缺失' }}
                     </span>
-                    <button
-                      v-if="!item.available && item.fixable && item.packageId"
-                      type="button"
-                      class="text-brand-600 dark:text-brand-400 font-medium hover:underline disabled:opacity-50"
-                      :disabled="detailInstallingPackageId !== ''"
-                      @click="installFromDetail(item.packageId!)"
-                    >
-                      {{ detailInstallingPackageId === item.packageId ? '安装中…' : '一键安装' }}
-                    </button>
                   </div>
                 </div>
               </div>

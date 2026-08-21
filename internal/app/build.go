@@ -91,10 +91,9 @@ func (a *App) build(envCfg config.EnvConfig) error {
 		return rtenv.ResolveRuntimeDir(env.DataDir, env.RuntimeDir)
 	}
 	transport.SetRuntimeDirProvider(runtimeDirFn)
-	// 受管运行时目录仅由官方 Linux Docker/OCI 镜像创建；非支持环境仍可使用远程上游与只读探测。
-	if rtenv.ManagedRuntimeSupport().Supported {
-		_ = rtenv.EnsureRuntimeLayout(runtimeDirFn())
-	}
+	// 卷内运行时目录只存放用户自放的可执行文件与 npm/pip 共享依赖，任何平台都可创建；
+	// 只读卷或权限不足时忽略失败，远程上游与只读探测仍可用。
+	_ = rtenv.EnsureRuntimeLayout(runtimeDirFn())
 	runtimeSvc := rtenv.NewService(
 		policyFromCfg,
 		func() string { return a.cfg.Env().DataDir },

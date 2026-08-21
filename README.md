@@ -184,24 +184,24 @@ docker run -d --name mcp-proxy-gateway \
 
 | 标签 | 说明 |
 | --- | --- |
-| `latest` / `1.0.YYYYMMDDHHmm` | **精简（默认）**：无 Node/Python；可用管理台预置安装或数据卷放入工具 |
-| `full` / `1.0.YYYYMMDDHHmm-full` | **完整**：内置 Node.js 24 LTS + npm/npx + Python3，本地 stdio 开箱即用 |
+| `latest` / `full` / `1.0.YYYYMMDDHHmm` | **完整（默认）**：内置 Node 24 + npm/npx + Python 3.12 + uv/uvx + bubblewrap，本地 stdio 开箱即用 |
+| `slim` / `1.0.YYYYMMDDHHmm-slim` | **精简**：Alpine，不含任何本地运行时，仅远程与 OpenAPI 上游 |
 
 ```bash
-# 精简版（默认，体积小；远程 MCP / 自行装运行时）
+# 完整版（默认，本地 stdio 开箱即用）
 docker pull xylplm/mcp-proxy-gateway:latest
 docker pull xylplm/mcp-proxy-gateway:1.0.202606071302
 
-# 完整版（内置 Node.js 24 LTS + Python3，本地 stdio 开箱即用）
-docker pull xylplm/mcp-proxy-gateway:full
-docker pull xylplm/mcp-proxy-gateway:1.0.202606071302-full
+# 精简版（纯网关聚合，体积最小）
+docker pull xylplm/mcp-proxy-gateway:slim
+docker pull xylplm/mcp-proxy-gateway:1.0.202606071302-slim
 ```
 
 > `stdio` 上游会在网关进程旁启动本地子进程：
-> - **默认 `:latest` 精简镜像**不含 Node / Python / uv；可通过管理台「运行环境」预置安装 Node/uv，或将工具放入数据卷 `$MPG_DATA_DIR/runtime`。
-> - **`:full` 完整镜像**已内置 Node.js 24 LTS（含 npm/npx）与 Python3，适合模板与本地 MCP 拿来即用；仍可预置安装 uv。内置 Node 与受管预置安装使用同一份官方 tarball（同版本同校验和），不会出现两份版本不一致的 node。
-> - 受管 Node、uv、npm、pip 的安装、卸载和依赖管理仅支持官方 `linux/amd64`、`linux/arm64` Docker/OCI 镜像。原生 Windows/macOS 与 Windows 容器不支持；Docker Desktop 仅在 Linux containers 引擎运行官方镜像时支持。
-> 详见 [docs/runtime.md](docs/runtime.md)。远程 SSE、Streamable HTTP、WebSocket 与 OpenAPI 上游不依赖本地工具。
+> - **默认 `:latest` 完整镜像**已内置 Node 24（含 npm/npx）、Python 3.12、uv/uvx 与 bubblewrap，模板与本地 MCP 拿来即用。运行时由镜像固定，不在运行期下载。
+> - **`:slim` 精简镜像**不含任何本地运行时；管理台会隐藏脚本中心、过滤 stdio 模板与传输选项。远程 SSE、Streamable HTTP、WebSocket 与 OpenAPI 上游不受影响。
+> - 数据卷 `$MPG_DATA_DIR/runtime` 只保存 npm / pip 共享依赖与用户手放的可执行文件（`runtime/bin` 优先于镜像自带版本），容器更新不会丢。
+> 详见 [docs/runtime.md](docs/runtime.md)。
 
 ## 服务入口
 
@@ -357,8 +357,8 @@ mcp-proxy-gateway/
 │   ├── transport/          # 上游传输适配
 │   └── xiaozhi/            # 小智 AI 接入
 ├── web/                    # Vue 3 管理台
-├── Dockerfile              # 精简 Debian bookworm-slim/glibc 镜像（默认 :latest）
-├── Dockerfile.full         # 完整镜像（:full，内置 Node/Python）
+├── Dockerfile              # 精简镜像（:slim，Alpine，无运行时）
+├── Dockerfile.full         # 完整镜像（默认 :latest / :full，内置 Node/Python/uv）
 └── .github/workflows/      # 发布流水线
 ```
 
@@ -370,8 +370,8 @@ mcp-proxy-gateway/
 - `version`：按北京时间生成 `1.0.<YYYYMMDDHHmm>` 版本号。
 - `build-frontend`：写入前端版本号，执行 `npm run build`，上传 `web/dist`。
 - `build-backend`：矩阵编译 `linux/amd64` 与 `linux/arm64` 静态二进制，并内嵌前端产物。
-- `docker`：精简多架构镜像（`:latest` / `:<version>`）。
-- `docker-full`：完整多架构镜像（`:full` / `:<version>-full`，内置 Node/Python）。
+- `docker-full`：完整多架构镜像（`:latest` / `:full` / `:<version>`，内置 Node/Python/uv）。
+- `docker-slim`：精简多架构镜像（`:slim` / `:<version>-slim`）。
 - `release`：创建 `v<version>` Git tag 与 GitHub Release。
 
 仓库需要配置以下 Secrets：

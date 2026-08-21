@@ -13,7 +13,6 @@ import {
 } from '@/api/upstreams'
 import {
   getRuntimeKnownTools,
-  installRuntimePackage,
   preflightRuntime,
   inspectRuntimeDirectory,
   type DirectoryLaunchEntry,
@@ -55,8 +54,8 @@ import {
   type NetworkAccessMode,
   type StdioSecurityMode,
 } from '@/utils/stdioSecurity'
-import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
+import { useRuntimeCapability } from '@/composables/useRuntimeCapability'
 import PathField from '@/components/common/PathField.vue'
 import StdioLaunchPanel from '@/components/upstreams/StdioLaunchPanel.vue'
 import StdioSecurityPanel from '@/components/upstreams/StdioSecurityPanel.vue'
@@ -155,8 +154,12 @@ const currentTransport = computed(() => transportHelp[form.transport])
 const isRemoteTransport = computed(() => form.transport !== 'stdio')
 const isOpenAPITransport = computed(() => form.transport === 'openapi')
 
+// 精简镜像没有解释器，stdio 上游必然启动失败；编辑既有 stdio 上游时仍保留该选项，
+// 否则表单会显示不出当前传输类型。
 const transportCards = computed(() =>
-  TRANSPORT_OPTIONS.map((opt) => ({
+  TRANSPORT_OPTIONS.filter(
+    (opt) => opt.value !== 'stdio' || localRuntimeSupported.value || form.transport === 'stdio',
+  ).map((opt) => ({
     value: opt.value,
     label: transportHelp[opt.value].title,
     subtitle: opt.label,
@@ -275,8 +278,8 @@ const form = reactive<{
   unrestrictedAck: false,
 })
 
-const toast = useToast()
 const { confirm } = useConfirm()
+const { localRuntimeSupported } = useRuntimeCapability()
 const placeholderValues = reactive<Record<string, string>>({})
 const placeholders = ref<Placeholder[]>([])
 const presetParams = ref<ConnParams>({})
@@ -300,7 +303,6 @@ const directoryEntries = ref<DirectoryLaunchEntry[]>([])
 const directoryWarnings = ref<string[]>([])
 const preflight = ref<RuntimePreflightResult | null>(null)
 const preflightLoading = ref(false)
-const installingPackageId = ref('')
 let preflightTimer: ReturnType<typeof setTimeout> | null = null
 let preflightSeq = 0
 
@@ -1041,15 +1043,15 @@ async function ensureKnownTools(): Promise<void> {
   try {
     knownTools.value = await getRuntimeKnownTools()
   } catch {
+    // 兜底与后端 KnownTools() 保持一致：仅用于输入期间的乐观提示，实际预检以后端为准。
     knownTools.value = [
-      { name: 'node', label: 'Node.js', packageId: 'node-24.19.0', inferFrom: ['node', 'npx', 'npm'], templateRuntimes: ['node'] },
-      { name: 'npx', label: 'npx', packageId: 'node-24.19.0', inferFrom: ['npx'], templateRuntimes: ['node'] },
-      { name: 'npm', label: 'npm', packageId: 'node-24.19.0', inferFrom: ['npm'], templateRuntimes: ['node'] },
+      { name: 'node', label: 'Node.js', inferFrom: ['node', 'npx', 'npm'], templateRuntimes: ['node'] },
+      { name: 'npx', label: 'npx', inferFrom: ['npx'], templateRuntimes: ['node'] },
+      { name: 'npm', label: 'npm', inferFrom: ['npm'], templateRuntimes: ['node'] },
       { name: 'python', label: 'Python', inferFrom: ['python'], templateRuntimes: ['python'] },
       { name: 'python3', label: 'Python 3', inferFrom: ['python3'], templateRuntimes: ['python'] },
-      { name: 'uv', label: 'uv', packageId: 'uv-0.6.14', inferFrom: ['uv', 'uvx'], templateRuntimes: ['uv', 'uvx'] },
-      { name: 'uvx', label: 'uvx', packageId: 'uv-0.6.14', inferFrom: ['uvx'], templateRuntimes: ['uv', 'uvx'] },
-      { name: 'docker', label: 'Docker', inferFrom: ['docker'], templateRuntimes: ['docker'] },
+      { name: 'uv', label: 'uv', inferFrom: ['uv', 'uvx'], templateRuntimes: ['uv', 'uvx'] },
+      { name: 'uvx', label: 'uvx', inferFrom: ['uvx'], templateRuntimes: ['uv', 'uvx'] },
     ]
   }
 }
@@ -1123,29 +1125,6 @@ function applySuggestedTools(): void {
   form.reqMode = 'manual'
   form.reqTools = [...suggestedFromCommand.value]
   schedulePreflight()
-}
-
-async function handleInstallPackage(packageId: string): Promise<void> {
-  if (!packageId || installingPackageId.value !== '') return
-  const ok = await confirm({
-    title: '安装运行时',
-    message: '将从官方源下载固定版本到数据卷（SHA256 校验）。官方源不可达时会自动尝试国内镜像源。完整进度与日志可在「运行环境」页查看。是否继续？',
-    confirmText: '安装',
-    tone: 'warning',
-  })
-  if (!ok) return
-  installingPackageId.value = packageId
-  try {
-    const result = await installRuntimePackage(packageId)
-    toast.success(result.reused ? `${result.name} 已存在` : `${result.name} 安装完成`)
-    await runPreflight()
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : '安装失败'
-    // toast 简短提示，并引导去运行环境页看完整日志（国内网络下常见下载超时/被墙）。
-    toast.error(`${msg}。可在「运行环境」页查看安装日志与镜像回退详情。`)
-  } finally {
-    installingPackageId.value = ''
-  }
 }
 
 function itemStatusClass(available: boolean): string {
@@ -2017,15 +1996,6 @@ const errorClass = 'mt-1.5 text-xs text-error-500'
                     >
                       {{ item.warning ? '权限不足' : item.available ? '可用' : '缺失' }}
                     </span>
-                    <button
-                      v-if="!item.available && !item.warning && item.fixable && item.packageId"
-                      type="button"
-                      class="text-brand-600 dark:text-brand-400 font-medium hover:underline disabled:opacity-50"
-                      :disabled="installingPackageId !== ''"
-                      @click="handleInstallPackage(item.packageId!)"
-                    >
-                      {{ installingPackageId === item.packageId ? '安装中…' : '一键安装' }}
-                    </button>
                   </span>
                 </div>
               </div>
@@ -2235,15 +2205,6 @@ const errorClass = 'mt-1.5 text-xs text-error-500'
                             >
                               {{ item.warning ? '权限不足' : item.available ? '可用' : '缺失' }}
                             </span>
-                            <button
-                              v-if="!item.available && !item.warning && item.fixable && item.packageId"
-                              type="button"
-                              class="text-brand-600 dark:text-brand-400 font-medium hover:underline disabled:opacity-50"
-                              :disabled="installingPackageId !== ''"
-                              @click="handleInstallPackage(item.packageId!)"
-                            >
-                              {{ installingPackageId === item.packageId ? '安装中…' : '一键安装' }}
-                            </button>
                           </span>
                         </div>
                       </div>

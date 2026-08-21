@@ -101,7 +101,7 @@ func ResolveCommandStrictRuntime(command string, prefixes []string) (string, err
 		base = raw
 	}
 	return "", fmt.Errorf(
-		"严格模式下未在运行时目录找到 %q，请使用「运行环境」预置安装或将工具放入 runtime/bin",
+		"严格模式下未在运行时目录找到 %q，请将该工具放入 runtime/bin 或改用标准安全档位",
 		base,
 	)
 }
@@ -120,6 +120,53 @@ func ResolveCommand(command string) (string, error) {
 	return ResolveCommandWithPrefixes(command, nil)
 }
 
+// runtimeRootOfPrefix 由一个 PATH 前缀目录反推严格档允许的运行时根。
+//
+// 做法是剥掉与 runtimePathCandidates 同源的相对后缀（`bin`、
+// `npm/node_modules/.bin`、`pip/bin`），而不是按目录名逐级上跳 —— 后者在运行时目录
+// 本身叫 pip/npm 时会把父目录也放进允许范围。
+//
+// 根必须比前缀宽一层：npm 的 `.bin` 条目是指向 `../<pkg>/bin/*.js` 的符号链接，
+// 解析后落在 node_modules 内而不在 `.bin` 内，根取到卷根才不会被误判越界。
+// 多个后缀同时匹配时取最长的根，即最窄的允许范围。
+// 没有任何后缀匹配（调用方传入了非本包生成的前缀）时退回前缀自身，保持最保守。
+func runtimeRootOfPrefix(prefix string) string {
+	best := ""
+	for _, suffix := range runtimePathSuffixes() {
+		root, ok := trimPathSuffix(prefix, suffix)
+		if !ok {
+			continue
+		}
+		if len(root) > len(best) {
+			best = root
+		}
+	}
+	if best == "" {
+		return prefix
+	}
+	return best
+}
+
+// trimPathSuffix 在路径分隔符边界上剥掉 suffix，返回剩余前缀。
+// 带上分隔符比较，避免 ".../mybin" 被 "bin" 误匹配。
+func trimPathSuffix(path, suffix string) (string, bool) {
+	clean := filepath.Clean(path)
+	tail := string(filepath.Separator) + filepath.Clean(suffix)
+	if len(clean) <= len(tail) {
+		return "", false
+	}
+	got := clean[len(clean)-len(tail):]
+	// Windows 路径大小写不敏感；后缀均为 ASCII，按字节切片安全。
+	if runtime.GOOS == "windows" {
+		if !strings.EqualFold(got, tail) {
+			return "", false
+		}
+	} else if got != tail {
+		return "", false
+	}
+	return clean[:len(clean)-len(tail)], true
+}
+
 func strictRuntimeRoots(prefixes []string) []string {
 	roots := make([]string, 0, len(prefixes))
 	seen := map[string]struct{}{}
@@ -128,13 +175,7 @@ func strictRuntimeRoots(prefixes []string) []string {
 		if clean == "" {
 			continue
 		}
-		parent := filepath.Dir(clean)
-		runtimeRoot := parent
-		switch strings.ToLower(filepath.Base(parent)) {
-		case RuntimeSubdirNode, RuntimeSubdirPython, RuntimeSubdirUV:
-			runtimeRoot = filepath.Dir(parent)
-		}
-		rootResolved, err := filepath.EvalSymlinks(runtimeRoot)
+		rootResolved, err := filepath.EvalSymlinks(runtimeRootOfPrefix(clean))
 		if err != nil {
 			continue
 		}

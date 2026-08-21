@@ -178,8 +178,10 @@ func BuildChildEnvWithOptions(
 	put("MPG_STDIO_SECURITY_MODE", string(mode), false)
 
 	managedNodePath := ""
+	managedPythonPath := ""
 	if strings.TrimSpace(opts.RuntimeDir) != "" {
 		managedNodePath = filepath.Join(opts.RuntimeDir, RuntimeSubdirNpm, "node_modules")
+		managedPythonPath = PipTargetDir(opts.RuntimeDir)
 	}
 
 	for k, v := range userEnv {
@@ -195,13 +197,22 @@ func BuildChildEnvWithOptions(
 		put(key, v, false)
 	}
 
-	// 受管共享依赖始终位于模块搜索路径最前，且必须在用户 env 之后写入才能保证优先级。
+	// 卷内共享依赖始终位于模块搜索路径最前，且必须在用户 env 之后写入才能保证优先级。
 	if managedNodePath != "" {
 		if mode == SecurityModeStrict {
 			// 严格档只保留受管根，不接受父进程或上游声明的额外模块搜索路径。
 			put("NODE_PATH", managedNodePath, false)
 		} else {
 			put("NODE_PATH", PrependPath(lookupEnv(merged, "NODE_PATH"), []string{managedNodePath}), false)
+		}
+	}
+	// pip 共享依赖不走 venv：uv pip --target 的产物是平铺 site-packages，
+	// 只有 PYTHONPATH 指向它，镜像自带解释器才能 import 到。
+	if managedPythonPath != "" {
+		if mode == SecurityModeStrict {
+			put("PYTHONPATH", managedPythonPath, false)
+		} else {
+			put("PYTHONPATH", PrependPath(lookupEnv(merged, "PYTHONPATH"), []string{managedPythonPath}), false)
 		}
 	}
 	if mode == SecurityModeStrict && len(pathPrefixes) > 0 {

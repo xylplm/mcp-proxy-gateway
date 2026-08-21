@@ -124,13 +124,17 @@ func TestEvaluatePreflightMissingTool(t *testing.T) {
 	if len(res.Items) != 2 {
 		t.Fatalf("items=%d", len(res.Items))
 	}
-	hasInstall := false
+	// 运行时由镜像提供，缺工具只能引导用户去运行环境页排查，没有一键安装动作。
+	hasRuntimeGuide := false
 	for _, a := range res.Actions {
-		if a.Type == "install" && a.PackageID == DefaultNodePackageID {
-			hasInstall = true
+		if a.Type == "install" {
+			t.Fatalf("managed install actions must be gone: %v", res.Actions)
+		}
+		if a.Type == "open_runtime" {
+			hasRuntimeGuide = true
 		}
 	}
-	if !hasInstall {
+	if !hasRuntimeGuide {
 		t.Fatalf("actions=%v", res.Actions)
 	}
 }
@@ -146,7 +150,8 @@ func TestEvaluatePreflightCommandDenied(t *testing.T) {
 	}
 }
 
-func TestEvaluatePreflightInstallActionsStableOrder(t *testing.T) {
+// 多个工具同时缺失时只给一条排查引导，不再按包分裂出多条动作。
+func TestEvaluatePreflightEmitsSingleRuntimeGuideForMultipleMissingTools(t *testing.T) {
 	t.Parallel()
 	res := EvaluatePreflight(PreflightRequest{
 		Transport: "stdio",
@@ -158,19 +163,14 @@ func TestEvaluatePreflightInstallActionsStableOrder(t *testing.T) {
 	}, DefaultPolicy(), "", func(string) (string, error) {
 		return "", errNotFound("missing")
 	})
-	var installIDs []string
+	guides := 0
 	for _, a := range res.Actions {
-		if a.Type == "install" {
-			installIDs = append(installIDs, a.PackageID)
+		if a.Type == "open_runtime" {
+			guides++
 		}
 	}
-	if len(installIDs) < 2 {
-		t.Fatalf("expected multiple install actions, got %v", res.Actions)
-	}
-	for i := 1; i < len(installIDs); i++ {
-		if installIDs[i-1] > installIDs[i] {
-			t.Fatalf("install actions not sorted: %v", installIDs)
-		}
+	if guides != 1 {
+		t.Fatalf("expected exactly one runtime guide action, got %v", res.Actions)
 	}
 }
 

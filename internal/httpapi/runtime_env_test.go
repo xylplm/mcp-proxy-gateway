@@ -16,7 +16,6 @@ import (
 
 type fakeRuntimeEnv struct {
 	summary         rtenv.Summary
-	catalog         []rtenv.CatalogPackage
 	browseStat      rtenv.BrowseStatResult
 	policy          rtenv.Policy
 	listDepsErr     error
@@ -30,36 +29,12 @@ func (f *fakeRuntimeEnv) Policy() rtenv.Policy {
 	}
 	return rtenv.DefaultPolicy()
 }
-func (f *fakeRuntimeEnv) Summary() rtenv.Summary { return f.summary }
-func (f *fakeRuntimeEnv) Catalog() []rtenv.CatalogPackage {
-	if f.catalog != nil {
-		return f.catalog
-	}
-	return nil
-}
+func (f *fakeRuntimeEnv) Summary() rtenv.Summary              { return f.summary }
 func (f *fakeRuntimeEnv) KnownToolCatalog() []rtenv.KnownTool { return rtenv.KnownTools() }
 func (f *fakeRuntimeEnv) Preflight(req rtenv.PreflightRequest) rtenv.PreflightResult {
 	return rtenv.EvaluatePreflight(req, rtenv.DefaultPolicy(), "/data/runtime", func(string) (string, error) {
 		return "/usr/bin/x", nil
 	})
-}
-func (f *fakeRuntimeEnv) PreviewInstall(packageID string) (rtenv.CatalogPackage, error) {
-	if packageID == "bad" {
-		return rtenv.CatalogPackage{}, fmt.Errorf("未知预置包")
-	}
-	return rtenv.CatalogPackage{ID: packageID, Name: "t", Supported: true}, nil
-}
-func (f *fakeRuntimeEnv) InstallPackage(_ context.Context, packageID string) (rtenv.InstallResult, error) {
-	if packageID == "bad" {
-		return rtenv.InstallResult{}, fmt.Errorf("未知预置包")
-	}
-	return rtenv.InstallResult{ID: packageID, Name: "t", Version: "1"}, nil
-}
-func (f *fakeRuntimeEnv) UninstallPackage(packageID string) error {
-	if packageID == "bad" {
-		return fmt.Errorf("未知预置包")
-	}
-	return nil
 }
 func (f *fakeRuntimeEnv) ListDeps(_ context.Context, kind rtenv.DepKind) (rtenv.ListDepsResult, error) {
 	if f.listDepsErr != nil {
@@ -175,35 +150,9 @@ func TestRuntimeDirectoryInspectRejectsBrowseOnlyRoot(t *testing.T) {
 	}
 }
 
-func TestRuntimeInstallPreviewAndInstall(t *testing.T) {
+func TestRuntimeToolsAndPreflight(t *testing.T) {
 	e := newTestEngine(Deps{RuntimeEnv: &fakeRuntimeEnv{}})
-	w := doJSON(e, http.MethodPost, "/api/admin/runtime/install/preview", `{"packageId":"`+rtenv.DefaultNodePackageID+`"}`)
-	if w.Code != http.StatusOK {
-		t.Fatalf("preview status=%d body=%s", w.Code, w.Body.String())
-	}
-	w = doJSON(e, http.MethodPost, "/api/admin/runtime/install", `{"packageId":"`+rtenv.DefaultNodePackageID+`"}`)
-	if w.Code != http.StatusOK {
-		t.Fatalf("install status=%d body=%s", w.Code, w.Body.String())
-	}
-	w = doJSON(e, http.MethodPost, "/api/admin/runtime/install", `{"packageId":"bad"}`)
-	if w.Code == http.StatusOK {
-		t.Fatal("bad package should fail")
-	}
-	w = doJSON(e, http.MethodPost, "/api/admin/runtime/uninstall", `{"packageId":"`+rtenv.DefaultNodePackageID+`"}`)
-	if w.Code != http.StatusOK {
-		t.Fatalf("uninstall status=%d body=%s", w.Code, w.Body.String())
-	}
-}
-
-func TestRuntimeCatalogAndToolsAndPreflight(t *testing.T) {
-	e := newTestEngine(Deps{RuntimeEnv: &fakeRuntimeEnv{catalog: []rtenv.CatalogPackage{
-		{ID: rtenv.DefaultNodePackageID, Name: "Node.js", Supported: true},
-	}}})
-	w := doJSON(e, http.MethodGet, "/api/admin/runtime/catalog", "")
-	if w.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
-	}
-	w = doJSON(e, http.MethodGet, "/api/admin/runtime/tools", "")
+	w := doJSON(e, http.MethodGet, "/api/admin/runtime/tools", "")
 	if w.Code != http.StatusOK {
 		t.Fatalf("tools status=%d body=%s", w.Code, w.Body.String())
 	}
@@ -213,8 +162,28 @@ func TestRuntimeCatalogAndToolsAndPreflight(t *testing.T) {
 	}
 }
 
+// 受管安装路由已删除，不能再以 404 之外的形式存在（避免前端残留调用被静默接受）。
+func TestRuntimeManagedInstallRoutesAreGone(t *testing.T) {
+	e := newTestEngine(Deps{RuntimeEnv: &fakeRuntimeEnv{}})
+	for _, request := range []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{method: http.MethodGet, path: "/api/admin/runtime/catalog"},
+		{method: http.MethodPost, path: "/api/admin/runtime/install/preview", body: `{"packageId":"node"}`},
+		{method: http.MethodPost, path: "/api/admin/runtime/install", body: `{"packageId":"node"}`},
+		{method: http.MethodPost, path: "/api/admin/runtime/uninstall", body: `{"packageId":"node"}`},
+	} {
+		w := doJSON(e, request.method, request.path, request.body)
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("%s %s status=%d body=%s", request.method, request.path, w.Code, w.Body.String())
+		}
+	}
+}
+
 func TestRuntimeDepsUnsupportedManagementReturnsValidationError(t *testing.T) {
-	unsupported := fmt.Errorf("%w：test unsupported", rtenv.ErrManagedRuntimeUnsupported)
+	unsupported := fmt.Errorf("%w：test unsupported", rtenv.ErrLocalRuntimeUnsupported)
 	env := &fakeRuntimeEnv{
 		listDepsErr:     unsupported,
 		installDepErr:   unsupported,
@@ -235,7 +204,7 @@ func TestRuntimeDepsUnsupportedManagementReturnsValidationError(t *testing.T) {
 		if w.Code != http.StatusBadRequest {
 			t.Fatalf("%s %s status=%d body=%s", request.method, request.path, w.Code, w.Body.String())
 		}
-		if !strings.Contains(w.Body.String(), rtenv.ErrManagedRuntimeUnsupported.Error()) {
+		if !strings.Contains(w.Body.String(), rtenv.ErrLocalRuntimeUnsupported.Error()) {
 			t.Fatalf("unsupported reason missing: %s", w.Body.String())
 		}
 	}

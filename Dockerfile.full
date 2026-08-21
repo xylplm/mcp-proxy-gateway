@@ -1,42 +1,47 @@
-# 完整版镜像（full）：Linux glibc 网关 + 常用本地 stdio 运行时（Node.js / npm / Python 3）。
-# 目标：模板市场与常见本地 MCP 开箱即用；体积大于默认 slim。
-# 受管运行时安装、卸载与依赖管理仅支持本官方 Linux Docker/OCI 镜像。
+# 完整镜像（默认）：网关 + 本地 stdio 运行时全部内置。
+#
+# 内置 Node.js 24 LTS（node/npm/npx）、Python 3.12（python/python3/pip）、
+# uv/uvx、bubblewrap。stdio 上游、脚本中心、npm/pip 依赖管理开箱即用。
+#
+# 设计取舍：运行时由镜像提供，不在运行期下载安装。
+#   - 版本由镜像 tag 决定，可复现；不再是数据卷里的可变状态。
+#   - 免去下载、校验、解压、原子替换、回滚、安装状态等一整套运行期机制。
+#   - 数据卷只存"依赖"（runtime/npm、runtime/pip），容器更新不丢。
+# 纯网关用户请用精简镜像（Dockerfile → :slim），体积小且自动隐藏 stdio 相关功能。
+#
+# 基础镜像用官方 python:3.12-slim 而非 debian + apt python3：
+#   - Python 版本由我们决定，不跟随发行版（bookworm 只有已 EOL 的 3.11）。
+#   - 仍是 Debian glibc 底子，Node 官方 tarball 可直接用。
 #
 # 标签约定（CI）：
-#   xylplm/mcp-proxy-gateway:full
-#   xylplm/mcp-proxy-gateway:<version>-full
-#
-# 仍可通过管理台预置安装 uv，或把工具放入 $MPG_DATA_DIR/runtime 覆盖/补充。
-# 多架构：Node 官方 tarball 与 TARGETARCH 二进制一致，buildx 一次推 linux/amd64+arm64。
+#   xylplm/mcp-proxy-gateway:latest / :full
+#   xylplm/mcp-proxy-gateway:<version> / :<version>-full
 #
 # 本地构建示例：
-#   docker build -f Dockerfile.full --build-arg TARGETARCH=amd64 -t xylplm/mcp-proxy-gateway:full .
+#   docker build -f Dockerfile.full --build-arg TARGETARCH=amd64 -t xylplm/mcp-proxy-gateway:latest .
 
-FROM debian:bookworm-slim
+FROM python:3.12-slim
 
 ARG TARGETARCH
 
-# 内置 Node 必须与受管预置安装的默认版本、校验和完全一致，否则 PATH 上会出现两份不同版本的
-# node（runtime/node/bin 先于 /usr/local/bin），行为取决于是否装过受管包。
-# 唯一真源是 internal/runtime/catalog.go 的 DefaultNodePackageID 资产；
-# TestDockerfileFullNodePinMatchesCatalog 会校验两处一致，升级版本时漏改会直接测试失败。
+# Node 官方 tarball 固定版本 + 校验和。这里是 Node 版本的唯一来源。
 ARG NODE_VERSION=24.19.0
 ARG NODE_SHA256_AMD64=f625d97cd707df4ff96254916fbc5ff014f09c09effe5a1e0ca8f6d41a8789d4
 ARG NODE_SHA256_ARM64=d28c8a5bf0a808f0ed434a1dce8c54ae98f0371c0bd86ac58abc613f73e6643f
 
-# ca/tz + Python3（受管 uv 建 venv 需要解释器）+ bubblewrap（严格档文件 bind 隔离与网络 deny
-# 命名空间断网；实际可用性仍取决于容器权限）。
+# uv/uvx 取自官方 distroless 镜像：多架构自动匹配，无需下载与校验和维护。
+COPY --from=ghcr.io/astral-sh/uv:0.6.14 /uv /uvx /usr/local/bin/
+
+# bubblewrap：严格档 stdio 的文件 bind 隔离与网络 deny 命名空间断网；
+# 实际可用性仍取决于容器权限，存在二进制不代表隔离一定能启动。
 #
-# 不装发行版 nodejs/npm：Debian bookworm 仓库仅提供已 EOL 的 Node 18，且会引入一份重复的
-# npm 依赖闭包。改为落地与 catalog 同版本同校验和的官方 tarball。
-# 不装 python3-pip：pip 依赖全程由受管 uv 在 runtime/python/.venv 内完成，不经过系统 pip，
-# 且 pip 不在 stdio 命令白名单内，无法作为上游命令启动。
+# Node 装到 /opt/node 而不是合并进 /usr/local：与 Python 各自独立，
+# 升级或排查时边界清晰，也不会覆盖 Python 的同名目录。
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
         ca-certificates \
         tzdata \
-        python3 \
         bubblewrap; \
     apt-get install -y --no-install-recommends curl; \
     case "${TARGETARCH}" in \
@@ -47,33 +52,36 @@ RUN set -eux; \
     curl -fsSL --retry 3 --retry-delay 2 -o /tmp/node.tar.gz \
         "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${nodeArch}.tar.gz"; \
     echo "${nodeSha}  /tmp/node.tar.gz" | sha256sum -c -; \
-    tar -xzf /tmp/node.tar.gz -C /usr/local --strip-components=1 --no-same-owner \
+    mkdir -p /opt/node; \
+    tar -xzf /tmp/node.tar.gz -C /opt/node --strip-components=1 --no-same-owner \
         --exclude='*/CHANGELOG.md' \
         --exclude='*/README.md' \
         --exclude='*/LICENSE'; \
     rm -f /tmp/node.tar.gz; \
     apt-get purge -y --auto-remove curl; \
     rm -rf /var/lib/apt/lists/*; \
-    ln -sf python3 /usr/bin/python; \
-    node -v; \
-    npm -v; \
-    npx --version; \
+    /opt/node/bin/node -v; \
+    /opt/node/bin/npm -v; \
     python3 --version; \
     python --version; \
+    uv --version; \
+    uvx --version; \
     bwrap --version
 
 COPY bin/mpg-linux-${TARGETARCH} /mpg
 COPY entrypoint.sh /entrypoint.sh
-RUN install -d /usr/share/mcp-proxy-gateway \
-    && touch /usr/share/mcp-proxy-gateway/managed-runtime \
-    && chmod 0444 /usr/share/mcp-proxy-gateway/managed-runtime \
-    && chmod +x /mpg /entrypoint.sh
+RUN chmod +x /mpg /entrypoint.sh
 
-ENV MPG_PG_DSN="" \
+# MPG_IMAGE_FLAVOR=full 让管理台暴露全部本地 stdio 功能。
+# UV_NO_MANAGED_PYTHON / UV_PYTHON_DOWNLOADS：Python 由镜像提供，
+# 禁止 uv 自行下载解释器（否则 uv pip --target 找不到解释器时会静默拉数十 MB）。
+ENV PATH="/opt/node/bin:${PATH}" \
+    MPG_PG_DSN="" \
     MPG_REDIS_ADDR="" \
     MPG_DATA_DIR="/data" \
-    # 便于运维与管理台识别镜像形态（非网关硬依赖）
-    MPG_IMAGE_FLAVOR="full"
+    MPG_IMAGE_FLAVOR="full" \
+    UV_NO_MANAGED_PYTHON=1 \
+    UV_PYTHON_DOWNLOADS=never
 
 VOLUME ["/data"]
 

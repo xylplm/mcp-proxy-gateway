@@ -1,10 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
-  findRuntimePackageForTool,
   formatAllowlist,
-  packageStatusLabel,
-  packageStatusTone,
   runtimeBinDir,
   runtimeGuideSteps,
   sandboxHardeningLabel,
@@ -63,45 +60,25 @@ test('runtime volume guide helpers', () => {
   assert.equal(shouldShowRuntimeGuide({ missingCount: 2, runtimeDir: '/data/runtime' }), true)
   assert.equal(shouldShowRuntimeGuide({ missingCount: 0, runtimeDir: '/data/runtime' }), false)
   assert.equal(shouldShowRuntimeGuide({ missingCount: 1, runtimeDir: '' }), false)
+  // 精简镜像没有本地运行时，不应引导用户往 bin 里放文件。
   assert.equal(
-    shouldShowRuntimeGuide({ missingCount: 1, runtimeDir: '/data/runtime', managementSupported: false }),
+    shouldShowRuntimeGuide({
+      missingCount: 1,
+      runtimeDir: '/data/runtime',
+      localRuntimeSupported: false,
+    }),
     false,
   )
   const steps = runtimeGuideSteps({ runtimeDir: '/data/runtime', pathPrefixes: [] })
   assert.equal(steps.length, 3)
-  assert.match(steps[0], /预置安装|bin/)
+  assert.match(steps[0], /\/data\/runtime\/bin/)
+  // 运行期受管安装已移除，引导文案不得再提「预置安装」。
+  for (const step of steps) {
+    assert.doesNotMatch(step, /预置安装/)
+  }
 })
 
-test('runtime catalog packages map to fixable tools only', () => {
-  const catalog = [
-    {
-      id: 'node-24.19.0',
-      name: 'Node.js',
-      version: '24.19.0',
-      tools: ['node', 'npx', 'npm'],
-      supported: true,
-      installed: false,
-    },
-    {
-      id: 'uv-0.6.14',
-      name: 'uv',
-      version: '0.6.14',
-      tools: ['uv', 'uvx'],
-      supported: true,
-      installed: true,
-    },
-  ]
-  assert.equal(findRuntimePackageForTool('npm', catalog)?.id, 'node-24.19.0')
-  assert.equal(findRuntimePackageForTool('UVX', catalog)?.id, 'uv-0.6.14')
-  assert.equal(findRuntimePackageForTool('python3', catalog), undefined)
-  assert.equal(findRuntimePackageForTool('docker', catalog), undefined)
-  assert.equal(findRuntimePackageForTool('node', [{ ...catalog[0], supported: false }]), undefined)
-})
-test('package and sandbox labels', () => {
-  assert.equal(packageStatusLabel({ installed: true, supported: true }), '已安装')
-  assert.equal(packageStatusLabel({ installed: false, supported: false }), '当前平台不可用')
-  assert.equal(packageStatusTone({ installed: true, supported: true }), 'success')
-  assert.equal(packageStatusTone({ installed: false, supported: false }), 'muted')
+test('sandbox labels', () => {
   assert.equal(
     sandboxHardeningLabel({
       processHardening: true,

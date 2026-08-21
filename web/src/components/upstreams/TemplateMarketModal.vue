@@ -21,6 +21,7 @@ import {
   type PrefillForm,
 } from '@/api/templates'
 import { TRANSPORT_OPTIONS } from '@/api/upstreams'
+import { useRuntimeCapability } from '@/composables/useRuntimeCapability'
 import { StaredIcon } from '@/icons'
 import {
   filterTemplatesByPreference,
@@ -56,11 +57,19 @@ const errorMessage = ref('')
 /** 选择模板（请求预填充）的进行中标志。 */
 const selecting = ref(false)
 const prefs = ref<TemplateMarketPrefs>(loadTemplateMarketPrefs())
+const { localRuntimeSupported } = useRuntimeCapability()
+
+// 精简镜像没有本地运行时，stdio 模板一装就失败，直接不展示。
+const runnableTemplates = computed(() =>
+  localRuntimeSupported.value
+    ? templates.value
+    : templates.value.filter((template) => template.transport !== 'stdio'),
+)
 
 const locallyFilteredTemplates = computed(() => {
   const kw = keyword.value.trim().toLowerCase()
-  if (kw === '') return templates.value
-  return templates.value.filter((template) => {
+  if (kw === '') return runnableTemplates.value
+  return runnableTemplates.value.filter((template) => {
     const text = `${template.name} ${template.summary} ${templateMetadataSearchText(template)}`.toLowerCase()
     return text.includes(kw)
   })

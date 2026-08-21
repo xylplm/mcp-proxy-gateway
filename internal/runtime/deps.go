@@ -91,12 +91,15 @@ const (
 	depKillGrace = 3 * time.Second
 )
 
-// DependencyManager 在 runtimeDir 内对 Node/Python 的受管依赖区做包管理。
+// DependencyManager 在 runtimeDir 内对 Node/Python 的共享依赖区做包管理。
 //
-// npm 包通过独立 runtime/npm prefix 安装，避免 Node 版本切换或卸载时删除依赖；
-// 受管 CLI shim 会加入子进程 PATH，CommonJS 查询通过受控 NODE_PATH 兼容。ESM
-// 项目仍应在项目目录维护自己的依赖。pip 包通过受管 uv 在 runtime/python 建一个
-// 共享 venv，Python 上游应使用该 venv 的解释器或显式配置其 PATH。
+// 解释器本身由镜像提供，这里只管理数据卷内的第三方包：
+//   - npm 包安装到独立的 runtime/npm prefix，node_modules/.bin 进 PATH，
+//     CommonJS 查询通过受控 NODE_PATH 兼容；ESM 项目仍应维护自己的本地依赖。
+//   - pip 包通过 uv 安装到 runtime/pip（uv pip --target，顶层即 site-packages），
+//     由 PYTHONPATH 接入子进程，脚本在 runtime/pip/bin 并进 PATH。
+//     不使用 venv：venv 的 pyvenv.cfg 与 shebang 写死绝对路径和 Python 小版本，
+//     镜像升级 Python 后会静默失效，而 --target 目录与解释器版本解耦。
 type DependencyManager struct {
 	runtimeDir string
 	policyFn   func() Policy
@@ -304,7 +307,7 @@ func (dm *DependencyManager) resolveNpm() (string, error) {
 	prefixes := PathPrefixes(dm.runtimeDir)
 	cmd, err := ResolveCommandWithPrefixes("npm", prefixes)
 	if err != nil {
-		return "", fmt.Errorf("未找到 npm，请先在「运行环境」安装 Node：%w", err)
+		return "", fmt.Errorf("未找到 npm，请使用内置 Node 的完整镜像（:latest / :full）：%w", err)
 	}
 	return cmd, nil
 }
@@ -387,54 +390,61 @@ func (dm *DependencyManager) uninstallNpm(ctx context.Context, name string) (Ins
 
 // --- pip (via uv) ---
 
-func (dm *DependencyManager) pythonDir() string {
-	return filepath.Join(dm.runtimeDir, RuntimeSubdirPython)
+// PipTargetDir 返回卷内 pip 共享依赖目录（uv pip --target，顶层即 site-packages）。
+// 子进程通过 PYTHONPATH 接入该目录，见 BuildChildEnvWithOptions。
+func PipTargetDir(runtimeDir string) string {
+	runtimeDir = strings.TrimSpace(runtimeDir)
+	if runtimeDir == "" {
+		return ""
+	}
+	return filepath.Join(runtimeDir, RuntimeSubdirPip)
 }
 
-func (dm *DependencyManager) venvDir() string {
-	return filepath.Join(dm.pythonDir(), ".venv")
+func (dm *DependencyManager) pipTargetDir() string {
+	return PipTargetDir(dm.runtimeDir)
 }
 
 func (dm *DependencyManager) resolveUv() (string, error) {
 	prefixes := PathPrefixes(dm.runtimeDir)
 	cmd, err := ResolveCommandWithPrefixes("uv", prefixes)
 	if err != nil {
-		return "", fmt.Errorf("未找到 uv，请先在「运行环境」安装 uv：%w", err)
+		return "", fmt.Errorf("未找到 uv，请使用内置 Python 与 uv 的完整镜像（:latest / :full）：%w", err)
 	}
 	return cmd, nil
 }
 
-// resolveSystemPython 在系统 PATH 上找一个 python 解释器（uv 受管二进制不含解释器）。
-func (dm *DependencyManager) resolveSystemPython() (string, bool) {
+// pythonHintMissing 是缺解释器时的统一引导文案。
+const pythonHintMissing = "未检测到 Python 解释器。uv 本身不含解释器，请使用内置 Python 的完整镜像（:latest / :full），或将解释器放入 runtime/bin。"
+
+// hasPython 判断是否存在可用的 Python 解释器（先卷内前缀，再系统 PATH）。
+//
+// uv pip --target 不需要 venv，但仍需要一个解释器确定目标 ABI。这里只做前置判断，
+// 用于给出可操作的引导文案，而不是把 uv 的原始报错抛给用户。
+func (dm *DependencyManager) hasPython() bool {
+	prefixes := PathPrefixes(dm.runtimeDir)
 	for _, name := range []string{"python3", "python"} {
-		if p, err := exec.LookPath(name); err == nil {
-			return p, true
+		if p, err := LookPathWithPrefixes(name, prefixes, exec.LookPath); err == nil && p != "" {
+			return true
 		}
 	}
-	return "", false
+	return false
 }
 
-// ensureVenv 惰性创建共享 venv；返回 false 表示缺 Python 解释器。
-func (dm *DependencyManager) ensureVenv(ctx context.Context) (bool, error) {
-	if st, err := os.Stat(filepath.Join(dm.venvDir(), "bin", "python")); err == nil && !st.IsDir() {
-		return true, nil
-	}
-	py, ok := dm.resolveSystemPython()
-	if !ok {
-		return false, nil
-	}
-	if err := os.MkdirAll(dm.pythonDir(), 0o755); err != nil {
-		return false, err
-	}
-	uvPath, err := dm.resolveUv()
-	if err != nil {
-		return false, err
-	}
-	_, stderr, runErr := dm.runCommand(ctx, uvPath, []string{"venv", "--python", py, dm.venvDir()}, dm.pythonDir(), DepKindPip)
-	if runErr != nil {
-		return false, fmt.Errorf("创建 venv 失败：%v%s", runErr, depErrTail(stderr))
-	}
-	return true, nil
+// pipCommand 组装一条 uv pip 子命令。
+//
+// --target：装到卷内平铺目录，不碰系统环境，也不需要 venv。
+// --no-python-downloads：解释器由镜像提供；缺失时让 uv 立刻报错，
+// 而不是静默下载一份数十 MB 的 Python。
+// 解释器本身交给 uv 按 PATH 发现 —— runCommand 已把 runtime/bin 前置到 PATH，
+// 因此用户放入 runtime/bin 的解释器同样优先生效。
+func (dm *DependencyManager) pipCommand(sub string, extra ...string) []string {
+	args := []string{"pip", sub, "--target", dm.pipTargetDir(), "--no-python-downloads"}
+	return append(args, extra...)
+}
+
+// ensurePipTarget 幂等创建 pip 目标目录（uv 在 list 时要求目录存在）。
+func (dm *DependencyManager) ensurePipTarget() error {
+	return os.MkdirAll(dm.pipTargetDir(), 0o755)
 }
 
 func (dm *DependencyManager) listPip(ctx context.Context) (ListDepsResult, error) {
@@ -444,16 +454,16 @@ func (dm *DependencyManager) listPip(ctx context.Context) (ListDepsResult, error
 		result.Warning = err.Error()
 		return result, nil
 	}
-	venvOK, err := dm.ensureVenv(ctx)
-	if err != nil {
-		result.Warning = err.Error()
+	if !dm.hasPython() {
+		result.PythonHint = pythonHintMissing
 		return result, nil
 	}
-	if !venvOK {
-		result.PythonHint = "未检测到 Python 解释器。uv 不含解释器，请在宿主机安装 Python 3（如 python3）后重试。"
+	if err := dm.ensurePipTarget(); err != nil {
+		result.Warning = fmt.Sprintf("准备 pip 依赖目录失败：%v", err)
 		return result, nil
 	}
-	stdout, stderr, runErr := dm.runCommand(ctx, uvPath, []string{"pip", "list", "--python", dm.venvDir(), "--format", "json"}, dm.pythonDir(), DepKindPip)
+	args := dm.pipCommand("list", "--format", "json")
+	stdout, stderr, runErr := dm.runCommand(ctx, uvPath, args, dm.runtimeDir, DepKindPip)
 	if runErr != nil {
 		result.Warning = fmt.Sprintf("uv pip list 失败：%v%s", runErr, depErrTail(stderr))
 		return result, nil
@@ -462,15 +472,15 @@ func (dm *DependencyManager) listPip(ctx context.Context) (ListDepsResult, error
 		Name    string `json:"name"`
 		Version string `json:"version"`
 	}
-	if err := json.Unmarshal([]byte(stdout), &parsed); err != nil {
-		result.Warning = fmt.Sprintf("解析 pip 输出失败：%v", err)
-		return result, nil
-	}
-	skip := pipBootstrapNames()
-	for _, p := range parsed {
-		if _, isBuiltin := skip[strings.ToLower(p.Name)]; isBuiltin {
-			continue
+	// 空目录时 uv 可能只输出空白；这不是错误，按无包处理，避免误报解析失败。
+	if trimmed := strings.TrimSpace(stdout); trimmed != "" {
+		if err := json.Unmarshal([]byte(trimmed), &parsed); err != nil {
+			result.Warning = fmt.Sprintf("解析 pip 输出失败：%v", err)
+			return result, nil
 		}
+	}
+	// --target 目录里没有 venv 引导包，出现的每一项都是用户显式安装或其依赖，不做过滤。
+	for _, p := range parsed {
 		result.Items = append(result.Items, Dependency{Name: p.Name, Version: p.Version, Kind: DepKindPip})
 	}
 	result.Ready = true
@@ -479,31 +489,13 @@ func (dm *DependencyManager) listPip(ctx context.Context) (ListDepsResult, error
 }
 
 func (dm *DependencyManager) installPip(ctx context.Context, spec string) (InstallDepResult, error) {
-	uvPath, err := dm.resolveUv()
+	uvPath, args, err := dm.preparePipOp("install", "--upgrade", specForPip(spec))
 	if err != nil {
-		dm.setLastError(err.Error())
-		dm.addLog(DepLogEntry{Kind: DepKindPip, Level: DepLogError, Message: err.Error()})
 		return InstallDepResult{Kind: DepKindPip}, err
 	}
-	venvOK, err := dm.ensureVenv(ctx)
-	if err != nil {
-		dm.setLastError(err.Error())
-		dm.addLog(DepLogEntry{Kind: DepKindPip, Level: DepLogError, Message: err.Error()})
-		return InstallDepResult{Kind: DepKindPip}, err
-	}
-	if !venvOK {
-		msg := "未检测到 Python 解释器，无法创建 venv"
-		dm.setLastError(msg)
-		dm.addLog(DepLogEntry{Kind: DepKindPip, Level: DepLogError, Message: msg})
-		return InstallDepResult{Kind: DepKindPip}, fmt.Errorf("%s", msg)
-	}
-	args := []string{"pip", "install", "--upgrade", "--python", dm.venvDir(), specForPip(spec)}
-	_, stderr, runErr := dm.runCommand(ctx, uvPath, args, dm.pythonDir(), DepKindPip)
+	_, stderr, runErr := dm.runCommand(ctx, uvPath, args, dm.runtimeDir, DepKindPip)
 	if runErr != nil {
-		msg := fmt.Sprintf("uv pip install 失败：%v%s", runErr, depErrTail(stderr))
-		dm.setLastError(msg)
-		dm.addLog(DepLogEntry{Kind: DepKindPip, Level: DepLogError, Message: msg})
-		return InstallDepResult{Kind: DepKindPip}, fmt.Errorf("%s", msg)
+		return InstallDepResult{Kind: DepKindPip}, dm.failPip(fmt.Sprintf("uv pip install 失败：%v%s", runErr, depErrTail(stderr)))
 	}
 	name, ver := parseDepSpecName(spec)
 	dm.addLog(DepLogEntry{Kind: DepKindPip, Level: DepLogSuccess, Message: name + " 安装完成"})
@@ -511,34 +503,38 @@ func (dm *DependencyManager) installPip(ctx context.Context, spec string) (Insta
 }
 
 func (dm *DependencyManager) uninstallPip(ctx context.Context, name string) (InstallDepResult, error) {
-	uvPath, err := dm.resolveUv()
+	uvPath, args, err := dm.preparePipOp("uninstall", name)
 	if err != nil {
-		dm.setLastError(err.Error())
-		dm.addLog(DepLogEntry{Kind: DepKindPip, Level: DepLogError, Message: err.Error()})
 		return InstallDepResult{Kind: DepKindPip}, err
 	}
-	venvOK, err := dm.ensureVenv(ctx)
-	if err != nil {
-		dm.setLastError(err.Error())
-		dm.addLog(DepLogEntry{Kind: DepKindPip, Level: DepLogError, Message: err.Error()})
-		return InstallDepResult{Kind: DepKindPip}, err
-	}
-	if !venvOK {
-		msg := "未检测到 Python 解释器，无法创建 venv"
-		dm.setLastError(msg)
-		dm.addLog(DepLogEntry{Kind: DepKindPip, Level: DepLogError, Message: msg})
-		return InstallDepResult{Kind: DepKindPip}, fmt.Errorf("%s", msg)
-	}
-	args := []string{"pip", "uninstall", "--python", dm.venvDir(), "-y", name}
-	_, stderr, runErr := dm.runCommand(ctx, uvPath, args, dm.pythonDir(), DepKindPip)
+	_, stderr, runErr := dm.runCommand(ctx, uvPath, args, dm.runtimeDir, DepKindPip)
 	if runErr != nil {
-		msg := fmt.Sprintf("uv pip uninstall 失败：%v%s", runErr, depErrTail(stderr))
-		dm.setLastError(msg)
-		dm.addLog(DepLogEntry{Kind: DepKindPip, Level: DepLogError, Message: msg})
-		return InstallDepResult{Kind: DepKindPip}, fmt.Errorf("%s", msg)
+		return InstallDepResult{Kind: DepKindPip}, dm.failPip(fmt.Sprintf("uv pip uninstall 失败：%v%s", runErr, depErrTail(stderr)))
 	}
 	dm.addLog(DepLogEntry{Kind: DepKindPip, Level: DepLogSuccess, Message: name + " 已卸载"})
 	return InstallDepResult{Kind: DepKindPip, Name: name}, nil
+}
+
+// preparePipOp 解析 uv、准备目标目录并组装参数；失败时已记录错误与日志。
+func (dm *DependencyManager) preparePipOp(sub string, extra ...string) (string, []string, error) {
+	uvPath, err := dm.resolveUv()
+	if err != nil {
+		return "", nil, dm.failPip(err.Error())
+	}
+	if !dm.hasPython() {
+		return "", nil, dm.failPip(pythonHintMissing)
+	}
+	if err := dm.ensurePipTarget(); err != nil {
+		return "", nil, dm.failPip(fmt.Sprintf("准备 pip 依赖目录失败：%v", err))
+	}
+	return uvPath, dm.pipCommand(sub, extra...), nil
+}
+
+// failPip 记录 pip 操作失败并返回同文案错误。
+func (dm *DependencyManager) failPip(msg string) error {
+	dm.setLastError(msg)
+	dm.addLog(DepLogEntry{Kind: DepKindPip, Level: DepLogError, Message: msg})
+	return fmt.Errorf("%s", msg)
 }
 
 // --- 命令执行 ---
@@ -713,15 +709,4 @@ func depErrTail(stderr string) string {
 		lines = lines[len(lines)-5:]
 	}
 	return "\n" + strings.Join(lines, "\n")
-}
-
-// pipBootstrapNames 返回创建 venv 时的基础管理工具。其余包（包括 requests、
-// urllib3、certifi 等）都是用户可管理依赖，必须完整展示。
-func pipBootstrapNames() map[string]struct{} {
-	list := []string{"pip", "setuptools", "wheel"}
-	m := make(map[string]struct{}, len(list))
-	for _, n := range list {
-		m[n] = struct{}{}
-	}
-	return m
 }

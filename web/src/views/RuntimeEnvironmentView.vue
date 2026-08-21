@@ -1,6 +1,9 @@
 <script setup lang="ts">
 /**
- * 运行环境页：策略摘要、卷路径、工具探测、受控预置安装与进程加固说明。
+ * 运行环境页：镜像形态、策略摘要、卷路径、工具探测、npm/pip 共享依赖与进程加固说明。
+ *
+ * Node / Python / uv 由完整镜像内置，本页不再提供运行期下载安装；精简镜像没有本地
+ * 运行时，相关区块统一由 summary.localRuntimeSupported 门控。
  */
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import AdminLayout from '@/components/layout/AdminLayout.vue'
@@ -8,25 +11,18 @@ import PageBreadcrumb from '@/components/common/PageBreadcrumb.vue'
 import { BoxCubeIcon, PlusIcon, RefreshIcon, TrashIcon } from '@/icons'
 import {
   getRuntimeSummary,
-  installRuntimePackage,
   installRuntimeDep,
   listRuntimeDeps,
-  uninstallRuntimePackage,
   uninstallRuntimeDep,
-  type RuntimeCatalogPackage,
   type RuntimeDepKind,
   type RuntimeDependency,
   type RuntimeDepLogEntry,
-  type RuntimeInstallLogEntry,
   type RuntimeListDepsResult,
   type RuntimeSummary,
   type RuntimeToolStatus,
 } from '@/api/runtime'
 import {
   formatAllowlist,
-  findRuntimePackageForTool,
-  packageStatusLabel,
-  packageStatusTone,
   runtimeBinDir,
   sandboxHardeningLabel,
   shouldShowRuntimeGuide,
@@ -43,8 +39,7 @@ const { confirm } = useConfirm()
 const loading = ref(false)
 const loadError = ref('')
 const summary = ref<RuntimeSummary | null>(null)
-const busyPackageId = ref('')
-let installProgressTimer: ReturnType<typeof setInterval> | null = null
+let depProgressTimer: ReturnType<typeof setInterval> | null = null
 
 const healthLabel = computed(() =>
   summary.value === null ? '—' : summarizeToolHealth(summary.value),
@@ -72,46 +67,65 @@ const stdioToneClass = computed(() => {
     : 'bg-warning-50 text-warning-700 dark:bg-warning-500/10 dark:text-warning-400'
 })
 
-const managementSupported = computed(() => summary.value?.managementSupported === true)
-const managementReason = computed(
-  () => summary.value?.managementReason || '当前环境不支持受管运行时安装与依赖管理。',
+/** 本镜像是否提供本地运行时（stdio 上游与 npm/pip 依赖管理的唯一门控）。 */
+const localRuntimeSupported = computed(() => summary.value?.localRuntimeSupported === true)
+
+// 优先展示后端上报的镜像形态；未声明时按能力位兜底，避免出现空徽标。
+const imageFlavorLabel = computed(() => {
+  const flavor = String(summary.value?.imageFlavor ?? '').toLowerCase()
+  if (flavor === 'slim') return '精简镜像'
+  if (flavor === 'full') return '完整镜像'
+  return localRuntimeSupported.value ? '完整镜像' : '精简镜像'
+})
+
+const imageFlavorHint = computed(() =>
+  localRuntimeSupported.value
+    ? '已内置 Node / Python / uv；优先查找数据卷运行时目录，再检查系统 PATH。'
+    : '不含任何本地运行时，仅支持远程 SSE / HTTP / WebSocket / OpenAPI 上游。',
 )
+
+const imageFlavorToneClass = computed(() =>
+  localRuntimeSupported.value
+    ? 'bg-brand-50 text-brand-700 dark:bg-brand-500/10 dark:text-brand-300'
+    : 'bg-gray-100 text-gray-600 dark:bg-white/5 dark:text-gray-400',
+)
+
 const showGuide = computed(() => summary.value !== null && shouldShowRuntimeGuide(summary.value))
 
 const binDir = computed(() => (summary.value === null ? '' : runtimeBinDir(summary.value)))
 
-const catalog = computed(() => summary.value?.catalog ?? [])
-function packageForTool(tool: RuntimeToolStatus): RuntimeCatalogPackage | undefined {
-  return findRuntimePackageForTool(tool.name, catalog.value)
-}
 const environmentConclusion = computed(() => {
   const current = summary.value
   if (!current) return null
-  if (!current.stdioEnabled) {
+  if (!current.localRuntimeSupported) {
     return {
-      tone: 'muted',
-      message: '本地 stdio 已禁用，仅可使用远程与 OpenAPI 上游。',
-      action: '去启用',
+      tone: 'muted' as const,
+      message: '当前为精简镜像，不含本地运行时，仅可使用远程与 OpenAPI 上游。',
+      action: '查看说明',
+      target: '#runtime-slim',
     }
   }
-  if (!current.managementSupported && (current.missingCount ?? 0) > 0) {
+  if (!current.stdioEnabled) {
     return {
-      tone: 'warning',
-      message: '部分本地工具缺失；当前环境仅支持只读探测。',
-      action: '查看说明',
+      tone: 'muted' as const,
+      message: '本地 stdio 已禁用，仅可使用远程与 OpenAPI 上游。',
+      action: '去启用',
+      target: '/settings',
     }
   }
   if ((current.missingCount ?? 0) > 0) {
     return {
-      tone: 'warning',
+      tone: 'warning' as const,
       message: '缺少 ' + String(current.missingCount) + ' 个常用工具，部分 stdio 模板暂不可用。',
       action: '查看补齐方案',
+      target: '#runtime-guide',
     }
   }
   return {
-    tone: 'success',
+    tone: 'success' as const,
     message: '本地运行环境已就绪，可以创建 stdio 上游。',
     action: '管理上游',
+    target: '/upstreams',
   }
 })
 
@@ -128,9 +142,6 @@ const hasKernelIsolation = computed(
   () =>
     summary.value?.sandbox?.filesystemIsolationSupported ||
     summary.value?.sandbox?.networkIsolationSupported,
-)
-const activeInstallPackageId = computed(
-  () => busyPackageId.value || summary.value?.installProgress?.packageId || '',
 )
 
 // --- 依赖管理（npm/pip 包安装/升级/卸载）状态 ---
@@ -203,7 +214,7 @@ function parseDepSpec(spec: string): { name: string; version: string } {
 }
 
 async function loadDepList(kind: RuntimeDepKind): Promise<void> {
-  if (!managementSupported.value || depListLoading.value) return
+  if (!localRuntimeSupported.value || depListLoading.value) return
   depListLoading.value = true
   depListError.value = ''
   try {
@@ -226,24 +237,34 @@ async function switchDepKind(kind: RuntimeDepKind): Promise<void> {
   }
 }
 
-/** 依赖操作轮询：安装期间 1.5s 拉取 summary 更新 depProgress/depLogs。 */
+/** 依赖操作轮询：进行中每 1.5s 拉取 summary 更新 depProgress/depLogs。 */
 function startDepProgressPolling(): void {
-  if (installProgressTimer !== null) return // 复用同一轮询（预置安装/依赖安装不会同时进行）
-  installProgressTimer = setInterval(async () => {
+  if (depProgressTimer !== null) return
+  depProgressTimer = setInterval(async () => {
     try {
       const next = await getRuntimeSummary()
       summary.value = next
-      if (!next.installProgress && !next.deps?.depProgress) {
-        stopInstallProgressPolling()
-      }
+      if (!next.deps?.depProgress) stopDepProgressPolling()
     } catch {
-      // 保留最近状态，下一轮继续尝试。
+      // 保留最近状态，下一轮继续尝试；依赖请求本身负责报告最终错误。
     }
   }, 1500)
 }
 
+function stopDepProgressPolling(): void {
+  if (depProgressTimer !== null) {
+    clearInterval(depProgressTimer)
+    depProgressTimer = null
+  }
+}
+
+/** 依赖操作结束后收尾：无进行中操作时停止轮询。 */
+function settleDepProgress(): void {
+  if (!summary.value?.deps?.depProgress) stopDepProgressPolling()
+}
+
 function dependencyLocationLabel(kind: RuntimeDepKind): string {
-  return kind === 'npm' ? '受管 npm 依赖区' : 'Python 共享 venv'
+  return kind === 'npm' ? '卷内 npm 共享依赖区' : '卷内 pip 共享依赖区'
 }
 
 async function onInstallDep(): Promise<void> {
@@ -306,9 +327,7 @@ async function onInstallDep(): Promise<void> {
   } finally {
     await loadDepList(kind)
     depInstalling.value = false
-    if (!summary.value?.installProgress && !summary.value?.deps?.depProgress) {
-      stopInstallProgressPolling()
-    }
+    settleDepProgress()
   }
 }
 
@@ -334,9 +353,7 @@ async function onUpgradeDep(dep: RuntimeDependency): Promise<void> {
     toast.error(err instanceof Error ? err.message : '升级失败')
   } finally {
     depInstalling.value = false
-    if (!summary.value?.installProgress && !summary.value?.deps?.depProgress) {
-      stopInstallProgressPolling()
-    }
+    settleDepProgress()
   }
 }
 
@@ -360,9 +377,7 @@ async function onUninstallDep(dep: RuntimeDependency): Promise<void> {
     toast.error(err instanceof Error ? err.message : '卸载失败')
   } finally {
     depUninstallingName.value = ''
-    if (!summary.value?.installProgress && !summary.value?.deps?.depProgress) {
-      stopInstallProgressPolling()
-    }
+    settleDepProgress()
   }
 }
 
@@ -379,54 +394,6 @@ function depLogTimeShort(iso: string): string {
   if (Number.isNaN(d.getTime())) return iso
   const pad = (n: number): string => String(n).padStart(2, '0')
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
-}
-
-const installProgressLabel = computed(() => {
-  const phase = summary.value?.installProgress?.phase
-  if (phase === 'downloading') return '正在下载'
-  if (phase === 'verifying') return '正在校验'
-  if (phase === 'extracting') return '正在解压'
-  if (phase === 'placing') return '正在安装'
-  if (phase === 'preparing') return '正在准备'
-  return '安装中'
-})
-
-const installProgressPercent = computed(() => {
-  const progress = summary.value?.installProgress
-  if (!progress || progress.total <= 0) return 0
-  return Math.min(100, Math.round((progress.bytes / progress.total) * 100))
-})
-
-/** 安装中或上次失败时，是否展示安装日志/错误面板。 */
-const showInstallPanel = computed(
-  () =>
-    !!summary.value?.installProgress ||
-    (summary.value?.installLogs != null && summary.value.installLogs.length > 0),
-)
-
-const installError = computed(() => summary.value?.installError ?? '')
-
-const installLogs = computed<RuntimeInstallLogEntry[]>(() => summary.value?.installLogs ?? [])
-
-function stopInstallProgressPolling(): void {
-  if (installProgressTimer !== null) {
-    clearInterval(installProgressTimer)
-    installProgressTimer = null
-  }
-}
-
-function startInstallProgressPolling(): void {
-  if (installProgressTimer !== null) return
-  installProgressTimer = setInterval(async () => {
-    try {
-      const next = await getRuntimeSummary()
-      summary.value = next
-      // 预置安装与依赖安装共享同一轮询；两者都结束时才停止（避免一方仍在进行时误停）。
-      if (!next.installProgress && !next.deps?.depProgress) stopInstallProgressPolling()
-    } catch {
-      // 保留最近一次进度，下一轮继续尝试；安装请求本身负责报告最终错误。
-    }
-  }, 1500)
 }
 
 async function load(): Promise<void> {
@@ -453,112 +420,14 @@ function toolChipClass(tool: RuntimeToolStatus): string {
     : 'bg-warning-50 text-warning-700 dark:bg-warning-500/10 dark:text-warning-400'
 }
 
-function packageChipClass(pkg: RuntimeCatalogPackage): string {
-  const tone = packageStatusTone(pkg)
-  if (tone === 'success') {
-    return 'bg-success-50 text-success-700 dark:bg-success-500/10 dark:text-success-400'
-  }
-  if (tone === 'muted') {
-    return 'bg-gray-100 text-gray-500 dark:bg-white/5 dark:text-gray-400'
-  }
-  return 'bg-warning-50 text-warning-700 dark:bg-warning-500/10 dark:text-warning-400'
-}
-
-/** 安装日志时间线条目的左侧圆点颜色。 */
-function logEntryDotClass(entry: RuntimeInstallLogEntry): string {
-  if (entry.level === 'success') return 'bg-success-500'
-  if (entry.level === 'error') return 'bg-error-500'
-  return 'bg-brand-500'
-}
-
-/** 安装日志阶段标签。 */
-function logPhaseLabel(phase: string): string {
-  switch (phase) {
-    case 'preparing':
-      return '准备'
-    case 'downloading':
-      return '下载'
-    case 'verifying':
-      return '校验'
-    case 'extracting':
-      return '解压'
-    case 'placing':
-      return '安装'
-    default:
-      return phase
-  }
-}
-
-/** 简化的日志时间（HH:MM:SS），避免时间线过宽。 */
-function logTimeShort(iso: string): string {
-  if (!iso) return ''
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return iso
-  const pad = (n: number): string => String(n).padStart(2, '0')
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
-}
-
-async function onInstallForTool(tool: RuntimeToolStatus): Promise<void> {
-  const pkg = packageForTool(tool)
-  if (pkg) await onInstall(pkg)
-}
-
-async function onInstall(pkg: RuntimeCatalogPackage): Promise<void> {
-  if (activeInstallPackageId.value !== '' || !pkg.supported) return
-  const ok = await confirm({
-    title: `安装 ${pkg.name} ${pkg.version}`,
-    message: `将从官方源下载固定版本并安装到数据卷运行时目录（SHA256 校验）。仅允许内置目录中的包，不会执行任意脚本。是否继续？`,
-    confirmText: '开始安装',
-    tone: 'warning',
-  })
-  if (!ok) return
-  busyPackageId.value = pkg.id
-  startInstallProgressPolling()
-  try {
-    const result = await installRuntimePackage(pkg.id)
-    toast.success(
-      result.reused
-        ? `${result.name} 已存在，已跳过下载`
-        : `${result.name} ${result.version} 安装完成`,
-    )
-    await load()
-  } catch (err) {
-    toast.error(err instanceof Error ? err.message : '安装失败')
-  } finally {
-    busyPackageId.value = ''
-    if (!summary.value?.installProgress && !summary.value?.deps?.depProgress)
-      stopInstallProgressPolling()
-  }
-}
-
-async function onUninstall(pkg: RuntimeCatalogPackage): Promise<void> {
-  if (busyPackageId.value !== '') return
-  const ok = await confirm({
-    title: `卸载 ${pkg.name}`,
-    message: `将移除数据卷中由预置安装写入的 ${pkg.name} 文件。手动放入的其他工具不受影响。是否继续？`,
-    confirmText: '卸载',
-    tone: 'danger',
-  })
-  if (!ok) return
-  busyPackageId.value = pkg.id
-  try {
-    await uninstallRuntimePackage(pkg.id)
-    toast.success(`${pkg.name} 已卸载`)
-    await load()
-  } catch (err) {
-    toast.error(err instanceof Error ? err.message : '卸载失败')
-  } finally {
-    busyPackageId.value = ''
-  }
-}
-
 onMounted(async () => {
   await load()
-  if (summary.value?.installProgress) startInstallProgressPolling()
+  // 后台依赖操作可能在页面打开前就已开始，接上进度轮询。
+  if (summary.value?.deps?.depProgress) startDepProgressPolling()
   // 默认加载 npm 依赖列表（pip 段切换时再懒加载）。
   void loadDepList('npm')
 })
-onUnmounted(stopInstallProgressPolling)
+onUnmounted(stopDepProgressPolling)
 </script>
 
 <template>
@@ -567,18 +436,27 @@ onUnmounted(stopInstallProgressPolling)
 
     <div class="mb-5 flex flex-wrap items-start justify-between gap-3">
       <div class="min-w-0">
-        <h2 class="text-lg font-semibold text-gray-800 dark:text-white/90">
-          本地运行时与 stdio 能力
-        </h2>
+        <div class="flex flex-wrap items-center gap-2">
+          <h2 class="text-lg font-semibold text-gray-800 dark:text-white/90">
+            本地运行时与 stdio 能力
+          </h2>
+          <span
+            v-if="summary !== null"
+            class="inline-flex shrink-0 rounded-full px-2.5 py-0.5 text-xs font-medium"
+            :class="imageFlavorToneClass"
+          >
+            {{ imageFlavorLabel }}
+          </span>
+        </div>
         <p class="mt-1 max-w-3xl text-sm leading-6 text-gray-500 dark:text-gray-400">
-          探测网关可见的 Node / Python / uv / Docker，管理数据卷预置运行时，并展示 stdio
+          探测网关可见的 Node / Python / uv，集中管理数据卷内的 npm / pip 共享依赖，并展示 stdio
           安全策略。远程上游不依赖本页结果。
         </p>
       </div>
       <button
         type="button"
         class="inline-flex h-10 items-center gap-1.5 rounded-lg border border-gray-300 px-3.5 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:opacity-60 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
-        :disabled="loading || busyPackageId !== ''"
+        :disabled="loading || depBusy"
         aria-label="刷新运行环境探测"
         @click="refresh"
       >
@@ -607,25 +485,20 @@ onUnmounted(stopInstallProgressPolling)
         :class="conclusionClass"
       >
         <span>{{ environmentConclusion?.message }}</span>
-        <router-link
-          v-if="environmentConclusion?.tone === 'muted'"
-          to="/settings"
-          class="shrink-0 font-medium underline underline-offset-2"
-          >{{ environmentConclusion?.action }}</router-link
-        >
         <a
-          v-else-if="environmentConclusion?.tone === 'warning'"
-          :href="managementSupported ? '#runtime-install' : '#runtime-unsupported'"
+          v-if="environmentConclusion?.target?.startsWith('#')"
+          :href="environmentConclusion.target"
           class="shrink-0 font-medium underline underline-offset-2"
           >{{ environmentConclusion?.action }}</a
         >
         <router-link
-          v-else
-          to="/upstreams"
+          v-else-if="environmentConclusion?.target"
+          :to="environmentConclusion.target"
           class="shrink-0 font-medium underline underline-offset-2"
           >{{ environmentConclusion?.action }}</router-link
         >
       </div>
+
       <div class="mb-5 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <section
           class="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm transition duration-300 hover:shadow-md dark:border-gray-800 dark:bg-white/[0.03]"
@@ -655,7 +528,7 @@ onUnmounted(stopInstallProgressPolling)
             {{ healthLabel }}
           </p>
           <p class="mt-2 text-xs leading-5 text-gray-500 dark:text-gray-400">
-            优先查找数据卷运行时目录，再检查系统 PATH。
+            {{ imageFlavorLabel }}{{ imageFlavorHint }}
           </p>
         </section>
 
@@ -690,28 +563,32 @@ onUnmounted(stopInstallProgressPolling)
       </div>
 
       <section
-        v-if="!managementSupported"
-        id="runtime-unsupported"
+        v-if="!localRuntimeSupported"
+        id="runtime-slim"
         class="border-warning-200 bg-warning-50/60 dark:border-warning-500/20 dark:bg-warning-500/5 mb-5 rounded-2xl border p-5 shadow-sm"
       >
-        <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">受管运行时不可用</h3>
+        <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">
+          精简镜像不含本地运行时
+        </h3>
         <p class="mt-1 max-w-3xl text-sm leading-6 text-gray-600 dark:text-gray-300">
-          {{ managementReason }}
+          当前镜像只包含网关本体，体积最小，适合纯网关聚合场景。Node、Python、uv
+          与依赖管理、脚本中心均不可用。
         </p>
         <ul class="mt-3 max-w-3xl space-y-2 text-sm leading-6 text-gray-600 dark:text-gray-300">
           <li class="flex gap-2">
             <span class="bg-warning-500 mt-2 h-1.5 w-1.5 shrink-0 rounded-full"></span>
             <span>
-              需要预置安装与 npm/pip 依赖管理时，请改用官方 Linux Docker/OCI 镜像。原生
-              Windows/macOS 与 Windows 容器不受支持；Docker Desktop 需切换到 Linux containers 引擎。
+              需要运行本地 stdio 上游、安装 npm / pip 依赖或使用脚本中心时，请改用完整镜像
+              <code class="font-mono text-xs">:latest</code> 或
+              <code class="font-mono text-xs">:full</code>，数据卷可直接复用。
             </span>
           </li>
           <li v-if="binDir" class="flex gap-2">
             <span class="bg-warning-500 mt-2 h-1.5 w-1.5 shrink-0 rounded-full"></span>
             <span>
-              当前环境仍可手动补齐：自行创建
+              如只需个别自带运行时的可执行文件，可放入
               <code class="font-mono text-xs break-all">{{ binDir }}</code>
-              并放入 node、npx、uv 等可执行文件，刷新探测后即可用于 stdio 上游。
+              并赋可执行权限，刷新探测后即可用于 stdio 上游。
             </span>
           </li>
           <li class="flex gap-2">
@@ -767,7 +644,7 @@ onUnmounted(stopInstallProgressPolling)
         </div>
         <div
           v-else
-          class="mt-4 rounded-xl border border-gray-100 bg-gray-50 px-3 py-3 text-sm text-gray-600 dark:border-white/5 dark:bg-white/[0.03] dark:text-gray-300"
+          class="mt-4 rounded-xl border border-gray-100 bg-gray-50 px-3 py-3 text-sm text-gray-600 dark:border-white/5 dark:bg-white/[0.02] dark:text-gray-300"
         >
           当前主机未提供 bubblewrap，文件和网络限制以策略校验为主。
           <details class="mt-2 text-xs">
@@ -775,8 +652,8 @@ onUnmounted(stopInstallProgressPolling)
               如何启用内核隔离
             </summary>
             <p class="mt-2 leading-5">
-              在 Linux 容器中安装 bubblewrap（例如 Debian/Ubuntu：<code class="font-mono"
-                >apt-get install bubblewrap</code
+              完整镜像已内置 bubblewrap。若使用精简镜像或自建镜像，请在 Linux
+              容器中安装（例如 Debian/Ubuntu：<code class="font-mono">apt-get install bubblewrap</code
               >），然后刷新探测。
             </p>
           </details>
@@ -785,13 +662,13 @@ onUnmounted(stopInstallProgressPolling)
 
       <section
         v-if="showGuide"
-        id="runtime-install"
+        id="runtime-guide"
         class="border-warning-200 bg-warning-50/60 dark:border-warning-500/20 dark:bg-warning-500/5 mb-5 rounded-2xl border p-5 shadow-sm"
       >
         <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">如何补齐缺失工具</h3>
-        <p class="mt-1 text-sm leading-6 text-gray-600 dark:text-gray-300">
-          默认镜像不含 Node / Python / uv。推荐使用下方预置安装，或将工具放入数据卷。
-          <span v-if="binDir" class="font-mono text-xs">优先路径：{{ binDir }}</span>
+        <p class="mt-1 max-w-3xl text-sm leading-6 text-gray-600 dark:text-gray-300">
+          完整镜像已内置 Node、Python 与 uv / uvx。仍显示缺失时，通常是自定义了 stdio
+          命令白名单或改动了容器 PATH。
         </p>
         <div
           class="mt-3 grid gap-3 text-sm leading-6 text-gray-700 sm:grid-cols-2 dark:text-gray-200"
@@ -799,222 +676,48 @@ onUnmounted(stopInstallProgressPolling)
           <div
             class="border-warning-200 dark:border-warning-500/20 rounded-xl border bg-white/60 p-3 dark:bg-white/[0.03]"
           >
-            <p class="font-medium">推荐：使用下方预置安装</p>
+            <p class="font-medium">先检查命令白名单</p>
             <p class="mt-1 text-xs text-gray-600 dark:text-gray-300">
-              固定版本、官方源和 SHA256 校验，安装后自动刷新探测。
+              系统设置中的 stdio 命令白名单会限制可启动的命令，缺失工具可能只是未被放行。
             </p>
+            <router-link
+              to="/settings"
+              class="text-brand-600 dark:text-brand-300 mt-2 inline-block text-xs font-medium underline underline-offset-2"
+            >
+              去调整白名单
+            </router-link>
           </div>
           <div
             class="rounded-xl border border-gray-200 bg-white/60 p-3 dark:border-gray-700 dark:bg-white/[0.03]"
           >
-            <p class="font-medium">高级：手动放入 bin 目录</p>
+            <p class="font-medium">或放入卷内 bin 目录覆盖</p>
             <p class="mt-1 text-xs text-gray-600 dark:text-gray-300">
-              将可执行文件放入 <code class="font-mono">{{ binDir }}</code
-              >，也可使用 node/bin、python/bin、uv/bin 布局。
+              将可执行文件放入 <code class="font-mono break-all">{{ binDir }}</code
+              >（需 chmod +x）。该目录优先于镜像自带版本，可用于覆盖版本或补充其他工具。
             </p>
           </div>
         </div>
       </section>
 
+      <!-- 依赖管理：npm/pip 第三方包安装/升级/卸载，所有 stdio 上游共享 -->
       <section
-        v-if="managementSupported"
-        class="mb-5 rounded-2xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-white/[0.03]"
-      >
-        <div class="mb-4 flex flex-wrap items-start justify-between gap-2">
-          <div>
-            <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">预置运行时安装</h3>
-            <p class="mt-1 max-w-3xl text-sm text-gray-500 dark:text-gray-400">
-              仅可安装网关内置的固定版本（官方源 + SHA256）。不会开放任意
-              URL；安装结果落在数据卷，容器更新可保留。
-            </p>
-          </div>
-        </div>
-
-        <div
-          v-if="catalog.length === 0"
-          class="rounded-xl border border-dashed border-gray-200 px-4 py-8 text-center text-sm text-gray-400 dark:border-gray-700"
-        >
-          暂无可用预置包
-        </div>
-
-        <div v-else class="grid grid-cols-1 gap-3 lg:grid-cols-2">
-          <article
-            v-for="pkg in catalog"
-            :key="pkg.id"
-            class="group hover:border-brand-200 dark:hover:border-brand-500/30 rounded-2xl border border-gray-100 bg-gradient-to-br from-gray-50/90 to-white p-4 transition duration-300 hover:shadow-md dark:border-gray-800 dark:from-white/[0.04] dark:to-white/[0.02]"
-          >
-            <div class="flex flex-wrap items-start justify-between gap-2">
-              <div class="min-w-0">
-                <h4 class="text-sm font-semibold text-gray-800 dark:text-white/90">
-                  {{ pkg.name }}
-                  <span class="ml-1 font-mono text-xs font-normal text-gray-400">{{
-                    pkg.version
-                  }}</span>
-                </h4>
-                <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
-                  {{ pkg.description }}
-                </p>
-              </div>
-              <span
-                class="inline-flex shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium"
-                :class="packageChipClass(pkg)"
-              >
-                {{ packageStatusLabel(pkg) }}
-              </span>
-            </div>
-            <p class="mt-2 font-mono text-[11px] text-gray-400">
-              工具 {{ (pkg.tools || []).join(' · ') || '—' }}
-              <span v-if="pkg.assetGoos"> · {{ pkg.assetGoos }}/{{ pkg.assetGoarch }}</span>
-            </p>
-            <div
-              v-if="summary.installProgress?.packageId === pkg.id"
-              class="bg-brand-50 text-brand-700 dark:bg-brand-500/10 dark:text-brand-300 mt-3 rounded-lg px-3 py-2 text-xs"
-            >
-              <div class="flex items-center justify-between gap-2">
-                <span>{{ installProgressLabel }}…</span>
-                <span v-if="summary.installProgress.total > 0">{{ installProgressPercent }}%</span>
-              </div>
-              <div
-                class="bg-brand-100 dark:bg-brand-500/20 mt-1.5 h-1.5 overflow-hidden rounded-full"
-              >
-                <div
-                  v-if="summary.installProgress.total > 0"
-                  class="bg-brand-500 h-full rounded-full transition-[width] duration-300"
-                  :style="{ width: String(installProgressPercent) + '%' }"
-                />
-                <div v-else class="bg-brand-500 h-full w-1/3 animate-pulse rounded-full" />
-              </div>
-            </div>
-            <div class="mt-4 flex flex-wrap gap-2">
-              <button
-                v-if="!pkg.installed"
-                type="button"
-                class="bg-brand-500 hover:bg-brand-600 inline-flex h-9 items-center rounded-lg px-3.5 text-sm font-medium text-white transition disabled:cursor-not-allowed disabled:opacity-50"
-                :disabled="!pkg.supported || activeInstallPackageId !== ''"
-                :aria-label="`安装 ${pkg.name}`"
-                @click="onInstall(pkg)"
-              >
-                <span
-                  v-if="busyPackageId === pkg.id"
-                  class="mr-1.5 inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white"
-                />
-                {{ activeInstallPackageId === pkg.id ? '安装中…' : '安装' }}
-              </button>
-              <button
-                v-else
-                type="button"
-                class="inline-flex h-9 items-center rounded-lg border border-gray-300 px-3.5 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:opacity-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
-                :disabled="busyPackageId !== ''"
-                :aria-label="`卸载 ${pkg.name}`"
-                @click="onUninstall(pkg)"
-              >
-                {{ busyPackageId === pkg.id ? '处理中…' : '卸载' }}
-              </button>
-            </div>
-          </article>
-        </div>
-
-        <!-- 安装日志与错误：不再被 toast 吞掉，便于排查被墙/超时/校验失败 -->
-        <section
-          v-if="showInstallPanel"
-          class="mt-4 rounded-2xl border bg-white p-5 shadow-sm dark:bg-white/[0.03]"
-          :class="
-            installError
-              ? 'border-error-200 dark:border-error-500/30'
-              : 'border-gray-200 dark:border-gray-800'
-          "
-        >
-          <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
-            <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">安装日志</h3>
-            <span
-              v-if="summary.installProgress"
-              class="bg-brand-50 text-brand-700 dark:bg-brand-500/10 dark:text-brand-300 inline-flex rounded-full px-2.5 py-0.5 text-[11px] font-medium"
-            >
-              {{ installProgressLabel }}…
-            </span>
-          </div>
-
-          <!-- 失败错误条：持久展示，直到下一次安装开始 -->
-          <div
-            v-if="installError"
-            class="border-error-200 bg-error-50 text-error-700 dark:border-error-500/30 dark:bg-error-500/10 dark:text-error-300 mb-4 rounded-xl border px-4 py-3 text-sm"
-          >
-            <p class="font-semibold">安装失败</p>
-            <p class="mt-1 break-all">{{ installError }}</p>
-            <p class="text-error-600/80 dark:text-error-400/80 mt-2 text-xs">
-              国内网络下官方源(nodejs.org/github.com)常不可达。系统已自动尝试镜像源，若仍失败可稍后重试或检查网络。
-            </p>
-          </div>
-
-          <!-- 日志时间线：小屏单列 -->
-          <ol v-if="installLogs.length > 0" class="space-y-2.5">
-            <li v-for="(entry, idx) in installLogs" :key="idx" class="flex gap-3 text-xs">
-              <div class="flex flex-col items-center">
-                <span
-                  class="mt-1 h-2 w-2 shrink-0 rounded-full"
-                  :class="logEntryDotClass(entry)"
-                ></span>
-                <span
-                  v-if="idx < installLogs.length - 1"
-                  class="mt-0.5 w-px flex-1 bg-gray-200 dark:bg-gray-700"
-                ></span>
-              </div>
-              <div class="min-w-0 flex-1 pb-1">
-                <div class="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                  <span class="font-mono text-gray-400 dark:text-gray-500">{{
-                    logTimeShort(entry.at)
-                  }}</span>
-                  <span
-                    class="inline-flex rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-600 dark:bg-white/5 dark:text-gray-300"
-                    >{{ logPhaseLabel(entry.phase) }}</span
-                  >
-                  <span
-                    v-if="entry.level === 'success'"
-                    class="text-success-600 dark:text-success-400"
-                    >成功</span
-                  >
-                  <span
-                    v-else-if="entry.level === 'error'"
-                    class="text-error-600 dark:text-error-400"
-                    >失败</span
-                  >
-                </div>
-                <p class="mt-0.5 break-all text-gray-700 dark:text-gray-200">{{ entry.message }}</p>
-                <p
-                  v-if="entry.source"
-                  class="mt-0.5 font-mono text-[10px] break-all text-gray-400 dark:text-gray-500"
-                >
-                  {{ entry.source }}
-                </p>
-              </div>
-            </li>
-          </ol>
-          <p v-else-if="!summary.installProgress" class="text-sm text-gray-400 dark:text-gray-500">
-            暂无安装日志。
-          </p>
-        </section>
-      </section>
-
-      <!-- 依赖管理：npm/pip 第三方包安装/升级/卸载（青龙式集中管理） -->
-      <section
-        v-if="managementSupported"
+        v-if="localRuntimeSupported"
         class="mb-5 rounded-2xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-white/[0.03]"
       >
         <div class="mb-4 flex flex-wrap items-start justify-between gap-2">
           <div class="min-w-0">
             <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">依赖管理</h3>
             <p class="mt-1 max-w-3xl text-sm text-gray-500 dark:text-gray-400">
-              为已安装的 Node / Python 运行时集中安装第三方包，所有 stdio 上游共享。npm
-              包安装到独立受管依赖区，CLI 可直接使用，CommonJS 可通过受控模块路径解析；ESM
-              上游仍应在项目目录维护自身依赖。pip 包安装到共享
-              venv。命令只使用已配置的公共或镜像源。
+              为镜像自带的 Node / Python 集中安装第三方包，装在数据卷内，容器更新可保留。npm
+              包的 CLI 可直接调用，CommonJS 通过受控模块路径解析；ESM 上游仍应在项目目录维护自身依赖。pip
+              包平铺安装并通过 PYTHONPATH 接入，不使用 venv，镜像升级 Python 后依然可用。
             </p>
           </div>
           <button
             type="button"
             class="inline-flex h-9 items-center gap-1.5 rounded-lg border border-gray-300 px-3 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:opacity-60 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
             :disabled="depBusy"
-            :aria-label="`刷新${depKind} 依赖列表`"
+            :aria-label="`刷新 ${depKind} 依赖列表`"
             @click="loadDepList(depKind)"
           >
             <RefreshIcon
@@ -1067,21 +770,21 @@ onUnmounted(stopInstallProgressPolling)
             {{ depKind === 'pip' ? 'Python 解释器未检测到' : `${depKind} 运行时未就绪` }}
           </p>
           <p class="mt-1">{{ currentDepList.pythonHint || currentDepList.warning }}</p>
-          <p v-if="depKind === 'pip'" class="mt-2 text-xs leading-5">
-            uv 不包含 Python；请使用 <code class="font-mono">:full</code> 镜像提供 Python
-            3，或在镜像构建阶段安装 Python 后再重试。
+          <p v-if="binDir" class="mt-2 text-xs leading-5">
+            也可将解释器放入
+            <code class="font-mono break-all">{{ binDir }}</code>
+            后刷新探测。
           </p>
-          <a
-            href="#runtime-install"
-            class="mt-2 inline-block font-medium underline underline-offset-2"
-            >查看预置安装</a
-          >
         </div>
 
         <!-- 安装输入条：单行，支持逗号/空格分隔多个包 -->
-        <div class="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center">
+        <div class="mb-4 flex flex-col gap-2 sm:flex-row sm:items-start">
           <div class="flex-1">
+            <label class="sr-only" :for="`dep-input-${depKind}`">
+              {{ depKind }} 包名
+            </label>
             <input
+              :id="`dep-input-${depKind}`"
               v-model="depInput"
               type="text"
               class="focus:ring-brand-500/10 h-10 w-full rounded-lg border bg-transparent px-3 text-sm text-gray-800 shadow-sm placeholder:text-gray-400 focus:ring-3 focus:outline-none dark:text-white/90 dark:placeholder:text-white/30"
@@ -1104,7 +807,7 @@ onUnmounted(stopInstallProgressPolling)
           </div>
           <button
             type="button"
-            class="inline-flex h-10 items-center justify-center gap-1.5 rounded-lg px-4 text-sm font-medium text-white transition disabled:cursor-not-allowed disabled:opacity-50"
+            class="inline-flex h-10 shrink-0 items-center justify-center gap-1.5 rounded-lg px-4 text-sm font-medium text-white transition disabled:cursor-not-allowed disabled:opacity-50"
             :class="
               depKind === 'npm'
                 ? 'bg-brand-500 hover:bg-brand-600'
@@ -1137,11 +840,10 @@ onUnmounted(stopInstallProgressPolling)
               {{ depProgress.action === 'uninstall' ? '正在卸载' : '正在安装' }}
               <span class="font-mono">{{ depProgress.spec || '' }}</span>
             </span>
-            <span class="inline-flex items-center gap-1">
-              <span
-                class="border-brand-300 border-t-brand-600 inline-block h-3 w-3 animate-spin rounded-full border-2"
-              ></span>
-            </span>
+            <span
+              class="border-brand-300 border-t-brand-600 inline-block h-3 w-3 animate-spin rounded-full border-2"
+              aria-hidden="true"
+            ></span>
           </div>
           <div class="bg-brand-100 dark:bg-brand-500/20 mt-1.5 h-1.5 overflow-hidden rounded-full">
             <div class="bg-brand-500 h-full w-1/3 animate-pulse rounded-full" />
@@ -1165,7 +867,7 @@ onUnmounted(stopInstallProgressPolling)
           {{ depListError }}
         </p>
 
-        <!-- 依赖列表：响应式卡片网格 -->
+        <!-- 依赖列表：自适应卡片网格，小屏单列 -->
         <div v-if="currentDepList && currentDepList.ready">
           <div
             v-if="currentDepList.count === 0"
@@ -1287,7 +989,7 @@ onUnmounted(stopInstallProgressPolling)
             <p v-if="summary.pathPrefixes?.length">
               PATH 前缀 {{ summary.pathPrefixes.length }} 项
             </p>
-            <p v-else-if="summary.runtimeDir">尚未发现 bin 子目录</p>
+            <p v-else-if="summary.runtimeDir">卷内暂无可执行目录，使用镜像自带工具</p>
           </div>
         </div>
 
@@ -1319,28 +1021,6 @@ onUnmounted(stopInstallProgressPolling)
                     : '未在运行时目录或 PATH 中找到，stdio 使用该命令会失败'
               }}
             </p>
-            <div
-              v-if="!tool.available && !tool.warning && packageForTool(tool)"
-              class="mt-3 flex items-center justify-between gap-2"
-            >
-              <span class="text-[11px] text-gray-400 dark:text-gray-500">
-                可安装 {{ packageForTool(tool)?.name }} {{ packageForTool(tool)?.version }}
-              </span>
-              <button
-                type="button"
-                class="bg-brand-500 hover:bg-brand-600 inline-flex h-8 shrink-0 items-center rounded-lg px-3 text-xs font-medium text-white transition disabled:cursor-not-allowed disabled:opacity-50"
-                :disabled="activeInstallPackageId !== ''"
-                :aria-label="`${packageForTool(tool)?.installed ? '修复' : '安装'} ${tool.name}`"
-                @click="onInstallForTool(tool)"
-              >
-                <span
-                  v-if="packageForTool(tool)?.id === activeInstallPackageId"
-                  class="mr-1.5 inline-block h-3 w-3 animate-spin rounded-full border-2 border-white/40 border-t-white"
-                  aria-hidden="true"
-                />
-                {{ packageForTool(tool)?.installed ? '修复安装' : '一键安装' }}
-              </button>
-            </div>
           </article>
         </div>
       </section>

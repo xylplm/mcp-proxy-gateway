@@ -9,11 +9,17 @@ import (
 // 与内置模板常用包对齐；支持 @scope/* 前缀匹配。
 func DefaultStrictPackageAllowlist() []string {
 	return []string{
+		// npm 生态（npx）
 		"@modelcontextprotocol/*",
 		"@playwright/mcp",
 		"@notionhq/notion-mcp-server",
 		"firecrawl-mcp",
 		"exa-mcp-server",
+		// Python 生态（uvx）：官方 MCP 服务在 PyPI 上以 mcp-server-<name> 发布
+		"mcp-server-fetch",
+		"mcp-server-git",
+		"mcp-server-sqlite",
+		"mcp-server-time",
 	}
 }
 

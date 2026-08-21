@@ -14,7 +14,6 @@ export interface KnownToolOption {
   name: string
   label: string
   description?: string
-  packageId?: string
   inferFrom?: string[]
   templateRuntimes?: string[]
 }
