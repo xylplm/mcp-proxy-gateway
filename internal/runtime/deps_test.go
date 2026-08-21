@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -321,5 +322,26 @@ func TestDepLogsSnapshotCopied(t *testing.T) {
 	logs[0].Message = "tampered"
 	if dm.Logs()[0].Message != "orig" {
 		t.Fatal("Logs() 应返回副本")
+	}
+}
+
+// 写入侧按两倍上限均摊压缩，但对外可见的条数上限必须严格保持。
+func TestDependencyLogsStayCappedWhileAppendingManyLines(t *testing.T) {
+	t.Parallel()
+	dm := NewDependencyManager(t.TempDir(), nil)
+	for i := 0; i < maxDepLogs*5+7; i++ {
+		dm.addLog(DepLogEntry{Kind: DepKindNpm, Level: DepLogInfo, Message: fmt.Sprintf("line-%d", i)})
+	}
+	logs := dm.Logs()
+	if len(logs) != maxDepLogs {
+		t.Fatalf("对外条数应恒为 %d，got %d", maxDepLogs, len(logs))
+	}
+	// 保留的必须是最新的那一批，且顺序为最早在前。
+	last := maxDepLogs*5 + 6
+	if logs[len(logs)-1].Message != fmt.Sprintf("line-%d", last) {
+		t.Fatalf("应保留最新一条，got %q", logs[len(logs)-1].Message)
+	}
+	if logs[0].Message != fmt.Sprintf("line-%d", last-maxDepLogs+1) {
+		t.Fatalf("首条应为窗口起点，got %q", logs[0].Message)
 	}
 }

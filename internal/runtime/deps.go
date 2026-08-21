@@ -174,8 +174,12 @@ func (dm *DependencyManager) addLog(entry DepLogEntry) {
 	dm.logMu.Lock()
 	defer dm.logMu.Unlock()
 	dm.logs = append(dm.logs, entry)
-	if len(dm.logs) > maxDepLogs {
-		dm.logs = append([]DepLogEntry(nil), dm.logs[len(dm.logs)-maxDepLogs:]...)
+	// 攒到两倍上限再压缩一次，均摊到每行是 O(1)。
+	// 逐行压缩会在每行都新分配一个 maxDepLogs 长度的切片：一次几千行的 npm install
+	// 能因此产生上百 MB 瞬时垃圾。读取侧的 Logs() 负责只返回尾部 maxDepLogs 条，
+	// 因此对外可见的上限不变。
+	if len(dm.logs) >= 2*maxDepLogs {
+		dm.logs = append(dm.logs[:0], dm.logs[len(dm.logs)-maxDepLogs:]...)
 	}
 }
 
@@ -186,15 +190,22 @@ func (dm *DependencyManager) clearLogs() {
 	dm.logs = nil
 }
 
-// Logs 返回依赖日志副本（最早在前）。
+// Logs 返回依赖日志副本（最早在前），最多 maxDepLogs 条。
+//
+// 上限在这里收口而不是在 addLog 每行收口：写入侧按两倍上限均摊压缩，
+// 因此内部切片长度可能短暂超过上限，读取时统一取尾部。
 func (dm *DependencyManager) Logs() []DepLogEntry {
 	dm.logMu.RLock()
 	defer dm.logMu.RUnlock()
-	if len(dm.logs) == 0 {
+	logs := dm.logs
+	if len(logs) == 0 {
 		return nil
 	}
-	out := make([]DepLogEntry, len(dm.logs))
-	copy(out, dm.logs)
+	if len(logs) > maxDepLogs {
+		logs = logs[len(logs)-maxDepLogs:]
+	}
+	out := make([]DepLogEntry, len(logs))
+	copy(out, logs)
 	return out
 }
 

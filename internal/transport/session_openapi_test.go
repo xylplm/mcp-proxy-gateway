@@ -456,3 +456,27 @@ func ioReadAllString(r io.Reader) (string, error) {
 	b, err := io.ReadAll(r)
 	return string(b), err
 }
+
+// 工具结果会进入模型上下文与调用记录，上游响应头里的会话凭证必须先脱敏。
+func TestOpenAPIResultRedactsSensitiveResponseHeaders(t *testing.T) {
+	t.Parallel()
+	resp := &http.Response{
+		StatusCode: 200,
+		Status:     "200 OK",
+		Header: http.Header{
+			"Set-Cookie":   []string{"session=super-secret; HttpOnly"},
+			"Content-Type": []string{"application/json"},
+		},
+	}
+	content := marshalOpenAPIResultContent(resp, []byte(`{"ok":true}`), false)
+	if strings.Contains(string(content), "super-secret") {
+		t.Fatalf("响应头中的凭证不应出现在工具结果里：%s", content)
+	}
+	if !strings.Contains(string(content), "redacted") {
+		t.Fatalf("敏感响应头应保留键名并标记脱敏：%s", content)
+	}
+	// 非敏感头需要照常保留，否则会失去排查价值。
+	if !strings.Contains(string(content), "application/json") {
+		t.Fatalf("普通响应头不应被移除：%s", content)
+	}
+}

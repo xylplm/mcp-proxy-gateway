@@ -65,6 +65,8 @@ func connectTimeoutOf(_ domain.UpstreamConfig) time.Duration {
 // 握手成功后，connCtx 仅在 mcpClientConn.close 时被取消，从而让常驻流存活至会话关闭。
 func connectWithTimeout(ctx context.Context, transport mcp.Transport) (mcpClientConn, error) {
 	client := newMCPClient()
+	// 记录 SDK 实际建立的底层连接，供握手失败时确定性回收（见 trackedTransport 说明）。
+	tracked := &trackedTransport{inner: transport}
 
 	// connCtx 与连接超时解耦（无截止时间、不随 ctx 取消），仅由 cancel 控制其生命周期。
 	connCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
@@ -83,7 +85,7 @@ func connectWithTimeout(ctx context.Context, transport mcp.Transport) (mcpClient
 				}
 			}
 		}()
-		session, err := client.Connect(connCtx, transport, nil)
+		session, err := client.Connect(connCtx, tracked, nil)
 		resultCh <- connectResult{session: session, err: err}
 	}()
 
@@ -91,6 +93,9 @@ func connectWithTimeout(ctx context.Context, transport mcp.Transport) (mcpClient
 	case res := <-resultCh:
 		if res.err != nil {
 			cancel()
+			// 握手失败后底层连接可能仍是打开的，必须由这里关闭：stdio 传输要靠它
+			// 关闭 stdin 并 Wait 子进程，否则失败重试会不断累积僵尸进程。
+			tracked.closeIfOpen()
 			return nil, res.err
 		}
 		conn := &sdkClientConn{session: res.session, cancel: cancel, done: make(chan struct{})}
@@ -99,18 +104,54 @@ func connectWithTimeout(ctx context.Context, transport mcp.Transport) (mcpClient
 	case <-ctx.Done():
 		// 连接建立超时或被取消：中止仍在进行的握手。
 		cancel()
-		// 兜底：若握手在竞态下刚好成功，关闭其会话以释放资源（如 stdio 子进程）。
+		// 兜底：握手在竞态下可能刚好成功（关会话即可），也可能带着已打开的连接失败
+		//（须关连接），两种情况都要释放 stdio 子进程等资源。
 		go func() {
 			defer func() {
 				if recovered := recover(); recovered != nil {
 					safego.LogRecovered(nil, "上游 MCP SDK 超时清理 panic 已恢复", recovered)
 				}
 			}()
-			if res := <-resultCh; res.session != nil {
+			res := <-resultCh
+			if res.session != nil {
 				_ = res.session.Close()
+				return
 			}
+			tracked.closeIfOpen()
 		}()
 		return nil, ctx.Err()
+	}
+}
+
+// trackedTransport 记住 Connect 产出的底层连接，使调用方在握手失败后能确定性关闭它。
+//
+// 为什么需要：SDK v1.6.1 的 Client.Connect 在 initialize 收发失败时会 cs.Close()，
+// 但在「上游返回的协议版本不受支持」分支直接 return 而不关闭会话。对 stdio 传输，
+// 这意味着子进程的 stdin 不会被关闭、cmd.Wait 也不会被调用 —— 网关是它的父进程，
+// 于是每次失败都留下一个不可回收的僵尸。上游持续不可用时重试会让其无上限累积。
+//
+// 关闭是幂等的：SDK 的 ioConn.Close 由 closeOnce 保护，重复调用只返回首次结果，
+// 因此无需判断 SDK 是否已经关过。
+//
+// conn 的写入发生在 Connect 内（SDK 协程），读取都在从 resultCh 收到结果之后，
+// 由 channel 建立 happens-before，无需额外同步。
+type trackedTransport struct {
+	inner mcp.Transport
+	conn  mcp.Connection
+}
+
+func (t *trackedTransport) Connect(ctx context.Context) (mcp.Connection, error) {
+	conn, err := t.inner.Connect(ctx)
+	if err != nil {
+		return nil, err
+	}
+	t.conn = conn
+	return conn, nil
+}
+
+func (t *trackedTransport) closeIfOpen() {
+	if t.conn != nil {
+		_ = t.conn.Close()
 	}
 }
 

@@ -725,7 +725,7 @@ func marshalOpenAPIResultContent(resp *http.Response, body []byte, truncated boo
 	payload := map[string]any{
 		"status":     resp.StatusCode,
 		"statusText": resp.Status,
-		"headers":    resp.Header,
+		"headers":    redactOpenAPIResponseHeaders(resp.Header),
 		"truncated":  truncated,
 	}
 	var decoded any
@@ -746,6 +746,29 @@ func marshalOpenAPIResultContent(resp *http.Response, body []byte, truncated boo
 		return json.RawMessage(`[{"type":"text","text":"{}"}]`)
 	}
 	return content
+}
+
+// openAPIRedactedResponseHeaders 是回给客户端前需要脱敏的响应头（小写规范名）。
+// Set-Cookie 常带会话凭证，而工具结果会进入模型上下文与调用记录。
+var openAPIRedactedResponseHeaders = map[string]struct{}{
+	"set-cookie":          {},
+	"set-cookie2":         {},
+	"authorization":       {},
+	"proxy-authorization": {},
+}
+
+// redactOpenAPIResponseHeaders 复制响应头并把敏感项的值替换为占位符。
+// 保留键名而非整条删除：调试时仍能看出上游确实下发了该头。
+func redactOpenAPIResponseHeaders(header http.Header) http.Header {
+	out := make(http.Header, len(header))
+	for key, values := range header {
+		if _, sensitive := openAPIRedactedResponseHeaders[strings.ToLower(key)]; sensitive {
+			out[key] = []string{"[redacted]"}
+			continue
+		}
+		out[key] = append([]string(nil), values...)
+	}
+	return out
 }
 
 func openAPIToolName(operationID, method, path string) string {
