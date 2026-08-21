@@ -120,6 +120,7 @@ watch(
             type="button"
             class="inline-flex h-10 items-center rounded-lg border border-gray-300 px-3 text-sm font-medium text-gray-700 lg:hidden dark:border-gray-700 dark:text-gray-300"
             :aria-expanded="navOpen"
+            aria-controls="help-toc"
             @click="navOpen = !navOpen"
           >
             {{ navOpen ? '收起目录' : '目录' }}
@@ -131,8 +132,13 @@ watch(
     <div class="mx-auto flex max-w-[1600px] gap-8 px-4 py-6 sm:px-6 lg:py-10">
       <!-- 目录：≥lg 常驻侧栏，小屏为可折叠面板 -->
       <aside
+        id="help-toc"
         class="shrink-0 lg:sticky lg:top-24 lg:block lg:h-[calc(100vh-8rem)] lg:w-64 lg:overflow-y-auto xl:w-72"
-        :class="navOpen ? 'fixed inset-x-4 top-20 z-30 max-h-[70vh] overflow-y-auto' : 'hidden'"
+        :class="
+          navOpen
+            ? 'max-lg:fixed max-lg:inset-x-4 max-lg:top-20 max-lg:z-30 max-lg:max-h-[70vh] max-lg:overflow-y-auto'
+            : 'hidden'
+        "
       >
         <div
           class="rounded-2xl border border-gray-200 bg-white p-3 shadow-sm lg:border-0 lg:bg-transparent lg:p-0 lg:shadow-none dark:border-gray-800 dark:bg-gray-900 lg:dark:bg-transparent"
@@ -191,6 +197,14 @@ watch(
           <p v-else class="px-3 py-6 text-sm text-gray-400 dark:text-gray-500">
             没有匹配「{{ keyword }}」的文档，试试更短的关键词。
           </p>
+
+          <!-- 小屏顶栏放不下「返回控制台」，放在目录末尾保证仍然可达。 -->
+          <router-link
+            to="/"
+            class="mt-4 block border-t border-gray-100 px-3 pt-3 text-sm font-medium text-gray-600 sm:hidden dark:border-white/5 dark:text-gray-300"
+          >
+            返回控制台
+          </router-link>
         </div>
       </aside>
 

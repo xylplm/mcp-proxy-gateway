@@ -16,10 +16,29 @@ declare module 'vue-router' {
   }
 }
 
+/**
+ * 按哈希查找锚点元素。
+ *
+ * 用 try/catch 是必要的：形如 #123 的哈希不是合法 CSS 选择器，querySelector 会抛
+ * SyntaxError，若不拦住会让整个路由导航失败。找不到或非法时回退到滚动到页顶。
+ */
+function findAnchorElement(hash: string): Element | null {
+  try {
+    return document.querySelector(hash)
+  } catch {
+    return null
+  }
+}
+
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   scrollBehavior(to, from, savedPosition) {
-    return savedPosition || { left: 0, top: 0 }
+    if (savedPosition) return savedPosition
+    // 带锚点的深链（如 /help/runtime#deps）要滚到对应小节而不是页顶，
+    // top 偏移用于避开吸顶头部。不指定 behavior，交给系统的动效偏好设置。
+    const anchor = to.hash ? findAnchorElement(to.hash) : null
+    if (anchor) return { el: anchor, top: 96 }
+    return { left: 0, top: 0 }
   },
   routes: [
     {
