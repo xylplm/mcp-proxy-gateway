@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useSessionStore } from '@/stores/session'
+import { helpRoutes } from './help'
 
 /**
  * 路由元信息扩展声明。
@@ -193,6 +194,8 @@ const router = createRouter({
         requiresAuth: true,
       },
     },
+    // 帮助中心：独立布局与独立分包，公开访问（详见 router/help.ts）。
+    ...helpRoutes,
     {
       path: '/:pathMatch(.*)*',
       name: '404 Error',

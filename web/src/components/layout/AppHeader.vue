@@ -78,6 +78,7 @@
         class="shadow-theme-md w-full items-center justify-end gap-4 px-5 py-4 lg:flex lg:px-0 lg:shadow-none"
       >
         <div class="2xsm:gap-3 flex items-center gap-2">
+          <HelpLink />
           <ThemeToggler />
         </div>
         <UserMenu />
@@ -91,6 +92,7 @@ import { ref } from 'vue'
 import { useSidebar } from '@/composables/useSidebar'
 import ThemeToggler from '../common/ThemeToggler.vue'
 import HeaderLogo from './header/HeaderLogo.vue'
+import HelpLink from './header/HelpLink.vue'
 import UserMenu from './header/UserMenu.vue'
 
 const { toggleSidebar, toggleMobileSidebar, isMobileOpen } = useSidebar()
