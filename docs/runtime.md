@@ -12,8 +12,8 @@ Node、Python、uv / uvx 全部由**完整镜像**内置，网关不再提供运
 
 | 镜像 / 标签 | 基础镜像 | 内容 | 适用 |
 |---|---|---|---|
-| **完整（默认）** `Dockerfile.full` → `:latest`、`:full`、`:<version>` | `python:3.12-slim`（glibc） | 网关 + Node 24 + npm/npx + Python 3.12 + uv/uvx + bubblewrap | 需要本地 stdio MCP、npm/pip 依赖、脚本中心 |
-| **精简** `Dockerfile` → `:slim`、`:<version>-slim` | `alpine`（musl） | 仅网关静态二进制 | 纯网关聚合：远程 SSE / HTTP / WebSocket / OpenAPI |
+| **完整（默认）** `Dockerfile` → `:latest`、`:full`、`:<version>` | `python:3.12-slim`（glibc） | 网关 + Node 24 + npm/npx + Python 3.12 + uv/uvx + bubblewrap | 需要本地 stdio MCP、npm/pip 依赖、脚本中心 |
+| **精简** `Dockerfile.slim` → `:slim`、`:<version>-slim` | `alpine`（musl） | 仅网关静态二进制 | 纯网关聚合：远程 SSE / HTTP / WebSocket / OpenAPI |
 
 `:full` 与 `:latest` 指向同一镜像，仅为兼容旧标签。老的 `:latest` 用户升级后只是镜像变大，功能不减。
 

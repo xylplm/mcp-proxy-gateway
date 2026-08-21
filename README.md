@@ -357,8 +357,8 @@ mcp-proxy-gateway/
 │   ├── transport/          # 上游传输适配
 │   └── xiaozhi/            # 小智 AI 接入
 ├── web/                    # Vue 3 管理台
-├── Dockerfile              # 精简镜像（:slim，Alpine，无运行时）
-├── Dockerfile.full         # 完整镜像（默认 :latest / :full，内置 Node/Python/uv）
+├── Dockerfile              # 默认镜像（:latest / :full，内置 Node/Python/uv）
+├── Dockerfile.slim         # 精简镜像（:slim，Alpine，无运行时）
 └── .github/workflows/      # 发布流水线
 ```
 
@@ -370,7 +370,7 @@ mcp-proxy-gateway/
 - `version`：按北京时间生成 `1.0.<YYYYMMDDHHmm>` 版本号。
 - `build-frontend`：写入前端版本号，执行 `npm run build`，上传 `web/dist`。
 - `build-backend`：矩阵编译 `linux/amd64` 与 `linux/arm64` 静态二进制，并内嵌前端产物。
-- `docker-full`：完整多架构镜像（`:latest` / `:full` / `:<version>`，内置 Node/Python/uv）。
+- `docker`：默认多架构镜像（`:latest` / `:full` / `:<version>`，内置 Node/Python/uv）。
 - `docker-slim`：精简多架构镜像（`:slim` / `:<version>-slim`）。
 - `release`：创建 `v<version>` Git tag 与 GitHub Release。
 

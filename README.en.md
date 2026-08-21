@@ -357,8 +357,8 @@ mcp-proxy-gateway/
 │   ├── transport/          # Upstream transport adapters
 │   └── xiaozhi/            # XiaoZhi AI integration
 ├── web/                    # Vue 3 admin console
-├── Dockerfile              # Slim image (:slim, Alpine, no runtime)
-├── Dockerfile.full         # Full image (default :latest / :full, Node + Python + uv)
+├── Dockerfile              # Default image (:latest / :full, Node + Python + uv)
+├── Dockerfile.slim         # Slim image (:slim, Alpine, no runtime)
 └── .github/workflows/      # Release pipeline
 ```
 
@@ -370,7 +370,7 @@ The release workflow lives in `.github/workflows/release.yml` and is triggered m
 - `version`: generate `1.0.<YYYYMMDDHHmm>` in Beijing time.
 - `build-frontend`: write the frontend version, run `npm run build`, upload `web/dist`.
 - `build-backend`: build static `linux/amd64` and `linux/arm64` binaries with embedded frontend assets.
-- `docker-full`: full multi-arch image (`:latest` / `:full` / `:<version>` with Node/Python/uv).
+- `docker`: default multi-arch image (`:latest` / `:full` / `:<version>` with Node/Python/uv).
 - `docker-slim`: slim multi-arch image (`:slim` / `:<version>-slim`).
 - `release`: create the `v<version>` Git tag and GitHub Release.
 

@@ -7,8 +7,8 @@
 #   2) version         —— 生成日期版本号 1.0.<YYYYMMDDHHmm>（北京时间）。
 #   3) build-frontend   —— 独立构建前端并上传 artifact。
 #   4) build-backend   —— 矩阵并行编译 amd64/arm64 后端二进制（依赖前端 artifact）。
-#   5) docker-full     —— 完整镜像 Dockerfile.full → :latest / :full / :<version>（默认）。
-#   6) docker-slim     —— 精简镜像 Dockerfile → :slim / :<version>-slim（无任何运行时）。
+#   5) docker          —— 默认镜像 Dockerfile → :latest / :full / :<version>（内置运行时）。
+#   6) docker-slim     —— 精简镜像 Dockerfile.slim → :slim / :<version>-slim（无任何运行时）。
 #   7) release         —— 自动打 git tag 并创建 GitHub Release。
 #
 # 约定写死的固定值（无需环境变量/密钥）：
@@ -187,12 +187,12 @@ jobs:
           retention-days: 1
 
   # ===========================================================================
-  # Docker 完整版（默认）：:latest / :full / :<version>。
+  # Docker 默认镜像：:latest / :full / :<version>。
   # 内置 Node 24、Python 3.12、uv/uvx、bubblewrap，本地 stdio 开箱即用。
   # 基础镜像为 python:3.12-slim，apt 多架构安装依赖 QEMU。
   # ===========================================================================
-  docker-full:
-    name: 构建并推送完整版镜像
+  docker:
+    name: 构建并推送默认镜像
     needs: [version, build-backend]
     runs-on: ubuntu-latest
     steps:
@@ -228,11 +228,11 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build and push full Docker images
+      - name: Build and push default Docker images
         uses: docker/build-push-action@v7
         with:
           context: .
-          file: ./Dockerfile.full
+          file: ./Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
           provenance: false
@@ -290,7 +290,7 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: .
-          file: ./Dockerfile
+          file: ./Dockerfile.slim
           platforms: linux/amd64,linux/arm64
           push: true
           provenance: false
@@ -309,7 +309,7 @@ jobs:
   # ===========================================================================
   release:
     name: 打 tag 并发布 Release
-    needs: [version, docker-full, docker-slim]
+    needs: [version, docker, docker-slim]
     runs-on: ubuntu-latest
     steps:
       - name: 检出代码

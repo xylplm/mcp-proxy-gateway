@@ -24,7 +24,7 @@
 *.css       text eol=lf
 *.scss      text eol=lf
 *.html      text eol=lf
-Dockerfile  text eol=lf
+Dockerfile* text eol=lf
 
 # Windows 平台脚本保持 CRLF
 *.bat       text eol=crlf
