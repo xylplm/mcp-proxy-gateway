@@ -15,9 +15,9 @@ func DefaultStrictPackageAllowlist() []string {
 		"@notionhq/notion-mcp-server",
 		"firecrawl-mcp",
 		"exa-mcp-server",
-		// Python 生态（uvx）：官方 MCP 服务在 PyPI 上以 mcp-server-<name> 发布
+		// Python 生态（uvx）：官方 MCP 服务在 PyPI 上以 mcp-server-<name> 发布。
+		// 只列纯 Python、无外部二进制依赖的，确保完整镜像里开箱可跑。
 		"mcp-server-fetch",
-		"mcp-server-git",
 		"mcp-server-sqlite",
 		"mcp-server-time",
 	}

@@ -473,7 +473,7 @@ func builtinTemplates() []Template {
 				},
 			},
 		},
-		// 以下三个官方服务只在 PyPI 发布（npm 上没有对应包），必须用 uvx 启动。
+		// 以下官方服务只在 PyPI 发布（npm 上没有对应包），必须用 uvx 启动。
 		{
 			ID:        "fetch-mcp",
 			Name:      "网页抓取工具",
@@ -489,28 +489,8 @@ func builtinTemplates() []Template {
 			},
 			Placeholders: []Placeholder{},
 		},
-		{
-			ID:        "git-mcp",
-			Name:      "Git 仓库助手",
-			Category:  CategoryDevTools,
-			Summary:   "读取与检索本地 Git 仓库的提交、分支和文件变更。",
-			DocURL:    "https://github.com/modelcontextprotocol/servers/tree/main/src/git",
-			Transport: domain.TransportStdio,
-			PresetParams: map[string]any{
-				"command": "uvx",
-				"args": []any{
-					"mcp-server-git", "--repository", "${repoPath}",
-				},
-			},
-			Placeholders: []Placeholder{
-				{
-					Name:     "repoPath",
-					Label:    "Git 仓库目录",
-					Required: true,
-					Rule:     ParamRule{Kind: ParamString, MinLen: 1, MaxLen: 4096},
-				},
-			},
-		},
+		// 未收录 mcp-server-git：它经 GitPython 依赖 git 可执行文件，而完整镜像
+		// 基于 python:3.12-slim 不含 git。装上必然启动失败，不放进模板市场。
 		{
 			ID:        "sqlite-mcp",
 			Name:      "SQLite 数据库",

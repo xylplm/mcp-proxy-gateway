@@ -117,8 +117,9 @@ const environmentConclusion = computed(() => {
     return {
       tone: 'warning' as const,
       message: '缺少 ' + String(current.missingCount) + ' 个常用工具，部分 stdio 模板暂不可用。',
-      action: '查看补齐方案',
-      target: '#runtime-guide',
+      action: showGuide.value ? '查看补齐方案' : '检查运行时目录配置',
+      // 引导区块未渲染时不给出锚点，避免点击后跳空。
+      target: showGuide.value ? '#runtime-guide' : '/settings',
     }
   }
   return {
@@ -667,8 +668,8 @@ onUnmounted(stopDepProgressPolling)
       >
         <h3 class="text-base font-semibold text-gray-800 dark:text-white/90">如何补齐缺失工具</h3>
         <p class="mt-1 max-w-3xl text-sm leading-6 text-gray-600 dark:text-gray-300">
-          完整镜像已内置 Node、Python 与 uv / uvx。仍显示缺失时，通常是自定义了 stdio
-          命令白名单或改动了容器 PATH。
+          官方完整镜像已内置 Node、Python 与 uv / uvx。这里仍显示缺失，通常是自建镜像未包含
+          解释器，或容器 PATH 被改动。
         </p>
         <div
           class="mt-3 grid gap-3 text-sm leading-6 text-gray-700 sm:grid-cols-2 dark:text-gray-200"
@@ -676,21 +677,16 @@ onUnmounted(stopDepProgressPolling)
           <div
             class="border-warning-200 dark:border-warning-500/20 rounded-xl border bg-white/60 p-3 dark:bg-white/[0.03]"
           >
-            <p class="font-medium">先检查命令白名单</p>
+            <p class="font-medium">推荐：改用官方完整镜像</p>
             <p class="mt-1 text-xs text-gray-600 dark:text-gray-300">
-              系统设置中的 stdio 命令白名单会限制可启动的命令，缺失工具可能只是未被放行。
+              <code class="font-mono">:latest</code> 或 <code class="font-mono">:full</code>
+              自带全部解释器，数据卷可直接复用，无需迁移依赖。
             </p>
-            <router-link
-              to="/settings"
-              class="text-brand-600 dark:text-brand-300 mt-2 inline-block text-xs font-medium underline underline-offset-2"
-            >
-              去调整白名单
-            </router-link>
           </div>
           <div
             class="rounded-xl border border-gray-200 bg-white/60 p-3 dark:border-gray-700 dark:bg-white/[0.03]"
           >
-            <p class="font-medium">或放入卷内 bin 目录覆盖</p>
+            <p class="font-medium">或放入卷内 bin 目录</p>
             <p class="mt-1 text-xs text-gray-600 dark:text-gray-300">
               将可执行文件放入 <code class="font-mono break-all">{{ binDir }}</code
               >（需 chmod +x）。该目录优先于镜像自带版本，可用于覆盖版本或补充其他工具。

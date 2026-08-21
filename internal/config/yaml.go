@@ -62,7 +62,7 @@ type RuntimeConfig struct {
 	GlobalFileRoots []string `yaml:"global_file_roots" json:"global_file_roots"`
 	// BrowseExtraRoots 为管理台路径选择器额外可浏览根（仅扩大浏览范围，不改变 stdio 安全策略）。
 	BrowseExtraRoots []string `yaml:"browse_extra_roots" json:"browse_extra_roots"`
-	// StrictPathOnlyRuntime 严格档是否仅从 runtime 卷解析命令。
+	// StrictPathOnlyRuntime 严格档是否只接受受信运行时目录（运行时卷 + 镜像内置解释器目录）。
 	StrictPathOnlyRuntime *bool `yaml:"strict_path_only_runtime" json:"strict_path_only_runtime"`
 	// StrictNetworkDefault 严格档默认网络策略：allowlist | deny。
 	StrictNetworkDefault string `yaml:"strict_network_default" json:"strict_network_default"`

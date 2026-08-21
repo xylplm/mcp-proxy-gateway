@@ -1377,8 +1377,8 @@ const errClass = 'mt-1 text-xs text-error-500'
                     严格档仅使用运行时卷内工具
                   </span>
                   <span class="mt-1 block text-xs leading-5 text-gray-500 dark:text-gray-400">
-                    仅对「严格安全」档位生效：不从系统 PATH 随便找命令，只使用卷内依赖与放入
-                    runtime/bin 的工具，缩小可被拉起的可执行文件范围。
+                    仅对「严格安全」档位生效：只接受镜像内置解释器与运行时卷（runtime/bin、
+                    npm/pip 依赖）中的可执行文件，系统 PATH 上的其他位置一律拒绝。
                   </span>
                 </span>
               </label>

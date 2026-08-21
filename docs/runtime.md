@@ -61,7 +61,7 @@ $MPG_DATA_DIR/runtime/
 
 子进程 PATH 前缀顺序：`bin` → `npm/node_modules/.bin` → `pip/bin`，之后才是镜像自带目录。不存在的目录会被跳过。
 
-严格档要求可执行文件落在运行时卷内。允许范围由 `runtimeRootOfPrefix` 从每个前缀反推：剥掉上面那组相对后缀，多个后缀同时匹配时取最窄的根。这样 npm `.bin` 里指向 `../<pkg>/bin/*.js` 的符号链接能解析通过，而运行时目录本身叫 `pip`/`npm` 时也不会把父目录放进白名单。
+严格档对卷内的允许范围由 `runtimeRootOfPrefix` 从每个前缀反推：剥掉上面那组相对后缀，多个后缀同时匹配时取最窄的根。这样 npm `.bin` 里指向 `../<pkg>/bin/*.js` 的符号链接能解析通过，而运行时目录本身叫 `pip`/`npm` 时也不会把父目录放进白名单。
 
 ### npm 依赖
 
@@ -89,13 +89,17 @@ pip 依赖用 `uv pip install --target runtime/pip` 平铺安装，通过 `PYTHO
    - 父进程敏感环境会被剥离；用户在 `connParams.env` 中显式配置的 MCP 凭证可按需要注入
 2. **本地运行安全档位（每上游可覆盖）**
    - `standard`（默认）：全局命令白名单 + 环境清理 + 进程清理
-   - `strict`：与 `strict_command_allowlist` 取交集（默认无 npm，避免严格档触发装包）、强制 cwd/文件允许路径、禁止脚本自装包意图、仅在 runtime 卷内解析命令、环境继承收紧；**允许 npx/uvx，但目标包必须在 `strict_package_allowlist`（或上游 `packageAllowlist`）内**
+   - `strict`：与 `strict_command_allowlist` 取交集（默认无 npm，避免严格档触发装包）、强制 cwd/文件允许路径、禁止脚本自装包意图、只在受信运行时目录内解析命令、环境继承收紧；**允许 npx/uvx，但目标包必须在 `strict_package_allowlist`（或上游 `packageAllowlist`）内**
    - `unrestricted`：denylist-only（仍禁 bash/cmd 等），管理台强红告警 + 二次确认
    - 配置键：全局 `runtime.default_stdio_security_mode`；每上游 `connParams.securityProfile`
    - **说明：** 策略本身不是内核沙箱。Linux 严格档在检测到 `bwrap` 时会尝试启用文件 bind 隔离，网络 `deny` 时会创建网络命名空间；在 Docker 内是否实际可用仍取决于容器权限与安全策略，存在 `bwrap` 二进制并不保证隔离能够启动。
 3. **卷路径层**
    - 默认 `{MPG_DATA_DIR}/runtime`，可用 `MPG_RUNTIME_DIR` 覆盖
    - Doctor / Resolve / 子进程 PATH 优先卷内 `bin`、`npm/node_modules/.bin`、`pip/bin`
+   - 严格档的受信目录 = 运行时卷前缀 ∪ 镜像内置解释器目录（按 `DefaultProbeTools()` 在
+     PATH 上反查得到，精简镜像下为空集）。系统 PATH 上的其他位置一律拒绝，
+     符号链接越界也拒绝。放宽是惰性的：命令基名仍必须在 `strict_command_allowlist` 内，
+     所以同目录下的其他可执行文件不会因此变得可启动。
 4. **依赖管理输入约束**
    - npm/pip 依赖命令只接收包名或版本规格，拒绝路径、URL、以 `-` 开头的项（防 flag 注入）与控制字符
    - 缓存固定在 `runtime/cache`，不写容器临时层

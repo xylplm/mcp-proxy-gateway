@@ -49,8 +49,71 @@ func LookPathWithPrefixesStatus(file string, prefixes []string, lookPath LookPat
 	return path, executablePermissionWarning(path), nil
 }
 
-// ErrNotInRuntimePath 表示严格模式下命令不在 runtime 卷路径内。
-var ErrNotInRuntimePath = fmt.Errorf("严格安全模式仅允许运行时卷内的可执行文件")
+// ErrNotInRuntimePath 表示严格模式下命令不在受信运行时目录内。
+var ErrNotInRuntimePath = fmt.Errorf("严格安全模式仅允许运行时卷或镜像内置的可执行文件")
+
+// imageRuntimeRoots 返回镜像内置解释器所在目录（去重，已解析符号链接）。
+//
+// 运行时改由镜像提供后，严格档的受信范围不能只剩运行时卷，否则内置的
+// node / python / uv 一个都解析不到，严格档等于不可用。这里按 DefaultProbeTools()
+// 在系统 PATH 上反查，镜像调整布局（例如 Node 从 /opt/node 挪走）无需改代码；
+// 精简镜像查不到任何工具，集合为空，严格档自然退回「仅卷内」。
+//
+// 放宽是惰性的：严格档仍要求命令基名落在 strict_command_allowlist 内，
+// 因此同目录下的其他可执行文件不会因此变得可启动。
+//
+// 不做缓存：一次调用最多几十个 stat，相比 stdio 会话建立（fork + MCP initialize）
+// 可忽略，省掉一份缓存与失效逻辑。
+func imageRuntimeRoots() []string {
+	tools := DefaultProbeTools()
+	roots := make([]string, 0, len(tools))
+	seen := make(map[string]struct{}, len(tools))
+	for _, name := range tools {
+		path, err := exec.LookPath(name)
+		if err != nil || path == "" {
+			continue
+		}
+		resolved, err := filepath.EvalSymlinks(path)
+		if err != nil {
+			continue
+		}
+		dir := filepath.Dir(resolved)
+		key := rootKey(dir)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		roots = append(roots, dir)
+	}
+	return roots
+}
+
+// strictAllowedRoots 返回严格档允许的可执行文件根：运行时卷 ∪ 镜像解释器目录。
+func strictAllowedRoots(prefixes []string) []string {
+	roots := strictRuntimeRoots(prefixes)
+	seen := make(map[string]struct{}, len(roots))
+	for _, r := range roots {
+		seen[rootKey(r)] = struct{}{}
+	}
+	for _, r := range imageRuntimeRoots() {
+		key := rootKey(r)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		roots = append(roots, r)
+	}
+	return roots
+}
+
+// rootKey 归一化根目录比较键（Windows 路径大小写不敏感）。
+func rootKey(p string) string {
+	clean := filepath.Clean(p)
+	if runtime.GOOS == "windows" {
+		return strings.ToLower(clean)
+	}
+	return clean
+}
 
 // ResolveCommandWithPrefixes 在 prefixes + PATH 上解析 command，错误文案与 ResolveCommand 一致。
 func ResolveCommandWithPrefixes(command string, prefixes []string) (string, error) {
@@ -72,14 +135,17 @@ func ResolveCommandWithPrefixes(command string, prefixes []string) (string, erro
 	return resolved, nil
 }
 
-// ResolveCommandStrictRuntime 仅在 runtime 前缀目录中解析 command（严格档）。
-// 绝对路径须落在某一 prefix 根下；逻辑名只在 prefix 内查找，不回落系统 PATH。
+// ResolveCommandStrictRuntime 在受信运行时目录内解析 command（严格档）。
+//
+// 受信目录 = 运行时卷前缀 ∪ 镜像内置解释器目录（见 strictAllowedRoots）。
+// 解析顺序：卷内前缀优先（用户放置可覆盖镜像版本），再回落系统 PATH；
+// 两条路径的最终真实路径都必须落在受信目录内，符号链接越界一律拒绝。
 func ResolveCommandStrictRuntime(command string, prefixes []string) (string, error) {
 	raw := strings.TrimSpace(command)
 	if raw == "" {
 		return "", fmt.Errorf("连接参数 \"command\" 不能为空")
 	}
-	allowedRoots := strictRuntimeRoots(prefixes)
+	allowedRoots := strictAllowedRoots(prefixes)
 	if len(allowedRoots) == 0 {
 		return "", fmt.Errorf("%w：未配置可用的运行时目录", ErrNotInRuntimePath)
 	}
@@ -96,12 +162,19 @@ func ResolveCommandStrictRuntime(command string, prefixes []string) (string, err
 			}
 		}
 	}
+	// 镜像内置解释器不在卷内，必须允许按名回落系统 PATH；受信根校验仍然生效。
+	if p, err := exec.LookPath(raw); err == nil && p != "" {
+		if resolved, allowed := resolveExecutableWithinRoots(p, allowedRoots); allowed {
+			return resolved, nil
+		}
+	}
 	base := CommandBaseName(raw)
 	if base == "" {
 		base = raw
 	}
 	return "", fmt.Errorf(
-		"严格模式下未在运行时目录找到 %q，请将该工具放入 runtime/bin 或改用标准安全档位",
+		"严格模式下未在受信运行时目录找到 %q。完整镜像已内置 node/python/uv；"+
+			"精简镜像请将该工具放入 runtime/bin，或改用标准安全档位",
 		base,
 	)
 }
@@ -184,10 +257,7 @@ func strictRuntimeRoots(prefixes []string) []string {
 			continue
 		}
 		rootResolved = filepath.Clean(rootResolved)
-		key := rootResolved
-		if runtime.GOOS == "windows" {
-			key = strings.ToLower(key)
-		}
+		key := rootKey(rootResolved)
 		if _, ok := seen[key]; ok {
 			continue
 		}

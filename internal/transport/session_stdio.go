@@ -98,7 +98,8 @@ func (s *stdioSession) Connect(ctx context.Context) error {
 		}
 
 		pathPrefixes := currentPathPrefixes()
-		// 严格档仅 runtime 卷解析：不回落系统 PATH。
+		// 严格档只接受受信运行时目录（运行时卷 ∪ 镜像内置解释器目录），
+		// 系统 PATH 上的其他位置一律拒绝。
 		var resolveErr error
 		if eff.Mode == runtime.SecurityModeStrict && eff.StrictPathOnly {
 			command, resolveErr = runtime.ResolveCommandStrictRuntime(command, pathPrefixes)

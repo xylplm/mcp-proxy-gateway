@@ -135,7 +135,8 @@ func wrapCommandWithBwrap(cmd *exec.Cmd, bwrap string, opts SandboxOptions) {
 		}
 	}
 
-	// 运行时目录（卷内 node/python）只读挂载。
+	// 运行时卷只读挂载：npm/pip 共享依赖与用户放入 bin 的可执行文件。
+	// 镜像内置解释器（/opt/node、/usr/local）已由上面的 /usr、/opt 只读挂载覆盖。
 	if opts.RuntimeDir != "" {
 		if st, err := os.Stat(opts.RuntimeDir); err == nil && st.IsDir() {
 			args = append(args, "--ro-bind", opts.RuntimeDir, opts.RuntimeDir)

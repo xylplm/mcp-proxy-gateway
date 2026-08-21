@@ -45,8 +45,7 @@ func runtimeLayoutSubdirs() []string {
 
 // runtimePathCandidates 返回运行时卷内可能提供可执行文件的目录（稳定顺序，含不存在项）。
 //
-// 与 runtimeIntermediateDirs 成对维护：每个候选项从自身往上走过若干中间目录后
-// 必须回到 runtimeDir，严格档的运行时根判定才成立。
+// 同时经 runtimePathSuffixes 供严格档反推运行时根，新增候选项无需改动别处。
 func runtimePathCandidates(runtimeDir string) []string {
 	return []string{
 		filepath.Join(runtimeDir, RuntimeSubdirBin),

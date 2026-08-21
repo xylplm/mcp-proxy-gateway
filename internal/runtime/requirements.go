@@ -453,7 +453,7 @@ func EvaluatePreflight(req PreflightRequest, policy Policy, runtimeDir string, l
 			item.Available = false
 			item.Message = "未在运行时目录或 PATH 中找到"
 			if eff.Mode == SecurityModeStrict && (eff.StrictPathOnly || policy.StrictPathOnlyRuntime) {
-				item.Message = "未在运行时卷目录中找到（严格模式不使用系统 PATH）"
+				item.Message = "未在受信运行时目录中找到（严格模式仅接受运行时卷与镜像内置目录）"
 			}
 		}
 		result.Items = append(result.Items, item)

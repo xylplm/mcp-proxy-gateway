@@ -36,7 +36,8 @@ type Policy struct {
 	GlobalFileRoots []string
 	// BrowseExtraRoots 为管理台路径选择器额外可浏览根（不参与 stdio 文件策略校验）。
 	BrowseExtraRoots []string
-	// StrictPathOnlyRuntime 为 true 时严格档仅从 runtime 卷前缀解析命令（不回落系统 PATH）。
+	// StrictPathOnlyRuntime 为 true 时严格档只接受受信运行时目录内的可执行文件：
+	// 运行时卷前缀 ∪ 镜像内置解释器目录；系统 PATH 上的其他位置一律拒绝。
 	StrictPathOnlyRuntime bool
 	// StrictNetworkDefault 为严格档未声明网络策略时的默认（deny 或 allowlist）。
 	StrictNetworkDefault NetworkAccessMode
