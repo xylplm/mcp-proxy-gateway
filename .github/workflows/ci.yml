@@ -84,3 +84,40 @@ jobs:
       - name: 构建
         working-directory: ./web
         run: npm run build
+
+  # 镜像只在 release.yml 里手动构建，Dockerfile 的破坏（apt 源、Node tarball 与校验和、
+  # PATH 顺序、内置工具自检）过去只能在发版那一刻才暴露。这里在每次 push 上单架构
+  # 试构建一次并且不推送，把这类失败提前到提交时。
+  images:
+    name: 镜像构建校验
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v7
+
+      # Dockerfile 只负责打包，二进制由 release.yml 的编译产物提供。这里只验证
+      # Dockerfile 自身，用占位文件顶替即可，不必在 CI 里重复一次交叉编译。
+      - name: 准备占位二进制
+        run: |
+          mkdir -p bin
+          printf '#!/bin/sh\nexit 0\n' > bin/mpg-linux-amd64
+          chmod +x bin/mpg-linux-amd64
+
+      - name: Docker Setup Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: 构建默认镜像（不推送）
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: false
+
+      - name: 构建精简镜像（不推送）
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile.slim
+          platforms: linux/amd64
+          push: false

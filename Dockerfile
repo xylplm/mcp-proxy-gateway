@@ -32,6 +32,12 @@ ARG NODE_SHA256_ARM64=d28c8a5bf0a808f0ed434a1dce8c54ae98f0371c0bd86ac58abc613f73
 # uv/uvx 取自官方 distroless 镜像：多架构自动匹配，无需下载与校验和维护。
 COPY --from=ghcr.io/astral-sh/uv:0.6.14 /uv /uvx /usr/local/bin/
 
+# PATH 必须在安装 Node 的 RUN 之前声明。
+# npm / npx 是以 #!/usr/bin/env node 为 shebang 的脚本，解析自己的解释器要靠 PATH；
+# 若 PATH 放到 RUN 之后，构建期校验会以 env: 'node': No such file or directory 失败，
+# 运行期同理。放在这里让构建校验与运行期走完全相同的解析路径。
+ENV PATH="/opt/node/bin:${PATH}"
+
 # bubblewrap：严格档 stdio 的文件 bind 隔离与网络 deny 命名空间断网；
 # 实际可用性仍取决于容器权限，存在二进制不代表隔离一定能启动。
 #
@@ -60,8 +66,9 @@ RUN set -eux; \
     rm -f /tmp/node.tar.gz; \
     apt-get purge -y --auto-remove curl; \
     rm -rf /var/lib/apt/lists/*; \
-    /opt/node/bin/node -v; \
-    /opt/node/bin/npm -v; \
+    node -v; \
+    npm -v; \
+    npx --version; \
     python3 --version; \
     python --version; \
     uv --version; \
@@ -75,8 +82,7 @@ RUN chmod +x /mpg /entrypoint.sh
 # MPG_IMAGE_FLAVOR=full 让管理台暴露全部本地 stdio 功能。
 # UV_NO_MANAGED_PYTHON / UV_PYTHON_DOWNLOADS：Python 由镜像提供，
 # 禁止 uv 自行下载解释器（否则 uv pip --target 找不到解释器时会静默拉数十 MB）。
-ENV PATH="/opt/node/bin:${PATH}" \
-    MPG_PG_DSN="" \
+ENV MPG_PG_DSN="" \
     MPG_REDIS_ADDR="" \
     MPG_DATA_DIR="/data" \
     MPG_IMAGE_FLAVOR="full" \
