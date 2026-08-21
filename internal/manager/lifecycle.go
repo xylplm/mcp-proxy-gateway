@@ -537,3 +537,38 @@ func (m *Manager) Shutdown() {
 		c.mu.Unlock()
 	}
 }
+
+// RetryUnavailable 唤醒所有处于失败状态的已启用上游立即重试一次，返回被唤醒数量。
+//
+// 用于「外部原因刚被修好」的场景：最典型的是用户在运行环境里补装了缺失的 npm/pip
+// 依赖。此时后台循环虽然永不放弃，但降频状态下要等到最大退避间隔（默认 5 分钟）
+// 才会再探测一次，用户会以为没生效而去逐个点重连。
+//
+// 只唤醒既有循环，不新建连接、不重置失败计数，也不触碰 available/connecting 的
+// 上游，因此不会打断正在服务的会话，也不会造成重连风暴。非阻塞：signalWake 写的是
+// 容量 1 的缓冲通道，已有待处理唤醒时直接丢弃。
+func (m *Manager) RetryUnavailable() int {
+	m.connsMu.Lock()
+	conns := make([]*Connection, 0, len(m.conns))
+	for _, c := range m.conns {
+		conns = append(conns, c)
+	}
+	m.connsMu.Unlock()
+
+	woken := 0
+	for _, c := range conns {
+		state, _, enabled, _ := c.waitSnapshot()
+		if !enabled {
+			continue
+		}
+		if state != domain.ConnUnavailable && state != domain.ConnSuspended {
+			continue
+		}
+		c.signalWake()
+		woken++
+	}
+	if woken > 0 {
+		m.logger.Info("已唤醒失败中的上游立即重试", "count", woken)
+	}
+	return woken
+}

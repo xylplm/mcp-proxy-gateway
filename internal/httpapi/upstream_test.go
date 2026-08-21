@@ -45,6 +45,8 @@ type fakeUpstreamService struct {
 	created   []domain.UpstreamConfig
 	createErr map[string]error
 	err       error
+	// retryUnavailableCalls 记录依赖变更后是否唤醒了失败中的上游。
+	retryUnavailableCalls int
 }
 
 func (s *fakeUpstreamService) Create(_ context.Context, cfg domain.UpstreamConfig) (domain.Upstream, error) {
@@ -79,6 +81,11 @@ func (s *fakeUpstreamService) SetEnabled(context.Context, string, bool) error { 
 func (s *fakeUpstreamService) Reorder(context.Context, []string) error { return nil }
 
 func (s *fakeUpstreamService) Reconnect(context.Context, string) error { return nil }
+
+func (s *fakeUpstreamService) RetryUnavailable() int {
+	s.retryUnavailableCalls++
+	return 0
+}
 
 type fakeToolCacheEnsurer struct {
 	calls    int

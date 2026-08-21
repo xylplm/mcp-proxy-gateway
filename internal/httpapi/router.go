@@ -54,6 +54,9 @@ type UpstreamService interface {
 	Reorder(ctx context.Context, orderedIDs []string) error
 	// Reconnect 由管理员手动发起重连。
 	Reconnect(ctx context.Context, id string) error
+	// RetryUnavailable 唤醒所有失败中的已启用上游立即重试，返回被唤醒数量。
+	// 用于「外部原因刚被修好」后免去用户逐个点重连。
+	RetryUnavailable() int
 }
 
 // ToolRefresher 是手动刷新某上游 MCP 工具列表的窄接口（Req 6.4、6.5）。

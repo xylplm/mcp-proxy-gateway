@@ -251,3 +251,42 @@ func TestRuntimeDepsValidation(t *testing.T) {
 		t.Fatalf("uninstall status=%d body=%s", w.Code, w.Body.String())
 	}
 }
+
+// 缺依赖是 stdio 上游最常见的失败原因；装好之后必须立即唤醒失败中的上游重试，
+// 否则降频状态下要等到最大退避间隔，用户会以为没生效。
+func TestRuntimeDepChangeWakesUnavailableUpstreams(t *testing.T) {
+	for _, request := range []struct {
+		name string
+		path string
+		body string
+	}{
+		{name: "install", path: "/api/admin/runtime/deps/install", body: `{"kind":"npm","spec":"lodash"}`},
+		{name: "uninstall", path: "/api/admin/runtime/deps/uninstall", body: `{"kind":"npm","name":"lodash"}`},
+	} {
+		t.Run(request.name, func(t *testing.T) {
+			ups := &fakeUpstreamService{}
+			e := newTestEngine(Deps{RuntimeEnv: &fakeRuntimeEnv{}, Upstream: ups})
+			w := doJSON(e, http.MethodPost, request.path, request.body)
+			if w.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+			}
+			if ups.retryUnavailableCalls != 1 {
+				t.Fatalf("应唤醒一次失败中的上游，got %d", ups.retryUnavailableCalls)
+			}
+		})
+	}
+}
+
+// 依赖操作失败时不应唤醒：什么都没修好，唤醒只会制造无意义的重连。
+func TestRuntimeDepFailureDoesNotWakeUpstreams(t *testing.T) {
+	ups := &fakeUpstreamService{}
+	env := &fakeRuntimeEnv{installDepErr: fmt.Errorf("uv pip install 失败")}
+	e := newTestEngine(Deps{RuntimeEnv: env, Upstream: ups})
+	w := doJSON(e, http.MethodPost, "/api/admin/runtime/deps/install", `{"kind":"npm","spec":"lodash"}`)
+	if w.Code == http.StatusOK {
+		t.Fatalf("安装失败应返回错误：%s", w.Body.String())
+	}
+	if ups.retryUnavailableCalls != 0 {
+		t.Fatalf("失败不应唤醒上游，got %d", ups.retryUnavailableCalls)
+	}
+}

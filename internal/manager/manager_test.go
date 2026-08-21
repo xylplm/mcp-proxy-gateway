@@ -1282,3 +1282,46 @@ func TestWaitForAvailableRespectsWaitBudget(t *testing.T) {
 		t.Fatalf("按需等待不应长期堆积，实际等待 %v", elapsed)
 	}
 }
+
+// RetryUnavailable 只唤醒失败中的已启用上游：正在服务的连接不能被打断，
+// 停用的上游也不该被悄悄拉起。
+func TestRetryUnavailableOnlyWakesFailedEnabledUpstreams(t *testing.T) {
+	m := New(&testUpstreamRepo{}, &testToolCacheCleaner{}, nil, nil)
+	defer m.Shutdown()
+
+	cases := []struct {
+		id        string
+		state     domain.ConnState
+		enabled   bool
+		wantWoken bool
+	}{
+		{id: "suspended", state: domain.ConnSuspended, enabled: true, wantWoken: true},
+		{id: "unavailable", state: domain.ConnUnavailable, enabled: true, wantWoken: true},
+		{id: "available", state: domain.ConnAvailable, enabled: true, wantWoken: false},
+		{id: "connecting", state: domain.ConnConnecting, enabled: true, wantWoken: false},
+		{id: "disabled", state: domain.ConnSuspended, enabled: false, wantWoken: false},
+	}
+	for _, tc := range cases {
+		c := newConnection(tc.id)
+		c.state = tc.state
+		c.cfg = domain.UpstreamConfig{Enabled: tc.enabled}
+		m.conns[tc.id] = c
+	}
+
+	wantCount := 0
+	for _, tc := range cases {
+		if tc.wantWoken {
+			wantCount++
+		}
+	}
+	if got := m.RetryUnavailable(); got != wantCount {
+		t.Fatalf("唤醒数量 got=%d want=%d", got, wantCount)
+	}
+	for _, tc := range cases {
+		c := m.conns[tc.id]
+		woken := len(c.wake) == 1
+		if woken != tc.wantWoken {
+			t.Fatalf("%s: woken=%v want=%v", tc.id, woken, tc.wantWoken)
+		}
+	}
+}

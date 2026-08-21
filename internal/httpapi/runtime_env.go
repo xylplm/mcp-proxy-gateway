@@ -228,7 +228,23 @@ func (r *Router) runtimeInstallDep(c *gin.Context) {
 		return
 	}
 	r.recordUpdate(c, audit.ResourceSetting, "runtime:dep:"+string(kind)+":install:"+result.Name)
+	r.retryUnavailableUpstreams()
 	respondOK(c, result)
+}
+
+// retryUnavailableUpstreams 在依赖变更后唤醒失败中的上游立即重试。
+//
+// 缺依赖是 stdio 上游最常见的失败原因（ModuleNotFoundError / Cannot find module）。
+// 装好之后后台循环虽然终会重试，但降频状态要等到最大退避间隔（默认 5 分钟），
+// 用户会以为没生效而去逐个点重连。这里把「修好」与「重试」接起来。
+//
+// 只唤醒既有循环，不影响正在服务的连接；失败上游本就在重试路径上，因此无需
+// 向调用方报告结果。
+func (r *Router) retryUnavailableUpstreams() {
+	if r.upstream == nil {
+		return
+	}
+	_ = r.upstream.RetryUnavailable()
 }
 
 // runtimeUninstallDep 卸载一个第三方包。
@@ -268,5 +284,7 @@ func (r *Router) runtimeUninstallDep(c *gin.Context) {
 		return
 	}
 	r.recordUpdate(c, audit.ResourceSetting, "runtime:dep:"+string(kind)+":uninstall:"+name)
+	// 卸载同样唤醒：用户常以「卸载重装」修复损坏的依赖，装完那步会再唤醒一次。
+	r.retryUnavailableUpstreams()
 	respondOK(c, result)
 }

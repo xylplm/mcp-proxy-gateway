@@ -122,6 +122,7 @@ func (f *fakeScriptUpstreamService) List(context.Context) ([]domain.Upstream, er
 func (f *fakeScriptUpstreamService) SetEnabled(context.Context, string, bool) error { return nil }
 func (f *fakeScriptUpstreamService) Reorder(context.Context, []string) error        { return nil }
 func (f *fakeScriptUpstreamService) Reconnect(context.Context, string) error        { return nil }
+func (f *fakeScriptUpstreamService) RetryUnavailable() int                          { return 0 }
 
 func TestScriptLaunchOptionalBodyValidation(t *testing.T) {
 	dir := t.TempDir()
