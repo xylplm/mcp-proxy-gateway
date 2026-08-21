@@ -149,7 +149,7 @@ func TestPrependPathIdempotent(t *testing.T) {
 	t.Parallel()
 	sep := string(os.PathListSeparator)
 	a := filepath.Join("rt", "bin")
-	b := filepath.Join("rt", "node", "bin")
+	b := filepath.Join("rt", RuntimeSubdirPip, "bin")
 	got := PrependPath(" /usr/bin ", []string{a, b})
 	if !strings.HasPrefix(got, a+sep+b+sep) && !strings.HasPrefix(got, a+sep+b) {
 		// 允许末尾无多余 sep

@@ -127,26 +127,3 @@ func TestListPipShowsEveryPackageInTargetDirectory(t *testing.T) {
 		t.Fatalf("packages were hidden: %+v", result.Items)
 	}
 }
-
-// 缺解释器时给出可操作引导，而不是把 uv 的原始报错抛给用户。
-func TestListPipWithoutInterpreterReturnsHint(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("fake-bin 测试仅支持 Linux/macOS")
-	}
-	runtimeDir := t.TempDir()
-	if err := EnsureRuntimeLayout(runtimeDir); err != nil {
-		t.Fatal(err)
-	}
-	makeFakeBin(t, filepath.Join(runtimeDir, RuntimeSubdirBin), "uv", "echo '[]'")
-
-	dm := NewDependencyManager(runtimeDir, nil)
-	// 清空 PATH，确保不会命中宿主机的 python。
-	t.Setenv("PATH", filepath.Join(runtimeDir, RuntimeSubdirBin))
-	result, err := dm.ListDeps(context.Background(), DepKindPip)
-	if err != nil {
-		t.Fatalf("ListDeps: %v", err)
-	}
-	if result.Ready || result.PythonHint == "" {
-		t.Fatalf("expected python hint, got %+v", result)
-	}
-}

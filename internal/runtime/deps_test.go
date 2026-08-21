@@ -140,7 +140,8 @@ exit 0
 fi
 echo unknown args
 exit 1`
-	makeFakeBin(t, filepath.Join(rt, "node", "bin"), "npm", npmBody)
+	// 放入卷内 bin：它是 PATH 前缀的第一项，因此优先于宿主真实 npm 被解析到。
+	makeFakeBin(t, filepath.Join(rt, RuntimeSubdirBin), "npm", npmBody)
 
 	dm := NewDependencyManager(rt, nil)
 	res, err := dm.ListDeps(context.Background(), DepKindNpm)
@@ -200,7 +201,7 @@ func TestInstallNpmInvokesCommand(t *testing.T) {
 	}
 	npmBody := `echo "added 1 package"
 exit 0`
-	makeFakeBin(t, filepath.Join(rt, "node", "bin"), "npm", npmBody)
+	makeFakeBin(t, filepath.Join(rt, RuntimeSubdirBin), "npm", npmBody)
 
 	dm := NewDependencyManager(rt, nil)
 	res, err := dm.InstallDep(context.Background(), DepKindNpm, "lodash@4.17.21")
@@ -244,24 +245,23 @@ func TestListPipMissingPythonShowsHint(t *testing.T) {
 	if err := EnsureRuntimeLayout(rt); err != nil {
 		t.Fatal(err)
 	}
-	// fake uv 存在，但 resolveSystemPython 通过 exec.LookPath 找不到 python3/python
-	// （测试环境的 PATH 通常不含它们？不确定，故用注入型 manager）。
+	// uv 可用但没有任何 Python 解释器：uv 自身不含解释器，应给出引导而非原始报错。
 	uvBody := `echo "uv mock"
 exit 0`
-	makeFakeBin(t, filepath.Join(rt, "uv", "bin"), "uv", uvBody)
+	makeFakeBin(t, filepath.Join(rt, RuntimeSubdirBin), "uv", uvBody)
 
-	// 通过设置空 PATH 环境确保 LookPath 找不到系统 python。
+	// PATH 只留卷内 bin（其中没有 python3/python），确保不会命中宿主解释器。
+	t.Setenv("PATH", filepath.Join(rt, RuntimeSubdirBin))
 	dm := NewDependencyManager(rt, nil)
-	// 直接断言 ensureVenv 在无 python 时的行为：模拟 python 缺失。
-	// 这里用 PATH 清空的方式运行 list，避免依赖宿主是否有 python。
-	t.Setenv("PATH", filepath.Join(rt, "uv", "bin")+string(filepath.ListSeparator)+filepath.Join(rt, "bin"))
 	res, err := dm.ListDeps(context.Background(), DepKindPip)
 	if err != nil {
 		t.Fatalf("ListDeps pip: %v", err)
 	}
-	// 若宿主有 python3 则 res.Ready=true；否则应有 hint。两种都接受。
-	if !res.Ready && res.PythonHint == "" {
-		t.Fatalf("缺 python 时应给出 hint，got ready=%v warning=%q", res.Ready, res.Warning)
+	if res.Ready {
+		t.Fatalf("无解释器时不应报告就绪：%+v", res)
+	}
+	if res.PythonHint == "" {
+		t.Fatalf("缺 python 时应给出可操作引导，warning=%q", res.Warning)
 	}
 }
 
