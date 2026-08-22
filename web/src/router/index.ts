@@ -228,6 +228,17 @@ const router = createRouter({
 
 export default router
 
+// Vue Router 在 visibilitychange 时调用 history.replaceState 保存滚动位置。
+// Edge 的 bug 会导致 replaceState 触发窗口抢焦点，切走后被反复拉回来。
+// 管理后台不需要刷新恢复滚动位置，直接屏蔽这个调用。
+if (typeof window !== 'undefined') {
+  const _replaceState = history.replaceState.bind(history)
+  history.replaceState = function (state, title, url) {
+    if ((url === '' || url == null) && document.visibilityState === 'hidden') return
+    return _replaceState(state, title, url)
+  }
+}
+
 /**
  * 全局前置守卫：
  * - 设置 document.title（保留原模板行为）；
