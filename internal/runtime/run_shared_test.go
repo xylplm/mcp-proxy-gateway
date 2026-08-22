@@ -53,12 +53,21 @@ func TestRunBoundedKeepsAllLinesIncludingTrailingPartial(t *testing.T) {
 	}
 }
 
-// logFn 必须逐行收到 stdout 与 stderr，供依赖管理写实时日志。
-func TestRunBoundedStreamsLinesToLogFn(t *testing.T) {
+// dualStreamCommand 返回一条「各向 stdout、stderr 输出一行」的命令。
+// 与 fastEchoCommand 同理：双流回调丢行的回归不该只有 Linux CI 能发现。
+func dualStreamCommand() (string, []string) {
 	if runtime.GOOS == "windows" {
-		t.Skip("双流输出依赖 POSIX shell")
+		return "cmd.exe", []string{"/c", "echo out-line& echo err-line 1>&2"}
 	}
-	cmd := exec.Command("/bin/sh", "-c", `echo out-line; echo err-line 1>&2`)
+	return "/bin/sh", []string{"-c", `echo out-line; echo err-line 1>&2`}
+}
+
+// logFn 必须逐行收到 stdout 与 stderr，供依赖管理写实时日志。
+// stdout/stderr 由 exec 的两个拷贝 goroutine 分别驱动，runBounded 需保证 logFn
+// 串行调用，否则并发回调会让调用方（这里是 append）丢行。
+func TestRunBoundedStreamsLinesToLogFn(t *testing.T) {
+	name, args := dualStreamCommand()
+	cmd := exec.Command(name, args...)
 	cmd.WaitDelay = depKillGrace
 	var streams []string
 	_, _, err := runBounded(cmd, func(stream, line string) {

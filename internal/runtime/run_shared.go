@@ -23,21 +23,29 @@ const maxCommandLineBytes = 1024 * 1024
 // 不会永久阻塞。
 //
 // logFn 非 nil 时，每行 stdout/stderr 会回调（用于依赖管理写 depLogs）。
+// stdout 与 stderr 由 exec 的两个拷贝 goroutine 各自驱动，因此这里用一把共享锁
+// 串行化 logFn：调用方无需自备同步，也不会因并发回调丢日志行。
 func runBounded(cmd *exec.Cmd, logFn func(stream, line string)) (string, string, error) {
 	stdoutBuf := newBoundedBuffer(maxCommandOutput)
 	stderrBuf := newBoundedBuffer(maxCommandOutput)
 
+	var logMu sync.Mutex
+	emitLog := func(stream, line string) {
+		if logFn == nil {
+			return
+		}
+		logMu.Lock()
+		defer logMu.Unlock()
+		logFn(stream, line)
+	}
+
 	stdout := &lineSplitter{sink: func(line string) {
 		stdoutBuf.appendLine(line)
-		if logFn != nil {
-			logFn("stdout", line)
-		}
+		emitLog("stdout", line)
 	}}
 	stderr := &lineSplitter{sink: func(line string) {
 		stderrBuf.appendLine(line)
-		if logFn != nil {
-			logFn("stderr", line)
-		}
+		emitLog("stderr", line)
 	}}
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
