@@ -126,6 +126,11 @@ func (s *stdioSession) Connect(ctx context.Context) error {
 
 		userEnv := resolveStringMapCredentials(s.params.env, s.credential)
 		cmd := exec.Command(command, args...)
+		// 捕获子进程 stderr 的尾部：SDK 的 CommandTransport 只接管 stdin/stdout，
+		// 子进程崩溃时（如 Python ModuleNotFoundError）真实原因只在 stderr。
+		// 连接失败时把它并入错误，避免上层只看到无信息量的 EOF。
+		stderrTail := newStderrCapture()
+		cmd.Stderr = stderrTail
 		if verifiedScript != nil {
 			cmd.ExtraFiles = verifiedScript.ExtraFiles
 		}
@@ -162,7 +167,7 @@ func (s *stdioSession) Connect(ctx context.Context) error {
 			if verifiedScript != nil {
 				verifiedScript.close()
 			}
-			return nil, err
+			return nil, withStderrTail(err, stderrTail.tail())
 		}
 		// 包装 close：SDK 关闭后按进程组清理孙进程，并释放脚本 FD/快照。
 		return &stdioClientConn{
