@@ -186,8 +186,7 @@ func (r *Router) invokeToolPlayground(c *gin.Context) {
 	}
 	if err != nil {
 		resp.Error = err.Error()
-		var apiErr *domain.APIError
-		if errors.As(err, &apiErr) {
+		if apiErr, ok := errors.AsType[*domain.APIError](err); ok {
 			resp.ErrorCode = string(apiErr.Code)
 			resp.Error = apiErr.Message
 		}

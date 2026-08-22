@@ -163,8 +163,7 @@ func (t upstreamTester) failedResult(stage string, start time.Time, err error) d
 }
 
 func upstreamTestErrorMessage(err error) string {
-	var apiErr *domain.APIError
-	if errors.As(err, &apiErr) {
+	if apiErr, ok := errors.AsType[*domain.APIError](err); ok {
 		return apiErr.Message
 	}
 	if err != nil {

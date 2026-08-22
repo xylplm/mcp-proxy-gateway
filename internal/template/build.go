@@ -2,6 +2,7 @@ package template
 
 import (
 	"fmt"
+	"maps"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -254,9 +255,7 @@ func mergeConnParamFields(fields map[string]string, err error) {
 		fields["connParams"] = err.Error()
 		return
 	}
-	for k, v := range apiErr.Fields {
-		fields[k] = v
-	}
+	maps.Copy(fields, apiErr.Fields)
 	if len(apiErr.Fields) == 0 {
 		fields["connParams"] = apiErr.Message
 	}

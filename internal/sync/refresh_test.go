@@ -132,8 +132,7 @@ func TestRefreshFetchFailureKeepsOldCache(t *testing.T) {
 		t.Errorf("拉取失败时应保留旧缓存，实际=%v has=%v", toolNamesOf(cached), has)
 	}
 	// 错误应为统一 APIError。
-	var apiErr *domain.APIError
-	if !errors.As(err, &apiErr) {
+	if _, ok := errors.AsType[*domain.APIError](err); !ok {
 		t.Fatalf("期望错误类型为 *domain.APIError，实际为 %T", err)
 	}
 }

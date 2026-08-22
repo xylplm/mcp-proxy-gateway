@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 )
@@ -91,7 +92,7 @@ type PreflightResult struct {
 	SecurityError string             `json:"securityError,omitempty"`
 	Effective     *EffectiveSecurity `json:"effectiveSecurity,omitempty"`
 	FileAccessOK  bool               `json:"fileAccessOk"`
-	NetworkPolicy NetworkPolicy      `json:"networkPolicy,omitempty"`
+	NetworkPolicy NetworkPolicy      `json:"networkPolicy"`
 }
 
 // KnownTools 返回可声明/可探测的工具字典（稳定顺序）。
@@ -134,11 +135,8 @@ func InferToolsFromCommand(command string) []string {
 	}
 	var out []string
 	for _, tool := range KnownTools() {
-		for _, source := range tool.InferFrom {
-			if source == base {
-				out = append(out, tool.Name)
-				break
-			}
+		if slices.Contains(tool.InferFrom, base) {
+			out = append(out, tool.Name)
 		}
 	}
 	return out
@@ -153,11 +151,8 @@ func InferToolsFromTemplateRuntimes(tags []string) []string {
 			continue
 		}
 		for _, tool := range KnownTools() {
-			for _, source := range tool.TemplateRuntimes {
-				if source == runtime {
-					set[tool.Name] = struct{}{}
-					break
-				}
+			if slices.Contains(tool.TemplateRuntimes, runtime) {
+				set[tool.Name] = struct{}{}
 			}
 		}
 	}

@@ -101,8 +101,7 @@ func mergeRuleValidation(fields map[string]string, prefix string, err error) {
 	if err == nil {
 		return
 	}
-	var apiErr *domain.APIError
-	if errors.As(err, &apiErr) {
+	if apiErr, ok := errors.AsType[*domain.APIError](err); ok {
 		for key, msg := range apiErr.Fields {
 			fields[prefix+"."+key] = msg
 		}

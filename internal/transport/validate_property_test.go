@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 
@@ -283,13 +284,7 @@ func urlValidRef(params map[string]any, allowed ...string) bool {
 	if err != nil {
 		return false
 	}
-	schemeOK := false
-	for _, a := range allowed {
-		if u.Scheme == a {
-			schemeOK = true
-			break
-		}
-	}
+	schemeOK := slices.Contains(allowed, u.Scheme)
 	if !schemeOK {
 		return false
 	}
@@ -356,13 +351,7 @@ func urlValidRefKey(params map[string]any, key string, allowed ...string) bool {
 	if err != nil {
 		return false
 	}
-	schemeOK := false
-	for _, a := range allowed {
-		if u.Scheme == a {
-			schemeOK = true
-			break
-		}
-	}
+	schemeOK := slices.Contains(allowed, u.Scheme)
 	if !schemeOK {
 		return false
 	}

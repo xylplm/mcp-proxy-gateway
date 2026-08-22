@@ -163,7 +163,7 @@ func TestListBrowseDirFiltersAndLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 填充足够条目触发 truncated
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		if err := os.WriteFile(filepath.Join(root, "f"+string(rune('a'+i))+".txt"), []byte("x"), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -248,7 +248,7 @@ func TestListBrowseDirSortsBeforeLimit(t *testing.T) {
 
 func TestListBrowseDirFiltersBeforeLimit(t *testing.T) {
 	root := t.TempDir()
-	for i := 0; i < 250; i++ {
+	for i := range 250 {
 		name := filepath.Join(root, "file-"+strings.Repeat("0", 4-len(strconv.Itoa(i)))+strconv.Itoa(i))
 		if err := os.WriteFile(name, []byte("x"), 0o644); err != nil {
 			t.Fatal(err)

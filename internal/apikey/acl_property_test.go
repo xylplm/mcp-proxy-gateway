@@ -41,7 +41,7 @@ func TestProperty21SourceWhitelistMatch(t *testing.T) {
 		// 生成若干随机「干扰」网段，可能命中也可能不命中来源地址。
 		decoyN := rapid.IntRange(0, 4).Draw(t, "decoyN")
 		decoys := make([]netip.Prefix, 0, decoyN)
-		for i := 0; i < decoyN; i++ {
+		for range decoyN {
 			decoys = append(decoys, p21DrawPrefix(t, "decoy"))
 		}
 

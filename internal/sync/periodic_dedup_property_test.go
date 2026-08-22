@@ -29,7 +29,7 @@ import (
 
 // p19SyncResult 汇总一次后台 SyncOne 调用的结果，供并发断言使用。
 type p19SyncResult struct {
-	ran int32 // 1 表示实际执行（ran=true），0 表示被跳过（ran=false）
+	ran atomic.Int32 // 1 表示实际执行（ran=true），0 表示被跳过（ran=false）
 	err error
 }
 
@@ -61,7 +61,7 @@ func TestProperty19SyncConcurrentDedup(t *testing.T) {
 			defer close(firstDone)
 			ran, err := s.SyncOne(context.Background(), upstreamID)
 			if ran {
-				atomic.StoreInt32(&first.ran, 1)
+				first.ran.Store(1)
 			}
 			first.err = err
 		}()
@@ -76,23 +76,20 @@ func TestProperty19SyncConcurrentDedup(t *testing.T) {
 		// 并发发起 N 次对同一上游的触发：上一次尚未完成，全部应被跳过。
 		results := make([]p19SyncResult, n)
 		var wg sync.WaitGroup
-		for i := 0; i < n; i++ {
-			idx := i
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+		for i := range n {
+			wg.Go(func() {
 				ran, err := s.SyncOne(context.Background(), upstreamID)
 				if ran {
-					atomic.StoreInt32(&results[idx].ran, 1)
+					results[i].ran.Store(1)
 				}
-				results[idx].err = err
-			}()
+				results[i].err = err
+			})
 		}
 		wg.Wait()
 
 		// 断言一：N 次并发触发全部被跳过（ran=false 且无错误）。
-		for i := 0; i < n; i++ {
-			if atomic.LoadInt32(&results[i].ran) != 0 {
+		for i := range n {
+			if results[i].ran.Load() != 0 {
 				t.Fatalf("第 %d/%d 次并发触发应被跳过（ran 期望 false），实际 ran=true", i+1, n)
 			}
 			if results[i].err != nil {
@@ -119,7 +116,7 @@ func TestProperty19SyncConcurrentDedup(t *testing.T) {
 		if first.err != nil {
 			t.Fatalf("第一次同步不应返回错误：%v", first.err)
 		}
-		if atomic.LoadInt32(&first.ran) != 1 {
+		if first.ran.Load() != 1 {
 			t.Fatal("第一次触发应实际执行（ran 期望 true）")
 		}
 

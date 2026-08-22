@@ -36,7 +36,7 @@ func TestInvokeToolConcurrentAPIKeyVisibilityIsolated(t *testing.T) {
 
 	const workers = 128
 	errCh := make(chan error, workers)
-	for i := 0; i < workers; i++ {
+	for i := range workers {
 		i := i
 		go func() {
 			apiKeyID := "open-key"
@@ -67,7 +67,7 @@ func TestInvokeToolConcurrentAPIKeyVisibilityIsolated(t *testing.T) {
 		}()
 	}
 
-	for i := 0; i < workers; i++ {
+	for range workers {
 		if err := <-errCh; err != nil {
 			t.Fatal(err)
 		}

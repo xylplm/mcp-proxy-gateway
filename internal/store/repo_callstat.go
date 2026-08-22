@@ -599,10 +599,7 @@ func aggregateDailyModels(records []CallStatRecord) []callStatDailyModel {
 }
 
 func accumulateDailyModel(model *callStatDailyModel, rec CallStatRecord, calledAt time.Time, status string) {
-	latency := rec.LatencyMS
-	if latency < 0 {
-		latency = 0
-	}
+	latency := max(rec.LatencyMS, 0)
 	model.TotalCalls++
 	model.LatencySumMS += int64(latency)
 	if latency > model.LatencyMaxMS {
@@ -726,10 +723,7 @@ func estimateP95LatencyMS(buckets []latencyBucketCount, maxLatencyMS int) float6
 	if total == 0 {
 		return 0
 	}
-	target := int64(math.Ceil(float64(total) * 0.95))
-	if target < 1 {
-		target = 1
-	}
+	target := max(int64(math.Ceil(float64(total)*0.95)), 1)
 	seen := int64(0)
 	for _, bucket := range buckets {
 		seen += bucket.Count

@@ -21,7 +21,7 @@ func TestSessionInvokerConcurrentCallsKeepResponsesIsolated(t *testing.T) {
 
 	const workers = 128
 	errCh := make(chan error, workers)
-	for i := 0; i < workers; i++ {
+	for i := range workers {
 		i := i
 		go func() {
 			args := json.RawMessage(fmt.Sprintf(`{"seq":%d,"payload":"call-%d"}`, i, i))
@@ -38,7 +38,7 @@ func TestSessionInvokerConcurrentCallsKeepResponsesIsolated(t *testing.T) {
 		}()
 	}
 
-	for i := 0; i < workers; i++ {
+	for range workers {
 		if err := <-errCh; err != nil {
 			t.Fatal(err)
 		}

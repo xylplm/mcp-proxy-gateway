@@ -46,7 +46,7 @@ func p11GenVisibleTools() *rapid.Generator[[]domain.ToolDef] {
 	return rapid.Custom(func(t *rapid.T) []domain.ToolDef {
 		n := rapid.IntRange(0, 12).Draw(t, "numTools")
 		out := make([]domain.ToolDef, 0, n)
-		for i := 0; i < n; i++ {
+		for i := range n {
 			nameTok := rapid.SampledFrom(p11NamePool).Draw(t, fmt.Sprintf("nameTok-%d", i))
 			descTok := rapid.SampledFrom(p11DescPool).Draw(t, fmt.Sprintf("descTok-%d", i))
 			name := fmt.Sprintf("%s_tool_%d", nameTok, i)
@@ -161,10 +161,7 @@ func TestProperty11SmartDiscoveryAndGet(t *testing.T) {
 				expected = append(expected, td)
 			}
 		}
-		wantLen := len(expected)
-		if wantLen > effLimit {
-			wantLen = effLimit
-		}
+		wantLen := min(len(expected), effLimit)
 
 		// ---- search_tools ----
 		got, err := h.SearchTools(ctx, apiKeyID, rawKeyword, requested)

@@ -486,8 +486,7 @@ func (s *Service) InvokeTool(ctx context.Context, apiKeyID, exposedName string, 
 			result, callErr = s.invoker.CallUpstream(ctx, candidate.UpstreamID, candidate.OriginalName, args)
 		}
 
-		var pending *PreDispatchError
-		if errors.As(callErr, &pending) {
+		if pending, ok := errors.AsType[*PreDispatchError](callErr); ok {
 			if len(candidate.recoveryFallbacks) > 0 {
 				next := candidate.recoveryFallbacks[0]
 				next.recoveryFallbacks = append([]ToolCandidate(nil), candidate.recoveryFallbacks[1:]...)
@@ -839,8 +838,7 @@ func (s *Service) currentTime() time.Time {
 }
 
 func isRoutableSourceFailure(err error) bool {
-	var apiErr *domain.APIError
-	if errors.As(err, &apiErr) {
+	if apiErr, ok := errors.AsType[*domain.APIError](err); ok {
 		return apiErr.Code == domain.CodeUpstreamUnavailable || apiErr.Code == domain.CodeUpstreamTimeout
 	}
 	return true
@@ -908,8 +906,7 @@ func callFailure(result domain.ToolResult, callErr error) (string, string, json.
 			HTTPStatus:   http.StatusInternalServerError,
 			BusinessCode: 50000,
 		}
-		var apiErr *domain.APIError
-		if errors.As(callErr, &apiErr) {
+		if apiErr, ok := errors.AsType[*domain.APIError](callErr); ok {
 			detail.Code = string(apiErr.Code)
 			detail.Message = apiErr.Message
 			detail.HTTPStatus = domainErrorHTTPStatus(apiErr.Code)

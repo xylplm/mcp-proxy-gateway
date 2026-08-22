@@ -334,8 +334,7 @@ func TestSessionDialerPreDispatchRejectsBrokenSessionBeforeQuota(t *testing.T) {
 		reserved = true
 		return nil
 	})
-	var preErr *aggregation.PreDispatchError
-	if !errors.As(err, &preErr) {
+	if _, ok := errors.AsType[*aggregation.PreDispatchError](err); !ok {
 		t.Fatalf("失效连接应在预占前返回可回退错误，got=%v", err)
 	}
 	if reserved {

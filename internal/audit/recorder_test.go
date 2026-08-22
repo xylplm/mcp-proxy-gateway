@@ -19,20 +19,20 @@ type recorderTestRepo struct {
 	rows   []store.AuditRecord
 	nextID int64
 
-	insertErr   error // 注入 Insert 失败。
-	failedCount int64 // 因失败被丢弃的条数（由 Insert 返回错误计数）。
+	insertErr   error        // 注入 Insert 失败。
+	failedCount atomic.Int64 // 因失败被丢弃的条数（由 Insert 返回错误计数）。
 	panicOnce   bool
-	panicCount  int64
+	panicCount  atomic.Int64
 }
 
 func (r *recorderTestRepo) Insert(_ context.Context, rec store.AuditRecord) (store.AuditRecord, error) {
 	if r.panicOnce {
 		r.panicOnce = false
-		atomic.AddInt64(&r.panicCount, 1)
+		r.panicCount.Add(1)
 		panic("audit repo panic")
 	}
 	if r.insertErr != nil {
-		atomic.AddInt64(&r.failedCount, 1)
+		r.failedCount.Add(1)
 		return store.AuditRecord{}, r.insertErr
 	}
 	r.mu.Lock()
@@ -162,7 +162,7 @@ func TestRecorder_QueueFull_DropsSilently(t *testing.T) {
 	rec := NewRecorder(repo, WithQueueSize(4), WithFlushInterval(time.Hour))
 	// 故意不 Start，记录滞留队列。
 
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		// 提交应快速返回，不阻塞。
 		done := make(chan struct{})
 		go func() {
@@ -192,14 +192,14 @@ func TestRecorder_InsertError_DropsSilently(t *testing.T) {
 	rec.Start(context.Background())
 	defer rec.Stop()
 
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		if err := rec.RecordLogin(context.Background(), "admin", true); err != nil {
 			t.Fatalf("RecordLogin 不应返回错误：%v", err)
 		}
 	}
 
 	// 等待 worker 消费：无落库记录但失败计数 > 0。
-	if !waitFor(func() bool { return atomic.LoadInt64(&repo.failedCount) > 0 }, time.Second) {
+	if !waitFor(func() bool { return repo.failedCount.Load() > 0 }, time.Second) {
 		t.Fatalf("落库失败应被静默丢弃，失败计数应 > 0")
 	}
 	if repo.count() != 0 {
@@ -216,7 +216,7 @@ func TestRecorder_InsertPanic_ContinuesWorker(t *testing.T) {
 	if err := rec.RecordLogin(context.Background(), "panic-once", true); err != nil {
 		t.Fatalf("RecordLogin 不应返回错误：%v", err)
 	}
-	if !waitFor(func() bool { return atomic.LoadInt64(&repo.panicCount) == 1 }, time.Second) {
+	if !waitFor(func() bool { return repo.panicCount.Load() == 1 }, time.Second) {
 		t.Fatal("应观察到一次审计落库 panic")
 	}
 	if !rec.Running() {
@@ -256,7 +256,7 @@ func TestRecorder_Stop_DrainsPending(t *testing.T) {
 	rec := newTestRecorder(repo, WithFlushInterval(time.Hour)) // 长 flush，确保只能靠 Stop 收尾。
 
 	rec.Start(context.Background())
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		if err := rec.RecordLogin(context.Background(), "admin", true); err != nil {
 			t.Fatalf("RecordLogin 不应返回错误：%v", err)
 		}
@@ -288,7 +288,7 @@ func TestRecorder_ContextCancel_StopsWorker(t *testing.T) {
 
 	// worker 退出后提交的记录暂存队列不再被消费，落库数不再增长。
 	before := repo.count()
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		if err := rec.RecordLogin(context.Background(), "admin", true); err != nil {
 			t.Fatalf("RecordLogin 不应返回错误：%v", err)
 		}

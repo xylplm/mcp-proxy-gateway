@@ -310,8 +310,8 @@ func newWSMCPServer() *httptest.Server {
 
 // httpToWS 将 httptest 的 http(s):// 地址转换为 ws(s):// 地址（工厂会校验 WS 协议）。
 func httpToWS(httpURL string) string {
-	if strings.HasPrefix(httpURL, "https://") {
-		return "wss://" + strings.TrimPrefix(httpURL, "https://")
+	if after, ok := strings.CutPrefix(httpURL, "https://"); ok {
+		return "wss://" + after
 	}
 	return "ws://" + strings.TrimPrefix(httpURL, "http://")
 }

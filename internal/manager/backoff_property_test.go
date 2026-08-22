@@ -86,7 +86,7 @@ func p14OracleBackoff(attempt int, initial, max time.Duration, multiplier int) t
 		return effInitial
 	}
 	multBig := big.NewInt(int64(effMult))
-	for i := 0; i < attempt; i++ {
+	for range attempt {
 		prod.Mul(prod, multBig)
 		if prod.Cmp(maxBig) >= 0 {
 			return effMax

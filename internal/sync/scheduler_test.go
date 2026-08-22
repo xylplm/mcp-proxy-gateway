@@ -150,16 +150,16 @@ func TestUpdateScheduleNewPeriodTakesEffectWithoutRestart(t *testing.T) {
 	defer s.Stop()
 
 	// 在运行期间将调度更新为高频周期，新周期应即时生效。
-	var fired int32
+	var fired atomic.Int32
 	if err := s.UpdateSchedule("@every 500ms", func() {
-		atomic.AddInt32(&fired, 1)
+		fired.Add(1)
 	}); err != nil {
 		t.Fatalf("运行期重载 UpdateSchedule 失败：%v", err)
 	}
 
 	// 等待足以触发数次的时间。
 	time.Sleep(1500 * time.Millisecond)
-	if atomic.LoadInt32(&fired) < 1 {
+	if fired.Load() < 1 {
 		t.Error("更新调度后新周期未在不重启的情况下生效（任务未触发）")
 	}
 }
@@ -168,9 +168,9 @@ func TestScheduleRecoversPanicAndKeepsRunning(t *testing.T) {
 	s := NewScheduler()
 	defer s.Stop()
 
-	var fired int32
+	var fired atomic.Int32
 	if err := s.UpdateSchedule("@every 100ms", func() {
-		n := atomic.AddInt32(&fired, 1)
+		n := fired.Add(1)
 		if n == 1 {
 			panic("sync job panic")
 		}
@@ -181,12 +181,12 @@ func TestScheduleRecoversPanicAndKeepsRunning(t *testing.T) {
 	s.Start()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if atomic.LoadInt32(&fired) >= 2 {
+		if fired.Load() >= 2 {
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatalf("调度任务 panic 后应继续运行，实际触发次数=%d", atomic.LoadInt32(&fired))
+	t.Fatalf("调度任务 panic 后应继续运行，实际触发次数=%d", fired.Load())
 }
 
 // TestApplyCronUpdatePersistsAndReloads 验证完整流程：校验通过后持久化到配置文件，

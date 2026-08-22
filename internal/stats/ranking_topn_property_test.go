@@ -87,7 +87,7 @@ func genToolRanks() *rapid.Generator[[]store.ToolRank] {
 	return rapid.Custom(func(t *rapid.T) []store.ToolRank {
 		n := rapid.IntRange(0, 60).Draw(t, "工具数")
 		tools := make([]store.ToolRank, 0, n)
-		for i := 0; i < n; i++ {
+		for i := range n {
 			upstream := "u" + rapid.StringMatching(`[0-9]{1,3}`).Draw(t, "上游序号")
 			name := "tool-" + rapid.StringN(1, 6, 6).Draw(t, "工具名")
 			count := int64(rapid.IntRange(0, 100000).Draw(t, "调用次数"))

@@ -17,7 +17,7 @@ import (
 type gateFetcher struct {
 	tools   []domain.ToolDef
 	err     error
-	calls   int32
+	calls   atomic.Int32
 	started chan struct{} // 每次进入 FetchTools 发一个信号
 	release chan struct{} // 关闭后所有阻塞的拉取继续返回
 }
@@ -31,7 +31,7 @@ func newGateFetcher(tools []domain.ToolDef) *gateFetcher {
 }
 
 func (f *gateFetcher) FetchTools(ctx context.Context, upstreamID string) ([]domain.ToolDef, error) {
-	atomic.AddInt32(&f.calls, 1)
+	f.calls.Add(1)
 	select {
 	case f.started <- struct{}{}:
 	default:
@@ -47,7 +47,7 @@ func (f *gateFetcher) FetchTools(ctx context.Context, upstreamID string) ([]doma
 	return f.tools, nil
 }
 
-func (f *gateFetcher) callCount() int32 { return atomic.LoadInt32(&f.calls) }
+func (f *gateFetcher) callCount() int32 { return f.calls.Load() }
 
 // stubLister 是 UpstreamLister 的可控替身：返回预设的上游列表或枚举错误。
 type stubLister struct {
@@ -146,14 +146,14 @@ func TestSyncOneConcurrentDedup(t *testing.T) {
 	s := NewPeriodicSyncer(fetcher, cache, &stubLister{}, 0, nil)
 
 	// 第一次触发：在后台执行，将阻塞在 fetcher.release 上。
-	var firstRan int32
+	var firstRan atomic.Int32
 	var firstErr error
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		ran, err := s.SyncOne(context.Background(), "up-1")
 		if ran {
-			atomic.StoreInt32(&firstRan, 1)
+			firstRan.Store(1)
 		}
 		firstErr = err
 	}()
@@ -183,7 +183,7 @@ func TestSyncOneConcurrentDedup(t *testing.T) {
 	if firstErr != nil {
 		t.Fatalf("第一次同步不应返回错误：%v", firstErr)
 	}
-	if atomic.LoadInt32(&firstRan) != 1 {
+	if firstRan.Load() != 1 {
 		t.Error("第一次触发应实际执行，ran 期望 true")
 	}
 	if cache.replaceHits != 1 {
@@ -197,7 +197,7 @@ func TestSyncOneSequentialAfterCompletionRuns(t *testing.T) {
 	cache := &memCache{}
 	s := NewPeriodicSyncer(fetcher, cache, &stubLister{}, 0, nil)
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		ran, err := s.SyncOne(context.Background(), "up-1")
 		if err != nil {
 			t.Fatalf("第 %d 次同步不应返回错误：%v", i+1, err)

@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"maps"
 	"testing"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/scripts"
@@ -58,9 +59,7 @@ func TestScriptRefRequiresImmutableVersionAndHash(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			ref := make(map[string]any, len(base))
-			for k, v := range base {
-				ref[k] = v
-			}
+			maps.Copy(ref, base)
 			mutate(ref)
 			_, _, err := scriptRefFromParams(map[string]any{
 				ParamLaunchMode: "script",

@@ -247,7 +247,7 @@ func isWebSocketUpgrade(req *http.Request) bool {
 
 func headerHasToken(header http.Header, key, token string) bool {
 	for _, value := range header.Values(key) {
-		for _, part := range strings.Split(value, ",") {
+		for part := range strings.SplitSeq(value, ",") {
 			if strings.EqualFold(strings.TrimSpace(part), token) {
 				return true
 			}

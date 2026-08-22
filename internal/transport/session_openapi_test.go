@@ -70,8 +70,8 @@ func TestOpenAPISessionListsToolsFromDocument(t *testing.T) {
 		t.Fatalf("unexpected tool names: %+v", tools)
 	}
 	var schema struct {
-		Required   []string               `json:"required"`
-		Properties map[string]interface{} `json:"properties"`
+		Required   []string       `json:"required"`
+		Properties map[string]any `json:"properties"`
 	}
 	if err := json.Unmarshal(tools[0].InputSchema, &schema); err != nil {
 		t.Fatalf("schema should be JSON: %v", err)

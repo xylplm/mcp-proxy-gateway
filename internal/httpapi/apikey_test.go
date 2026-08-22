@@ -149,8 +149,6 @@ func doJSON(e *gin.Engine, method, path, body string) *httptest.ResponseRecorder
 	return w
 }
 
-func intPtr(v int) *int { return &v }
-
 // envelopeData 解包统一响应信封 { code, message, data }，返回 data 段的原始 JSON 字节。
 //
 // 批 1 后所有管理端点响应均为信封结构，测试经此辅助取出 data 再断言，避免每处重复解包。
@@ -351,7 +349,7 @@ func TestUpdateRateLimitMergesConfig(t *testing.T) {
 
 // TestGetRateLimit 验证读取限流配置仅返回限流字段。
 func TestGetRateLimit(t *testing.T) {
-	rl := &fakeRateLimitStore{key: store.APIKey{RateLimit: intPtr(50), RateWindowS: intPtr(30), QuotaPerDay: intPtr(1000), QuotaPerMonth: intPtr(30000)}}
+	rl := &fakeRateLimitStore{key: store.APIKey{RateLimit: new(50), RateWindowS: new(30), QuotaPerDay: new(1000), QuotaPerMonth: new(30000)}}
 	e := newTestEngine(Deps{RateLimitStore: rl})
 
 	w := doJSON(e, http.MethodGet, "/api/admin/apikeys/key-8/ratelimit", "")

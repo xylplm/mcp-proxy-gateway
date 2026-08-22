@@ -70,7 +70,7 @@ func ValidateStrictLauncherTarget(command string, args []string, allowlist []str
 
 func extractNpxTarget(args []string) (string, bool, error) {
 	// 危险/禁止在严格档作为启动方式的 flag
-	for i := 0; i < len(args); i++ {
+	for i := range args {
 		a := strings.TrimSpace(args[i])
 		al := strings.ToLower(a)
 		switch {
@@ -97,7 +97,7 @@ func extractNpxTarget(args []string) (string, bool, error) {
 	}
 
 	skipNext := false
-	for i := 0; i < len(args); i++ {
+	for i := range args {
 		if skipNext {
 			skipNext = false
 			continue
@@ -138,7 +138,7 @@ func extractUvxTarget(args []string) (string, bool, error) {
 	// uvx --from pkg tool  /  uvx tool  /  uvx tool@ver
 	fromPkg := ""
 	skipNext := false
-	for i := 0; i < len(args); i++ {
+	for i := range args {
 		if skipNext {
 			skipNext = false
 			continue
@@ -276,8 +276,7 @@ func packageAllowed(target string, allowlist []string) bool {
 		// @scope/* 前缀：匹配 @scope/name，不匹配更深路径
 		if strings.HasSuffix(a, "/*") {
 			prefix := strings.TrimSuffix(a, "*") // e.g. "@modelcontextprotocol/"
-			if strings.HasPrefix(t, prefix) {
-				rest := strings.TrimPrefix(t, prefix)
+			if rest, ok := strings.CutPrefix(t, prefix); ok {
 				if rest != "" && !strings.Contains(rest, "/") {
 					return true
 				}

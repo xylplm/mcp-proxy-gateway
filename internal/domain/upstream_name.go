@@ -45,10 +45,7 @@ func SuggestCopyName(source string, existing []string) string {
 	}
 
 	withSuffix := func(baseName, suffix string) string {
-		maxBase := UpstreamNameMaxRunes - utf8.RuneCountInString(suffix)
-		if maxBase < 1 {
-			maxBase = 1
-		}
+		maxBase := max(UpstreamNameMaxRunes-utf8.RuneCountInString(suffix), 1)
 		return truncateRunes(baseName, maxBase) + suffix
 	}
 

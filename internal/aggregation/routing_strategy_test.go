@@ -157,7 +157,7 @@ func TestRoundRobinAlternatesCompatibleSources(t *testing.T) {
 		invoker,
 	).SetRoutingStrategy(domain.ToolRoutingRoundRobin)
 
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		if _, err := svc.InvokeTool(context.Background(), "", "read", json.RawMessage(`{}`)); err != nil {
 			t.Fatalf("第 %d 次轮询调用失败：%v", i+1, err)
 		}
@@ -181,7 +181,7 @@ func TestDefaultRoutingStrategyUsesSmartBalance(t *testing.T) {
 		invoker,
 	)
 
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		if _, err := svc.InvokeTool(context.Background(), "", "read", json.RawMessage(`{}`)); err != nil {
 			t.Fatalf("第 %d 次默认策略调用失败：%v", i+1, err)
 		}
@@ -205,7 +205,7 @@ func TestSmartBalanceAlternatesCompatibleSources(t *testing.T) {
 		invoker,
 	).SetRoutingStrategy(domain.ToolRoutingSmartBalance)
 
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		if _, err := svc.InvokeTool(context.Background(), "", "read", json.RawMessage(`{}`)); err != nil {
 			t.Fatalf("第 %d 次智能均衡调用失败：%v", i+1, err)
 		}
@@ -234,12 +234,12 @@ func TestToolPolicyOverridesRoutingStrategy(t *testing.T) {
 		}},
 	).SetRoutingStrategy(domain.ToolRoutingRoundRobin)
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if _, err := svc.InvokeTool(context.Background(), "", "read", json.RawMessage(`{}`)); err != nil {
 			t.Fatalf("第 %d 次策略路由调用失败：%v", i+1, err)
 		}
 	}
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if got := invoker.callAt(i); got != "up-a:read" {
 			t.Fatalf("工具策略应覆盖为优先顺序，第 %d 次 got=%q", i+1, got)
 		}
@@ -262,7 +262,7 @@ func TestToolPolicyCachesSuccessfulResult(t *testing.T) {
 		}},
 	)
 
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		if _, err := svc.InvokeTool(context.Background(), "", "read", json.RawMessage(`{"q":1}`)); err != nil {
 			t.Fatalf("第 %d 次缓存策略调用失败：%v", i+1, err)
 		}
@@ -369,7 +369,7 @@ func TestToolPolicySkipsOversizedCachedResult(t *testing.T) {
 		}},
 	)
 
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		if _, err := svc.InvokeTool(context.Background(), "", "read", json.RawMessage(`{"q":1}`)); err != nil {
 			t.Fatalf("第 %d 次超大结果调用失败：%v", i+1, err)
 		}
@@ -516,7 +516,7 @@ func TestSourceFailureCooldownSkipsRecentlyFailingSource(t *testing.T) {
 	base := time.Date(2026, 6, 23, 10, 30, 0, 0, time.UTC)
 	svc.now = func() time.Time { return base }
 
-	for i := 0; i < defaultSourceFailureThreshold; i++ {
+	for i := range defaultSourceFailureThreshold {
 		_, err := svc.InvokeTool(context.Background(), "", "write", json.RawMessage(`{}`))
 		if !errors.Is(err, upstreamErr) {
 			t.Fatalf("第 %d 次失败应直接返回 up-a 错误，got=%v", i+1, err)
@@ -552,7 +552,7 @@ func TestBuildToolDetailsMarksTemporarilyDegradedSource(t *testing.T) {
 	base := time.Date(2026, 6, 23, 10, 30, 0, 0, time.UTC)
 	svc.now = func() time.Time { return base }
 
-	for i := 0; i < defaultSourceFailureThreshold; i++ {
+	for range defaultSourceFailureThreshold {
 		_, _ = svc.InvokeTool(context.Background(), "", "write", json.RawMessage(`{}`))
 	}
 
@@ -640,7 +640,7 @@ func TestSourceFailureCooldownExpiresAndRetriesOriginalSource(t *testing.T) {
 	now := base
 	svc.now = func() time.Time { return now }
 
-	for i := 0; i < defaultSourceFailureThreshold; i++ {
+	for range defaultSourceFailureThreshold {
 		_, _ = svc.InvokeTool(context.Background(), "", "read", json.RawMessage(`{}`))
 	}
 	now = base.Add(defaultSourceFailureCooldown + time.Second)
@@ -669,7 +669,7 @@ func TestSourceFailureDoesNotHideSingleSourceTool(t *testing.T) {
 	).SetRoutingStrategy(domain.ToolRoutingPriorityFill)
 	svc.now = func() time.Time { return time.Date(2026, 6, 23, 10, 30, 0, 0, time.UTC) }
 
-	for i := 0; i < defaultSourceFailureThreshold+1; i++ {
+	for i := range defaultSourceFailureThreshold + 1 {
 		_, err := svc.InvokeTool(context.Background(), "", "read", json.RawMessage(`{}`))
 		if !errors.Is(err, upstreamErr) {
 			t.Fatalf("单来源工具不应因降级状态被隐藏，第 %d 次 got=%v", i+1, err)

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"sort"
 	"strings"
 	"time"
@@ -411,9 +412,7 @@ func stringMapFromAny(raw any) map[string]string {
 	switch v := raw.(type) {
 	case map[string]string:
 		out := make(map[string]string, len(v))
-		for k, val := range v {
-			out[k] = val
-		}
+		maps.Copy(out, v)
 		return out
 	case map[string]any:
 		out := make(map[string]string, len(v))
@@ -456,8 +455,7 @@ func apiErrorFields(err error) map[string]string {
 }
 
 func apiErrorMessage(err error) string {
-	var apiErr *domain.APIError
-	if errors.As(err, &apiErr) {
+	if apiErr, ok := errors.AsType[*domain.APIError](err); ok {
 		return apiErr.Message
 	}
 	return err.Error()

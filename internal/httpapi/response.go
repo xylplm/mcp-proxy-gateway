@@ -125,8 +125,7 @@ func codeToBusinessCode(code domain.ErrorCode) int {
 //     描述；字段级校验明细（若有）置于 data.fields。
 //   - 否则：归类为 HTTP 500 / code 50000，以通用提示返回，不泄露底层错误细节。
 func respondError(c *gin.Context, err error) {
-	var apiErr *domain.APIError
-	if errors.As(err, &apiErr) {
+	if apiErr, ok := errors.AsType[*domain.APIError](err); ok {
 		var data any
 		if len(apiErr.Fields) > 0 {
 			data = gin.H{"fields": apiErr.Fields}

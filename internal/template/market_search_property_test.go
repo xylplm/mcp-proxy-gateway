@@ -57,7 +57,7 @@ func genP25Templates() *rapid.Generator[[]Template] {
 	return rapid.Custom(func(t *rapid.T) []Template {
 		n := rapid.IntRange(0, 8).Draw(t, "templateCount")
 		out := make([]Template, n)
-		for i := 0; i < n; i++ {
+		for i := range n {
 			out[i] = Template{
 				ID:       fmt.Sprintf("tpl-%d", i),
 				Name:     genP25Text().Draw(t, fmt.Sprintf("name-%d", i)),

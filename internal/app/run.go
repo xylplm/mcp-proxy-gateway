@@ -63,7 +63,7 @@ func (a *App) Run(ctx context.Context) error {
 
 	select {
 	case <-ctx.Done():
-		a.logger.Info("收到停机信号，开始优雅停机")
+		a.logger.Info("收到停机信号，开始优雅停机", "cause", shutdownCause(ctx))
 		cancelRun()
 		a.shutdown()
 		return nil
@@ -80,27 +80,65 @@ func (a *App) Run(ctx context.Context) error {
 	}
 }
 
+// shutdownCause 描述触发停机的原因，用于停机日志。
+//
+// Go 1.26 起 signal.NotifyContext 改用 context.WithCancelCause 取消上下文，收到信号时
+// 会把信号写入 cause，于是这里能区分「容器编排发来的 SIGTERM」与「人工 Ctrl+C 的 SIGINT」
+// ——两者的排查方向完全不同。非信号路径（调用 stop 或父上下文结束）的 cause 为
+// context.Canceled，此时按上下文取消描述。
+func shutdownCause(ctx context.Context) string {
+	cause := context.Cause(ctx)
+	switch {
+	case cause == nil:
+		return "未知"
+	case errors.Is(cause, context.Canceled):
+		return "上下文取消"
+	default:
+		return cause.Error()
+	}
+}
+
 type httpServerSpec struct {
 	name   string
 	server *http.Server
 }
 
+// header 数量上限（Go 1.27 的 Server.MaxHeaderValueCount）。
+//
+// 已有的 MaxHeaderBytes 限制的是请求头总字节数，挡不住「大量极小 header」——几千个
+// 单字节头可以在总字节数很小的情况下把服务端解析出的 map 撑大。该字段补上这个缺口。
+//
+// 按 header 行计数（同一行内的逗号分隔多值只算一次）。标准库默认 500；这里按实际用量
+// 收紧，两个取值都远高于正常请求所需，只用于挡异常流量：
+//   - 对外 MCP 面向公网，MCP 请求头很少（鉴权、内容协商、少量链路追踪头）；
+//   - 管理端口走浏览器，请求头稍多，且需给反向代理注入的 X-Forwarded-* 等留足余量。
+//
+// 排查提示：越限时 net/http 直接在连接上回 431 并关闭，请求不进入 handler，因此网关侧不会
+// 留下访问日志或审计记录。若客户端报 431 而网关日志为空，应先怀疑代理链注入的头行数超过了
+// 这里的上限。
+const (
+	publicMCPMaxHeaderValueCount = 64
+	adminMaxHeaderValueCount     = 128
+)
+
 func (a *App) httpServers() []httpServerSpec {
 	a.adminServer = &http.Server{
-		Addr:              a.adminAddr,
-		Handler:           a.adminEngine,
-		ReadHeaderTimeout: 10 * time.Second,
-		IdleTimeout:       120 * time.Second,
+		Addr:                a.adminAddr,
+		Handler:             a.adminEngine,
+		ReadHeaderTimeout:   10 * time.Second,
+		IdleTimeout:         120 * time.Second,
+		MaxHeaderValueCount: adminMaxHeaderValueCount,
 	}
 	servers := []httpServerSpec{{name: "管理", server: a.adminServer}}
 
 	if a.publicMCPAddr != "" && a.publicMCPEngine != nil {
 		a.publicMCPServer = &http.Server{
-			Addr:              a.publicMCPAddr,
-			Handler:           a.publicMCPEngine,
-			ReadHeaderTimeout: 5 * time.Second,
-			IdleTimeout:       60 * time.Second,
-			MaxHeaderBytes:    16 << 10,
+			Addr:                a.publicMCPAddr,
+			Handler:             a.publicMCPEngine,
+			ReadHeaderTimeout:   5 * time.Second,
+			IdleTimeout:         60 * time.Second,
+			MaxHeaderBytes:      16 << 10,
+			MaxHeaderValueCount: publicMCPMaxHeaderValueCount,
 		}
 		servers = append(servers, httpServerSpec{name: "对外 MCP", server: a.publicMCPServer})
 	}

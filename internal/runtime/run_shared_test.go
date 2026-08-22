@@ -24,7 +24,7 @@ func fastEchoCommand(text string) (string, []string) {
 func TestRunBoundedCapturesFastCommandOutput(t *testing.T) {
 	const marker = "mpg-runbounded-probe"
 	name, args := fastEchoCommand(marker)
-	for i := 0; i < 30; i++ {
+	for i := range 30 {
 		cmd := exec.Command(name, args...)
 		cmd.WaitDelay = depKillGrace
 		stdout, stderr, err := runBounded(cmd, nil)

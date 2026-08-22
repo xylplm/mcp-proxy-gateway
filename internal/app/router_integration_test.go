@@ -201,7 +201,13 @@ func TestAdminAPIRejectedWithoutJWT(t *testing.T) {
 	engine := newIntegrationRouter(t)
 
 	// /api/admin/* 与详细健康 /api/admin/health 均置于 JWT 之下。
-	for _, path := range []string{"/api/admin/upstreams", "/api/admin/health"} {
+	// 诊断类端点一并纳入：goroutine 泄漏 profile 会输出全部相关 goroutine 的调用栈，
+	// 必须处于管理员鉴权之后。
+	for _, path := range []string{
+		"/api/admin/upstreams",
+		"/api/admin/health",
+		"/api/admin/diagnostics/goroutine-leaks",
+	} {
 		rec := doGET(engine, path)
 
 		if rec.Code != http.StatusUnauthorized {
@@ -281,6 +287,15 @@ func TestPublicMCPRouterDoesNotExposeAdminOrSPA(t *testing.T) {
 	}
 	if rec := doGET(engine, "/api/admin/upstreams"); rec.Code != http.StatusNotFound {
 		t.Fatalf("独立 MCP 端口不应暴露管理 API，实际 %d", rec.Code)
+	}
+	// 诊断端点会输出进程内部状态（配置快照、goroutine 调用栈），公网端口绝不应触达。
+	for _, path := range []string{
+		"/api/admin/diagnostics/export",
+		"/api/admin/diagnostics/goroutine-leaks",
+	} {
+		if rec := doGET(engine, path); rec.Code != http.StatusNotFound {
+			t.Fatalf("独立 MCP 端口不应暴露诊断端点 %q，实际 %d", path, rec.Code)
+		}
 	}
 	if rec := doGET(engine, "/dashboard"); rec.Code != http.StatusNotFound || strings.Contains(rec.Body.String(), `<div id="app">`) {
 		t.Fatalf("独立 MCP 端口不应提供 SPA 兜底，实际 status=%d body=%q", rec.Code, rec.Body.String())

@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -75,10 +76,8 @@ func ValidateCommand(command string, policy Policy) error {
 	if len(policy.CommandAllowlist) == 0 {
 		return nil
 	}
-	for _, allowed := range policy.CommandAllowlist {
-		if base == allowed {
-			return nil
-		}
+	if slices.Contains(policy.CommandAllowlist, base) {
+		return nil
 	}
 	return fmt.Errorf(
 		"命令 %q 不在 stdio 允许列表中，请在系统设置或运行环境中调整策略",

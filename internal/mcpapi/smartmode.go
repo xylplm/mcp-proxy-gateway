@@ -172,10 +172,7 @@ func (h *SmartModeHandler) ListTools(ctx context.Context, apiKeyID, cursor strin
 		offset = total
 	}
 
-	end := offset + h.resolveLimit(limit)
-	if end > total {
-		end = total
-	}
+	end := min(offset+h.resolveLimit(limit), total)
 
 	page := ToolPage{Tools: toToolSummaries(tools[offset:end])}
 	if end < total {

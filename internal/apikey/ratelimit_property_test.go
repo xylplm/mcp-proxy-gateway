@@ -56,7 +56,7 @@ func TestProperty20RateLimitNotExceededAndWindowRecovers(t *testing.T) {
 		noLimitLimiter := NewRateLimiter(noLimitCounter, nil)
 		now := time.Unix(baseSec, 0)
 		m := rapid.IntRange(0, 50).Draw(t, "noLimitN")
-		for i := 0; i < m; i++ {
+		for i := range m {
 			allowed, err := noLimitLimiter.Allow(context.Background(), noLimitKey, now)
 			if err != nil {
 				t.Fatalf("不限流场景第 %d 次调用返回错误：%v", i+1, err)
@@ -77,7 +77,7 @@ func TestProperty20RateLimitNotExceededAndWindowRecovers(t *testing.T) {
 // 同时统计实际受理数，确保窗口内受理总数恒不超过 limit（限流不超额）。
 func p20AssertWindow(t *rapid.T, limiter *RateLimiter, key Metadata, now time.Time, limit, n int) {
 	accepted := 0
-	for i := 0; i < n; i++ {
+	for i := range n {
 		allowed, err := limiter.Allow(context.Background(), key, now)
 		if err != nil {
 			t.Fatalf("窗口内第 %d 次调用返回错误：%v", i+1, err)
@@ -105,23 +105,23 @@ func p20DrawNoLimitMeta(t *rapid.T) Metadata {
 	switch rapid.IntRange(0, 3).Draw(t, "noLimitKind") {
 	case 0:
 		// RateLimit 为 nil。
-		return Metadata{ID: "p20-nolimit", RateWindowS: ptrInt(rapid.IntRange(1, 3600).Draw(t, "w0"))}
+		return Metadata{ID: "p20-nolimit", RateWindowS: new(rapid.IntRange(1, 3600).Draw(t, "w0"))}
 	case 1:
 		// RateWindowS 为 nil。
-		return Metadata{ID: "p20-nolimit", RateLimit: ptrInt(rapid.IntRange(1, 20).Draw(t, "l1"))}
+		return Metadata{ID: "p20-nolimit", RateLimit: new(rapid.IntRange(1, 20).Draw(t, "l1"))}
 	case 2:
 		// 上限非正。
 		return Metadata{
 			ID:          "p20-nolimit",
-			RateLimit:   ptrInt(rapid.IntRange(-20, 0).Draw(t, "l2")),
-			RateWindowS: ptrInt(rapid.IntRange(1, 3600).Draw(t, "w2")),
+			RateLimit:   new(rapid.IntRange(-20, 0).Draw(t, "l2")),
+			RateWindowS: new(rapid.IntRange(1, 3600).Draw(t, "w2")),
 		}
 	default:
 		// 窗口非正。
 		return Metadata{
 			ID:          "p20-nolimit",
-			RateLimit:   ptrInt(rapid.IntRange(1, 20).Draw(t, "l3")),
-			RateWindowS: ptrInt(rapid.IntRange(-3600, 0).Draw(t, "w3")),
+			RateLimit:   new(rapid.IntRange(1, 20).Draw(t, "l3")),
+			RateWindowS: new(rapid.IntRange(-3600, 0).Draw(t, "w3")),
 		}
 	}
 }

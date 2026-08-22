@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"sync"
 	"time"
@@ -193,9 +194,7 @@ func toStringMap(raw any) map[string]string {
 		return nil
 	case map[string]string:
 		out := make(map[string]string, len(v))
-		for k, val := range v {
-			out[k] = val
-		}
+		maps.Copy(out, v)
 		return out
 	case map[string]any:
 		out := make(map[string]string, len(v))

@@ -89,7 +89,7 @@ func TestProperty9ReverseMapKeepsAllCandidates(t *testing.T) {
 		e := domain.NewRuleEngine()
 		n := rapid.IntRange(1, 4).Draw(t, "numUpstreams")
 		bundles := make([]upstreamBundle, n)
-		for i := 0; i < n; i++ {
+		for i := range n {
 			bundles[i] = p9GenBundle(i).Draw(t, fmt.Sprintf("bundle-%d", i))
 		}
 

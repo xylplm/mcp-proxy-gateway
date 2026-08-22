@@ -45,9 +45,6 @@ func (l *fakeAuthLookup) GetByHash(_ context.Context, keyHash []byte) (store.API
 	return row, nil
 }
 
-// timePtr 返回指向所给时刻的指针，便于构造可选的有效期字段。
-func timePtr(t time.Time) *time.Time { return &t }
-
 // newAuthTestRouter 构造挂载了鉴权中间件的路由；其受保护处理器在放行后回显上下文中的 API Key ID，
 // 以便断言鉴权通过时元数据被正确注入。
 func newAuthTestRouter(a *Authenticator) *gin.Engine {
@@ -128,7 +125,7 @@ func TestAuthenticateDisabledKey(t *testing.T) {
 func TestAuthenticateExpiredKey(t *testing.T) {
 	lookup := newFakeAuthLookup()
 	expiry := time.Unix(900, 0)
-	lookup.add("mpg_expired", store.APIKey{ID: "key-3", Enabled: true, ExpiresAt: timePtr(expiry)})
+	lookup.add("mpg_expired", store.APIKey{ID: "key-3", Enabled: true, ExpiresAt: new(expiry)})
 	a := NewAuthenticator(lookup, nil)
 
 	// now 晚于有效期，应判定为过期。
@@ -221,7 +218,7 @@ func TestMiddlewareRejectsDisabledKey(t *testing.T) {
 func TestMiddlewareRejectsExpiredKey(t *testing.T) {
 	lookup := newFakeAuthLookup()
 	// 设为过去时刻，确保鉴权时（time.Now()）已过期。
-	lookup.add("mpg_expired", store.APIKey{ID: "key-3", Enabled: true, ExpiresAt: timePtr(time.Now().Add(-time.Hour))})
+	lookup.add("mpg_expired", store.APIKey{ID: "key-3", Enabled: true, ExpiresAt: new(time.Now().Add(-time.Hour))})
 	a := NewAuthenticator(lookup, nil)
 	r := newAuthTestRouter(a)
 
@@ -235,7 +232,7 @@ func TestMiddlewareRejectsExpiredKey(t *testing.T) {
 func TestMiddlewareAllowsValidKeyAndInjectsContext(t *testing.T) {
 	lookup := newFakeAuthLookup()
 	// 未来有效期 + 启用：合法。
-	lookup.add("mpg_good", store.APIKey{ID: "key-9", Enabled: true, ExpiresAt: timePtr(time.Now().Add(time.Hour))})
+	lookup.add("mpg_good", store.APIKey{ID: "key-9", Enabled: true, ExpiresAt: new(time.Now().Add(time.Hour))})
 	a := NewAuthenticator(lookup, nil)
 	r := newAuthTestRouter(a)
 

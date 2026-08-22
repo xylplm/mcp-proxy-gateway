@@ -249,10 +249,7 @@ func buildCallHealth(window string, since, until time.Time, records []store.Call
 		} else {
 			out.FailureCalls++
 		}
-		latency := rec.LatencyMS
-		if latency < 0 {
-			latency = 0
-		}
+		latency := max(rec.LatencyMS, 0)
 		latencies = append(latencies, latency)
 		toolKey := rec.UpstreamID + "\x00" + rec.OriginalName
 		tool := toolGroups[toolKey]
@@ -371,10 +368,7 @@ func percentileLatency(values []int, p float64) float64 {
 	}
 	sorted := append([]int(nil), values...)
 	sort.Ints(sorted)
-	idx := int(float64(len(sorted)-1)*p + 0.5)
-	if idx < 0 {
-		idx = 0
-	}
+	idx := max(int(float64(len(sorted)-1)*p+0.5), 0)
 	if idx >= len(sorted) {
 		idx = len(sorted) - 1
 	}

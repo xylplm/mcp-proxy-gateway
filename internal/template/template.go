@@ -1,6 +1,10 @@
 package template
 
-import "github.com/myGithub/mcp-proxy-gateway/internal/domain"
+import (
+	"maps"
+
+	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
+)
 
 // Category 表示快捷模板所属的分类维度（Req 14.2）。
 //
@@ -200,9 +204,7 @@ func (t Template) clone() Template {
 	cp := t
 	if t.PresetParams != nil {
 		params := make(map[string]any, len(t.PresetParams))
-		for k, v := range t.PresetParams {
-			params[k] = v
-		}
+		maps.Copy(params, t.PresetParams)
 		cp.PresetParams = params
 	}
 	if t.Placeholders != nil {

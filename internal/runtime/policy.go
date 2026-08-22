@@ -143,8 +143,8 @@ func CommandBaseName(command string) string {
 	// Windows 可执行扩展：校验时按基名匹配 allowlist。
 	lower := strings.ToLower(base)
 	for _, ext := range []string{".exe", ".cmd", ".bat", ".com"} {
-		if strings.HasSuffix(lower, ext) {
-			return strings.TrimSuffix(lower, ext)
+		if before, ok := strings.CutSuffix(lower, ext); ok {
+			return before
 		}
 	}
 	return lower
