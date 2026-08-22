@@ -31,6 +31,7 @@
  *     PUT    /apikeys/:id/ratelimit  更新限流配置
  */
 import request from '@/api/request'
+import type { RiskProfile } from '@/api/aiRisk'
 
 /**
  * API Key 元数据视图（与后端 apikey.Metadata 对齐）。
@@ -59,8 +60,19 @@ export interface APIKey {
   quotaPerDay?: number
   /** 每月调用上限；缺省表示不限额。 */
   quotaPerMonth?: number
+  /** 工具风险授权档案。 */
+  riskProfile: RiskProfile
+  /** 上游访问范围：全部或仅已选上游。 */
+  upstreamAccessMode?: UpstreamAccessMode
   /** 创建时间（RFC3339）。 */
   createdAt: string
+}
+
+export type UpstreamAccessMode = 'all' | 'selected'
+
+export interface APIKeyUpstreamAccess {
+  mode: UpstreamAccessMode
+  upstreamIds: string[]
 }
 
 /**
@@ -77,6 +89,18 @@ export interface CreateAPIKeyRequest {
   name: string
   /** 可选有效期（RFC3339）；为空表示永不过期（Req 12.6）。 */
   expiresAt?: string | null
+  /** 新建 Key 默认使用 standard。 */
+  riskProfile?: RiskProfile
+}
+
+export interface RiskImpactPreview {
+  currentProfile: RiskProfile
+  targetProfile: RiskProfile
+  currentVisible: number
+  targetVisible: number
+  newlyHidden: number
+  newlyAllowed: number
+  byLevel: Record<string, number>
 }
 
 /** API Key 级屏蔽规则视图（与后端 apikey.Filter 对齐）。 */
@@ -201,6 +225,46 @@ export async function setAPIKeyEnabled(id: string, enabled: boolean): Promise<vo
   await request.post(`/apikeys/${encodeURIComponent(id)}/${action}`)
 }
 
+/** 更新 API Key 的工具风险授权档案。 */
+export async function setAPIKeyRiskProfile(id: string, riskProfile: RiskProfile): Promise<void> {
+  await request.put(`/apikeys/${encodeURIComponent(id)}/risk-profile`, { riskProfile })
+}
+
+export async function getAPIKeyRiskImpact(
+  id: string,
+  profile: RiskProfile,
+): Promise<RiskImpactPreview> {
+  const res = await request.get<RiskImpactPreview>(
+    `/apikeys/${encodeURIComponent(id)}/risk-impact`,
+    { params: { profile } },
+  )
+  return res.data
+}
+
+export async function getAPIKeyUpstreamAccess(id: string): Promise<APIKeyUpstreamAccess> {
+  const res = await request.get<APIKeyUpstreamAccess>(
+    `/apikeys/${encodeURIComponent(id)}/upstream-access`,
+  )
+  return {
+    mode: res.data?.mode ?? 'all',
+    upstreamIds: res.data?.upstreamIds ?? [],
+  }
+}
+
+export async function updateAPIKeyUpstreamAccess(
+  id: string,
+  payload: APIKeyUpstreamAccess,
+): Promise<APIKeyUpstreamAccess> {
+  const res = await request.put<APIKeyUpstreamAccess>(
+    `/apikeys/${encodeURIComponent(id)}/upstream-access`,
+    payload,
+  )
+  return {
+    mode: res.data?.mode ?? 'all',
+    upstreamIds: res.data?.upstreamIds ?? [],
+  }
+}
+
 /** 删除某个 API Key 并级联清理其屏蔽规则与 ACL（Req 12.2）。 */
 export async function deleteAPIKey(id: string): Promise<void> {
   await request.delete(`/apikeys/${encodeURIComponent(id)}`)
@@ -249,10 +313,7 @@ export async function listACL(apiKeyId: string): Promise<ACLEntry[]> {
 
 /** 为某 API Key 新增一条来源白名单（Req 13.9）。 */
 export async function createACL(apiKeyId: string, payload: CreateACLRequest): Promise<ACLEntry> {
-  const res = await request.post<ACLEntry>(
-    `/apikeys/${encodeURIComponent(apiKeyId)}/acl`,
-    payload,
-  )
+  const res = await request.post<ACLEntry>(`/apikeys/${encodeURIComponent(apiKeyId)}/acl`, payload)
   return res.data
 }
 

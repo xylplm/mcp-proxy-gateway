@@ -111,6 +111,15 @@ const router = createRouter({
       },
     },
     {
+      path: '/ai-risk',
+      name: 'AIRiskGovernance',
+      component: () => import('../views/AIRiskGovernanceView.vue'),
+      meta: {
+        title: 'AI 风险治理',
+        requiresAuth: true,
+      },
+    },
+    {
       path: '/statistics',
       name: 'Statistics',
       component: () => import('../views/StatisticsView.vue'),

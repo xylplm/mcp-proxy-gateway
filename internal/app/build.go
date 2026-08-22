@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"os"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -19,6 +20,7 @@ import (
 	"github.com/myGithub/mcp-proxy-gateway/internal/httpapi"
 	"github.com/myGithub/mcp-proxy-gateway/internal/manager"
 	"github.com/myGithub/mcp-proxy-gateway/internal/mcpapi"
+	"github.com/myGithub/mcp-proxy-gateway/internal/risk"
 	rtenv "github.com/myGithub/mcp-proxy-gateway/internal/runtime"
 	"github.com/myGithub/mcp-proxy-gateway/internal/scripts"
 	"github.com/myGithub/mcp-proxy-gateway/internal/security"
@@ -129,6 +131,9 @@ func (a *App) build(envCfg config.EnvConfig) error {
 		toolPolicyListerAdapter{repo: repos.ToolPolicy},
 	)
 	agg.SetLogger(a.logger)
+	agg.SetRiskAuthorizer(risk.NewAuthorizer(riskProfileReaderAdapter{repo: repos.APIKey}, repos.ToolRisk))
+	upstreamAccessMgr := apikey.NewUpstreamAccessManager(repos.APIKeyUpstreamAccess)
+	agg.SetUpstreamAccessAuthorizer(upstreamAccessMgr)
 	agg.SetRoutingStrategy(yamlCfg.Aggregation.ToolRoutingStrategy)
 	agg.SetQuotaManager(aggregation.NewQuotaManager(aggregation.NewRedisQuotaCounter(a.rdb), a.logger))
 	a.agg = agg
@@ -157,6 +162,18 @@ func (a *App) build(envCfg config.EnvConfig) error {
 	}
 	a.auditSvc = auditSvc
 	a.auditRecorder = audit.NewRecorder(repos.Audit, audit.WithLogger(a.logger))
+	var riskCipher *risk.Cipher
+	if encodedKey := os.Getenv("MPG_SECRET_ENCRYPTION_KEY"); encodedKey != "" {
+		var err error
+		riskCipher, err = risk.NewCipher(encodedKey)
+		if err != nil {
+			return err
+		}
+	}
+	riskGovernance := risk.NewGovernanceService(repos.AIProvider, repos.ToolRisk, repos.RiskJob, riskCipher)
+	if err := riskGovernance.Resume(context.Background()); err != nil {
+		return err
+	}
 
 	// --- 同步服务：工具拉取、周期同步与 cron 调度（Req 6、7）---
 	fetcher := &toolFetcher{
@@ -168,6 +185,9 @@ func (a *App) build(envCfg config.EnvConfig) error {
 	a.syncTimeout = syncTimeout
 	a.syncer = syncsvc.NewPeriodicSyncer(fetcher, toolCache, mgr, syncTimeout, a.logger)
 	refresher := syncsvc.NewRefresher(fetcher, toolCache, syncTimeout, a.logger)
+	catalogObserver := riskCatalogObserver{repo: repos.ToolRisk, governance: riskGovernance}
+	a.syncer.SetObserver(catalogObserver)
+	refresher.SetObserver(catalogObserver)
 	a.scheduler = syncsvc.NewScheduler()
 
 	// --- API Key 管理与对外鉴权链路组件（Req 11.9、12、13、21）---
@@ -253,8 +273,11 @@ func (a *App) build(envCfg config.EnvConfig) error {
 		ToolPolicyStore: repos.ToolPolicy,
 		APIKeys:         apiKeyMgr,
 		APIKeyFilters:   apiKeyFilterMgr,
+		APIKeyUpstreams: upstreamAccessMgr,
 		ACLStore:        repos.ACL,
 		RateLimitStore:  repos.APIKey,
+		AIRisk:          riskGovernance,
+		ToolRiskStore:   repos.ToolRisk,
 		Auth:            authSvc,
 		Settings:        a.cfg,
 		SettingsRuntime: a,

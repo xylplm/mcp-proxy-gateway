@@ -40,6 +40,8 @@ type Repositories struct {
 	APIKey *APIKeyRepo
 	// ACL 为 API Key 来源白名单仓储。
 	ACL *ACLRepo
+	// APIKeyUpstreamAccess 为 API Key 上游访问范围仓储。
+	APIKeyUpstreamAccess *APIKeyUpstreamAccessRepo
 	// ToolCache 为工具缓存持久副本仓储。
 	ToolCache *ToolCacheRepo
 	// CallStat 为调用统计仓储。
@@ -48,23 +50,33 @@ type Repositories struct {
 	Audit *AuditRepo
 	// Security 为安全事件与封禁记录仓储。
 	Security *SecurityRepo
+	// AIProvider 为 OpenAI-compatible 风险评级 Provider 仓储。
+	AIProvider *AIProviderRepo
+	// ToolRisk 为按来源工具身份保存的风险目录仓储。
+	ToolRisk *ToolRiskRepo
+	// RiskJob 为持久化评级任务仓储。
+	RiskJob *RiskJobRepo
 }
 
 // NewRepositories 基于 GORM 数据库句柄构造所有仓储。
 func NewRepositories(db *gorm.DB) *Repositories {
 	return &Repositories{
-		db:           db,
-		Upstream:     NewUpstreamRepo(db),
-		Alias:        NewAliasRepo(db),
-		FilterMCP:    NewFilterMCPRepo(db),
-		ToolPolicy:   NewToolPolicyRepo(db),
-		FilterAPIKey: NewFilterAPIKeyRepo(db),
-		APIKey:       NewAPIKeyRepo(db),
-		ACL:          NewACLRepo(db),
-		ToolCache:    NewToolCacheRepo(db),
-		CallStat:     NewCallStatRepo(db),
-		Audit:        NewAuditRepo(db),
-		Security:     NewSecurityRepo(db),
+		db:                   db,
+		Upstream:             NewUpstreamRepo(db),
+		Alias:                NewAliasRepo(db),
+		FilterMCP:            NewFilterMCPRepo(db),
+		ToolPolicy:           NewToolPolicyRepo(db),
+		FilterAPIKey:         NewFilterAPIKeyRepo(db),
+		APIKey:               NewAPIKeyRepo(db),
+		ACL:                  NewACLRepo(db),
+		APIKeyUpstreamAccess: NewAPIKeyUpstreamAccessRepo(db),
+		ToolCache:            NewToolCacheRepo(db),
+		CallStat:             NewCallStatRepo(db),
+		Audit:                NewAuditRepo(db),
+		Security:             NewSecurityRepo(db),
+		AIProvider:           NewAIProviderRepo(db),
+		ToolRisk:             NewToolRiskRepo(db),
+		RiskJob:              NewRiskJobRepo(db),
 	}
 }
 

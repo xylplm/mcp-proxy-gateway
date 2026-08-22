@@ -98,6 +98,18 @@ type ToolPolicyLister interface {
 	ListToolPolicies(ctx context.Context) ([]domain.ToolPolicyRule, error)
 }
 
+// RiskAuthorizer 在来源进入别名/聚合前过滤，并在真实调用前再次实时授权。
+type RiskAuthorizer interface {
+	FilterSources(ctx context.Context, apiKeyID, upstreamID string, tools []domain.ToolDef) ([]domain.ToolDef, error)
+	AuthorizeSource(ctx context.Context, apiKeyID, upstreamID, originalName string) error
+}
+
+// UpstreamAccessAuthorizer 在聚合前缩小上游范围，并在真实调用前防止配置竞态绕过。
+type UpstreamAccessAuthorizer interface {
+	FilterUpstreams(ctx context.Context, apiKeyID string, upstreams []domain.Upstream) ([]domain.Upstream, error)
+	AuthorizeUpstream(ctx context.Context, apiKeyID, upstreamID string) error
+}
+
 // Service 是 domain.Aggregation_Service 的实现，编排聚合管线并（后续任务）负责调用路由。
 //
 // 依赖通过构造函数注入，全部为窄接口与领域接口，不直接耦合具体存储类型：
@@ -109,13 +121,15 @@ type ToolPolicyLister interface {
 // 经可选注入的 UpstreamInvoker（窄接口）转发，真实上游会话调用与超时控制由
 // upstream_invoker.go 实现，生产装配在 app/build.go 注入。
 type Service struct {
-	cache         domain.Tool_Cache
-	engine        domain.Rule_Engine
-	upstreams     UpstreamLister
-	aliases       AliasLister
-	mcpFilters    MCPFilterLister
-	apiKeyFilters APIKeyFilterLister
-	toolPolicies  ToolPolicyLister
+	cache                    domain.Tool_Cache
+	engine                   domain.Rule_Engine
+	upstreams                UpstreamLister
+	aliases                  AliasLister
+	mcpFilters               MCPFilterLister
+	apiKeyFilters            APIKeyFilterLister
+	toolPolicies             ToolPolicyLister
+	riskAuthorizer           RiskAuthorizer
+	upstreamAccessAuthorizer UpstreamAccessAuthorizer
 	// upstreamConfigs 保存最近一次构建管线读取到的上游配置，供路由选择读取限流配置。
 	upstreamConfigs   map[string]domain.UpstreamConfig
 	upstreamConfigsMu sync.RWMutex
@@ -151,6 +165,11 @@ type Service struct {
 	// log 为结构化日志器，用于记录调用链关键节点（入口/可见性拒绝/失败源头/统计提交）。
 	// 为 nil 时回退到 slog.Default()。
 	log *slog.Logger
+}
+
+// SetUpstreamAccessAuthorizer 注入 API Key 上游范围授权器。
+func (s *Service) SetUpstreamAccessAuthorizer(authorizer UpstreamAccessAuthorizer) {
+	s.upstreamAccessAuthorizer = authorizer
 }
 
 const (
@@ -217,6 +236,12 @@ func NewService(
 // 返回 *Service 以支持链式调用。
 func (s *Service) SetInvoker(invoker UpstreamInvoker) *Service {
 	s.invoker = invoker
+	return s
+}
+
+// SetRiskAuthorizer 注入来源级风险授权器；未注入时保持历史行为。
+func (s *Service) SetRiskAuthorizer(authorizer RiskAuthorizer) *Service {
+	s.riskAuthorizer = authorizer
 	return s
 }
 
@@ -460,6 +485,18 @@ func (s *Service) InvokeTool(ctx context.Context, apiKeyID, exposedName string, 
 	if err != nil {
 		log.Warn("工具来源选择失败，调用未转发", "exposedName", exposedName, "apiKeyID", apiKeyID, "error", err)
 		return domain.ToolResult{}, err
+	}
+	if s.upstreamAccessAuthorizer != nil {
+		if err := s.upstreamAccessAuthorizer.AuthorizeUpstream(ctx, apiKeyID, candidate.UpstreamID); err != nil {
+			log.Info("工具来源被上游权限拒绝", "apiKeyID", apiKeyID, "upstreamID", candidate.UpstreamID)
+			return domain.ToolResult{}, err
+		}
+	}
+	if s.riskAuthorizer != nil {
+		if err := s.riskAuthorizer.AuthorizeSource(ctx, apiKeyID, candidate.UpstreamID, candidate.OriginalName); err != nil {
+			log.Info("工具来源被风险档案拒绝", "apiKeyID", apiKeyID, "upstreamID", candidate.UpstreamID, "originalName", candidate.OriginalName)
+			return domain.ToolResult{}, err
+		}
 	}
 
 	// 调用前记录起点，用于计算响应耗时（毫秒，Req 16.1）。统计写入绝不影响调用结果。
@@ -1006,6 +1043,13 @@ func (s *Service) buildToolSetWithReverseMap(ctx context.Context, apiKeyID strin
 		log.Warn("读取上游列表失败", "apiKeyID", apiKeyID, "error", err)
 		return nil, nil, err
 	}
+	if s.upstreamAccessAuthorizer != nil && apiKeyID != "" {
+		upstreams, err = s.upstreamAccessAuthorizer.FilterUpstreams(ctx, apiKeyID, upstreams)
+		if err != nil {
+			log.Warn("按 API Key 上游权限过滤来源失败", "apiKeyID", apiKeyID, "error", err)
+			return nil, nil, err
+		}
+	}
 
 	for _, up := range upstreams {
 		// 停用上游完全不参与聚合（Req 3.3）。
@@ -1016,6 +1060,13 @@ func (s *Service) buildToolSetWithReverseMap(ctx context.Context, apiKeyID strin
 		// 从工具缓存读取该上游的工具列表；未命中则视为该上游暂无工具（不报错）。
 		// 聚合路径永不向上游实时拉取（Req 6.2）。
 		tools, _, _ := s.cache.Get(ctx, up.ID)
+		if s.riskAuthorizer != nil && apiKeyID != "" {
+			tools, err = s.riskAuthorizer.FilterSources(ctx, apiKeyID, up.ID, tools)
+			if err != nil {
+				log.Warn("按 API Key 风险档案过滤工具来源失败", "apiKeyID", apiKeyID, "upstreamID", up.ID, "error", err)
+				return nil, nil, err
+			}
+		}
 
 		aliases, err := s.aliases.ListAliasesByUpstream(ctx, up.ID)
 		if err != nil {

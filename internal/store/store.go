@@ -123,8 +123,12 @@ func AutoMigrate(ctx context.Context, db *gorm.DB, logger *slog.Logger) error {
 		&filterRuleMCPUpstreamModel{},
 		&toolPolicyRuleModel{},
 		&apiKeyModel{},
+		&aiProviderModel{},
+		&toolRiskAssessmentModel{},
+		&riskAssessmentJobModel{},
 		&filterRuleAPIKeyModel{},
 		&apiKeyACLModel{},
+		&apiKeyUpstreamAccessModel{},
 		&toolCacheModel{},
 		&auditLogModel{},
 		&securityEventModel{},
@@ -146,6 +150,8 @@ func AutoMigrate(ctx context.Context, db *gorm.DB, logger *slog.Logger) error {
 func ensureSchemaExtras(ctx context.Context, db *gorm.DB) error {
 	steps := []string{
 		createCallStatDailyTableSQL,
+		`ALTER TABLE ai_provider DROP COLUMN IF EXISTS allow_private_network`,
+		`UPDATE ai_provider SET active = false WHERE enabled = false AND active = true`,
 		`CREATE INDEX IF NOT EXISTS idx_call_stat_daily_date ON call_stat_daily (stat_date)`,
 		`CREATE INDEX IF NOT EXISTS idx_call_stat_daily_upstream_date ON call_stat_daily (upstream_id, stat_date)`,
 		`CREATE INDEX IF NOT EXISTS idx_call_stat_daily_apikey_date ON call_stat_daily (api_key_id, stat_date)`,
@@ -157,6 +163,11 @@ func ensureSchemaExtras(ctx context.Context, db *gorm.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_tool_policy_rule_order ON tool_policy_rule (sort_order, created_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_filter_rule_apikey_apikey ON filter_rule_apikey (api_key_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_api_key_acl_apikey ON api_key_acl (api_key_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_api_key_upstream_access_upstream ON api_key_upstream_access (upstream_id, api_key_id)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_provider_single_active ON ai_provider (active) WHERE active = true`,
+		`CREATE INDEX IF NOT EXISTS idx_tool_risk_status ON tool_risk_assessment (status, updated_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_tool_risk_level ON tool_risk_assessment (deterministic_floor, ai_level)`,
+		`CREATE INDEX IF NOT EXISTS idx_risk_job_status ON risk_assessment_job (status, created_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_audit_log_occurred_at ON audit_log (occurred_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_security_event_created_at ON security_event (created_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_security_block_created_at ON security_block (created_at DESC)`,
@@ -217,7 +228,12 @@ func cascadeConstraintDefinitions() []cascadeConstraint {
 		{"filter_rule_mcp_upstream", "filter_rule_mcp_upstream_upstream_id_fkey", `ALTER TABLE filter_rule_mcp_upstream ADD CONSTRAINT filter_rule_mcp_upstream_upstream_id_fkey FOREIGN KEY (upstream_id) REFERENCES upstream_mcp(id) ON DELETE CASCADE`},
 		{"filter_rule_apikey", "filter_rule_apikey_api_key_id_fkey", `ALTER TABLE filter_rule_apikey ADD CONSTRAINT filter_rule_apikey_api_key_id_fkey FOREIGN KEY (api_key_id) REFERENCES api_key(id) ON DELETE CASCADE`},
 		{"api_key_acl", "api_key_acl_api_key_id_fkey", `ALTER TABLE api_key_acl ADD CONSTRAINT api_key_acl_api_key_id_fkey FOREIGN KEY (api_key_id) REFERENCES api_key(id) ON DELETE CASCADE`},
+		{"api_key_upstream_access", "api_key_upstream_access_api_key_id_fkey", `ALTER TABLE api_key_upstream_access ADD CONSTRAINT api_key_upstream_access_api_key_id_fkey FOREIGN KEY (api_key_id) REFERENCES api_key(id) ON DELETE CASCADE`},
+		{"api_key_upstream_access", "api_key_upstream_access_upstream_id_fkey", `ALTER TABLE api_key_upstream_access ADD CONSTRAINT api_key_upstream_access_upstream_id_fkey FOREIGN KEY (upstream_id) REFERENCES upstream_mcp(id) ON DELETE CASCADE`},
 		{"tool_cache", "tool_cache_upstream_id_fkey", `ALTER TABLE tool_cache ADD CONSTRAINT tool_cache_upstream_id_fkey FOREIGN KEY (upstream_id) REFERENCES upstream_mcp(id) ON DELETE CASCADE`},
+		{"tool_risk_assessment", "tool_risk_assessment_upstream_id_fkey", `ALTER TABLE tool_risk_assessment ADD CONSTRAINT tool_risk_assessment_upstream_id_fkey FOREIGN KEY (upstream_id) REFERENCES upstream_mcp(id) ON DELETE CASCADE`},
+		{"tool_risk_assessment", "tool_risk_assessment_provider_id_fkey", `ALTER TABLE tool_risk_assessment ADD CONSTRAINT tool_risk_assessment_provider_id_fkey FOREIGN KEY (provider_id) REFERENCES ai_provider(id) ON DELETE SET NULL`},
+		{"risk_assessment_job", "risk_assessment_job_provider_id_fkey", `ALTER TABLE risk_assessment_job ADD CONSTRAINT risk_assessment_job_provider_id_fkey FOREIGN KEY (provider_id) REFERENCES ai_provider(id) ON DELETE CASCADE`},
 	}
 }
 

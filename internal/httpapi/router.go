@@ -13,6 +13,7 @@ import (
 	"github.com/myGithub/mcp-proxy-gateway/internal/audit"
 	"github.com/myGithub/mcp-proxy-gateway/internal/config"
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
+	"github.com/myGithub/mcp-proxy-gateway/internal/risk"
 	rtenv "github.com/myGithub/mcp-proxy-gateway/internal/runtime"
 	"github.com/myGithub/mcp-proxy-gateway/internal/store"
 	"github.com/myGithub/mcp-proxy-gateway/internal/syslog"
@@ -167,6 +168,37 @@ type APIKeyFilterService interface {
 	List(ctx context.Context, apiKeyID string) ([]apikey.Filter, error)
 	SetEnabled(ctx context.Context, id string, enabled bool) error
 	Delete(ctx context.Context, id string) error
+}
+
+type APIKeyUpstreamAccessService interface {
+	Get(ctx context.Context, apiKeyID string) (apikey.UpstreamAccessConfig, error)
+	Set(ctx context.Context, apiKeyID string, cfg apikey.UpstreamAccessConfig) (apikey.UpstreamAccessConfig, error)
+}
+
+type AIRiskService interface {
+	ListProviders(context.Context) ([]risk.Provider, error)
+	GetProvider(context.Context, string) (risk.Provider, error)
+	CreateProvider(context.Context, risk.ProviderInput) (risk.Provider, error)
+	UpdateProvider(context.Context, string, risk.ProviderInput) (risk.Provider, error)
+	DeleteProvider(context.Context, string) error
+	ActivateProvider(context.Context, string) error
+	TestProvider(context.Context, string) (int64, error)
+	AssessPending(context.Context, int) (risk.AssessSummary, error)
+	QueueAssessment(context.Context, int) (risk.AssessmentJob, error)
+	QueueReviewAssessment(context.Context, int) (risk.AssessmentJob, error)
+	ListJobs(context.Context, int) ([]risk.AssessmentJob, error)
+	GetJob(context.Context, string) (risk.AssessmentJob, error)
+	CancelJob(context.Context, string) error
+	ReassessTool(context.Context, string, string) (risk.Assessment, error)
+}
+
+type ToolRiskStore interface {
+	Get(context.Context, string, string) (risk.Assessment, error)
+	List(context.Context, store.RiskListQuery) (store.RiskListResult, error)
+	Reconcile(context.Context, string, []domain.ToolDef) (store.ReconcileResult, error)
+	SetManualOverride(context.Context, string, string, risk.Level, []string, string, bool) (risk.Assessment, error)
+	BulkSetManualOverride(context.Context, []store.RiskOverrideTarget, risk.Level, []string, string, bool) ([]risk.Assessment, error)
+	ClearManualOverride(context.Context, string, string) (risk.Assessment, error)
 }
 
 // ACLStore 是 API Key 来源白名单管理依赖的仓储窄接口（Req 13.9）。
@@ -354,11 +386,14 @@ type Router struct {
 	// apiKeys 为 API Key 生命周期管理应用服务。
 	apiKeys APIKeyService
 	// apiKeyFilters 为 API Key 级屏蔽规则管理应用服务。
-	apiKeyFilters APIKeyFilterService
+	apiKeyFilters   APIKeyFilterService
+	apiKeyUpstreams APIKeyUpstreamAccessService
 	// aclStore 为 API Key 来源白名单仓储。
 	aclStore ACLStore
 	// rateLimitStore 为 API Key 限流配置仓储。
 	rateLimitStore RateLimitStore
+	aiRisk         AIRiskService
+	toolRiskStore  ToolRiskStore
 	// auth 为管理员认证应用服务（注册/登录/改密）。
 	auth AuthService
 	// settings 为系统设置读写配置管理器。
@@ -423,8 +458,11 @@ type Deps struct {
 	ToolPolicyStore ToolPolicyStore
 	APIKeys         APIKeyService
 	APIKeyFilters   APIKeyFilterService
+	APIKeyUpstreams APIKeyUpstreamAccessService
 	ACLStore        ACLStore
 	RateLimitStore  RateLimitStore
+	AIRisk          AIRiskService
+	ToolRiskStore   ToolRiskStore
 	Auth            AuthService
 	Settings        SettingsService
 	SettingsRuntime SettingsRuntimeApplier
@@ -455,8 +493,11 @@ func NewRouter(d Deps) *Router {
 		toolPolicyStore: d.ToolPolicyStore,
 		apiKeys:         d.APIKeys,
 		apiKeyFilters:   d.APIKeyFilters,
+		apiKeyUpstreams: d.APIKeyUpstreams,
 		aclStore:        d.ACLStore,
 		rateLimitStore:  d.RateLimitStore,
+		aiRisk:          d.AIRisk,
+		toolRiskStore:   d.ToolRiskStore,
 		auth:            d.Auth,
 		settings:        d.Settings,
 		settingsRuntime: d.SettingsRuntime,
@@ -497,6 +538,7 @@ func (r *Router) Register(router gin.IRouter, adminAuth gin.HandlerFunc) {
 	r.registerUpstreamRoutes(admin)
 	r.registerRuleRoutes(admin)
 	r.registerAPIKeyRoutes(admin)
+	r.registerAIRiskRoutes(admin)
 	r.registerSettingsRoutes(admin)
 	r.registerBackupRoutes(admin)
 	r.registerToolRoutes(admin)

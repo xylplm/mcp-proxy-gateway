@@ -17,7 +17,11 @@ func TestGormModelsKeepCoreTableNames(t *testing.T) {
 		"api key":                     apiKeyModel{}.TableName(),
 		"api key filter":              filterRuleAPIKeyModel{}.TableName(),
 		"api key acl":                 apiKeyACLModel{}.TableName(),
+		"api key upstream access":     apiKeyUpstreamAccessModel{}.TableName(),
 		"tool cache":                  toolCacheModel{}.TableName(),
+		"ai provider":                 aiProviderModel{}.TableName(),
+		"tool risk":                   toolRiskAssessmentModel{}.TableName(),
+		"risk job":                    riskAssessmentJobModel{}.TableName(),
 		"call stat daily":             callStatDailyModel{}.TableName(),
 		"audit log":                   auditLogModel{}.TableName(),
 	}
@@ -31,7 +35,11 @@ func TestGormModelsKeepCoreTableNames(t *testing.T) {
 		"api key":                     "api_key",
 		"api key filter":              "filter_rule_apikey",
 		"api key acl":                 "api_key_acl",
+		"api key upstream access":     "api_key_upstream_access",
 		"tool cache":                  "tool_cache",
+		"ai provider":                 "ai_provider",
+		"tool risk":                   "tool_risk_assessment",
+		"risk job":                    "risk_assessment_job",
 		"call stat daily":             "call_stat_daily",
 		"audit log":                   "audit_log",
 	}
@@ -71,7 +79,11 @@ func TestSchemaExtrasKeepCascadeConstraints(t *testing.T) {
 		"filter_rule_mcp_upstream_upstream_id_fkey",
 		"filter_rule_apikey_api_key_id_fkey",
 		"api_key_acl_api_key_id_fkey",
+		"api_key_upstream_access_api_key_id_fkey",
+		"api_key_upstream_access_upstream_id_fkey",
 		"tool_cache_upstream_id_fkey",
+		"tool_risk_assessment_upstream_id_fkey",
+		"risk_assessment_job_provider_id_fkey",
 	}
 	for _, name := range constraints {
 		found := false
@@ -84,5 +96,14 @@ func TestSchemaExtrasKeepCascadeConstraints(t *testing.T) {
 		if !found {
 			t.Errorf("缺少级联删除约束定义: %s", name)
 		}
+	}
+	foundSetNull := false
+	for _, constraint := range cascadeConstraintDefinitions() {
+		if constraint.Name == "tool_risk_assessment_provider_id_fkey" && strings.Contains(constraint.SQL, "ON DELETE SET NULL") {
+			foundSetNull = true
+		}
+	}
+	if !foundSetNull {
+		t.Error("Provider 删除必须保留历史评级并将 provider_id 置空")
 	}
 }

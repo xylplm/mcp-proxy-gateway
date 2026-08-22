@@ -13,6 +13,7 @@ import (
 	"github.com/myGithub/mcp-proxy-gateway/internal/aggregation"
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
 	"github.com/myGithub/mcp-proxy-gateway/internal/manager"
+	"github.com/myGithub/mcp-proxy-gateway/internal/risk"
 	"github.com/myGithub/mcp-proxy-gateway/internal/store"
 	"github.com/myGithub/mcp-proxy-gateway/internal/transport"
 )
@@ -83,6 +84,38 @@ type toolPolicyListerAdapter struct {
 
 func (a toolPolicyListerAdapter) ListToolPolicies(ctx context.Context) ([]domain.ToolPolicyRule, error) {
 	return a.repo.List(ctx)
+}
+
+type riskProfileReaderAdapter struct {
+	repo *store.APIKeyRepo
+}
+
+type riskCatalogObserver struct {
+	repo       *store.ToolRiskRepo
+	governance *risk.GovernanceService
+}
+
+func (o riskCatalogObserver) ToolsReplaced(ctx context.Context, upstreamID string, tools []domain.ToolDef) error {
+	_, err := o.repo.Reconcile(ctx, upstreamID, tools)
+	if err != nil {
+		return err
+	}
+	if o.governance != nil {
+		return o.governance.TriggerAutoAssessment(ctx)
+	}
+	return nil
+}
+
+func (a riskProfileReaderAdapter) RiskProfile(ctx context.Context, apiKeyID string) (risk.Profile, error) {
+	key, err := a.repo.Get(ctx, apiKeyID)
+	if err != nil {
+		return "", err
+	}
+	profile := key.RiskProfile
+	if profile == "" {
+		profile = risk.ProfileLegacy
+	}
+	return profile, nil
 }
 
 // --- 连通性探测适配器（GORM/redis → health.Pinger）---

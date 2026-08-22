@@ -56,6 +56,7 @@ func TestCodeToStatusMappingComplete(t *testing.T) {
 		{domain.CodeConflict, http.StatusConflict, 40900},
 		{domain.CodeUnauthorized, http.StatusUnauthorized, 40100},
 		{domain.CodeForbidden, http.StatusForbidden, 40300},
+		{domain.CodeToolRiskForbidden, http.StatusForbidden, 40301},
 		{domain.CodeRateLimited, http.StatusTooManyRequests, 42900},
 		{domain.CodeUpstreamUnavailable, http.StatusBadGateway, 50200},
 		{domain.CodeUpstreamTimeout, http.StatusGatewayTimeout, 50400},

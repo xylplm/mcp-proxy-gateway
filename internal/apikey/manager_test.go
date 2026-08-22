@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
+	"github.com/myGithub/mcp-proxy-gateway/internal/risk"
 	"github.com/myGithub/mcp-proxy-gateway/internal/store"
 )
 
@@ -81,6 +82,16 @@ func (r *testAPIKeyRepo) SetEnabled(_ context.Context, id string, enabled bool) 
 		return domain.NewError(domain.CodeNotFound, "API Key 不存在")
 	}
 	row.Enabled = enabled
+	r.rows[id] = row
+	return nil
+}
+
+func (r *testAPIKeyRepo) SetRiskProfile(_ context.Context, id string, profile risk.Profile) error {
+	row, ok := r.rows[id]
+	if !ok {
+		return domain.NewError(domain.CodeNotFound, "API Key 不存在")
+	}
+	row.RiskProfile = profile
 	r.rows[id] = row
 	return nil
 }

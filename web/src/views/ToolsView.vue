@@ -709,6 +709,12 @@ onUnmounted(() => {
         <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
           查看经过启停、别名和屏蔽规则处理后的真实聚合工具。
         </p>
+        <p class="mt-1 text-xs text-gray-400">
+          提示标签不等同于 API Key 风险授权；来源级权限请前往
+          <RouterLink class="text-brand-600 dark:text-brand-400 hover:underline" to="/ai-risk"
+            >AI 风险治理</RouterLink
+          >。
+        </p>
       </div>
       <button
         v-tooltip:bottom-end="'刷新工具目录'"
@@ -1291,8 +1297,7 @@ onUnmounted(() => {
               </summary>
               <pre
                 class="custom-scrollbar mt-3 max-h-72 overflow-auto text-xs leading-5 text-gray-600 dark:text-gray-300"
-                >{{ schemaPreview(selectedToolDetail.tool.inputSchema) }}</pre
-              >
+                >{{ schemaPreview(selectedToolDetail.tool.inputSchema) }}</pre>
             </details>
           </div>
         </div>

@@ -1,12 +1,15 @@
 package httpapi
 
 import (
+	"context"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/apikey"
 	"github.com/myGithub/mcp-proxy-gateway/internal/audit"
+	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
+	"github.com/myGithub/mcp-proxy-gateway/internal/risk"
 	"github.com/myGithub/mcp-proxy-gateway/internal/store"
 )
 
@@ -49,6 +52,12 @@ type apiKeyCreateRequest struct {
 	Name string `json:"name"`
 	// ExpiresAt 为可选有效期；为空表示永不过期（Req 12.6）。
 	ExpiresAt *time.Time `json:"expiresAt"`
+	// RiskProfile 缺省为 standard。
+	RiskProfile risk.Profile `json:"riskProfile"`
+}
+
+type apiKeyRiskProfileRequest struct {
+	RiskProfile risk.Profile `json:"riskProfile"`
 }
 
 // apiKeyFilterRequest 为创建 API Key 级屏蔽规则的请求体（Req 13.1）。
@@ -95,6 +104,11 @@ type rateLimitConfigResponse struct {
 	QuotaPerMonth *int `json:"quotaPerMonth,omitempty"`
 }
 
+type apiKeyUpstreamAccessRequest struct {
+	Mode        apikey.UpstreamAccessMode `json:"mode"`
+	UpstreamIDs []string                  `json:"upstreamIds"`
+}
+
 // registerAPIKeyRoutes 在管理分组下注册 API Key 生命周期、屏蔽规则、ACL 与限流配置端点。
 func (r *Router) registerAPIKeyRoutes(g *gin.RouterGroup) {
 	keys := g.Group("/apikeys")
@@ -105,6 +119,10 @@ func (r *Router) registerAPIKeyRoutes(g *gin.RouterGroup) {
 	keys.POST("/:id/enable", r.enableAPIKey)
 	keys.POST("/:id/disable", r.disableAPIKey)
 	keys.DELETE("/:id", r.deleteAPIKey)
+	keys.PUT("/:id/risk-profile", r.updateAPIKeyRiskProfile)
+	keys.GET("/:id/risk-impact", r.getAPIKeyRiskImpact)
+	keys.GET("/:id/upstream-access", r.getAPIKeyUpstreamAccess)
+	keys.PUT("/:id/upstream-access", r.updateAPIKeyUpstreamAccess)
 
 	// API Key 级屏蔽规则（Req 13.1）：列表/创建按 API Key 分组。
 	keys.GET("/:id/filters", r.listAPIKeyFilters)
@@ -125,6 +143,39 @@ func (r *Router) registerAPIKeyRoutes(g *gin.RouterGroup) {
 
 	// 来源白名单删除按记录标识（独立前缀避免与 /apikeys/:id 通配冲突）。
 	g.DELETE("/acl/:entryId", r.deleteACL)
+}
+
+func (r *Router) getAPIKeyUpstreamAccess(c *gin.Context) {
+	if r.apiKeyUpstreams == nil {
+		respondServiceUnavailable(c, "API Key 上游权限服务未就绪")
+		return
+	}
+	cfg, err := r.apiKeyUpstreams.Get(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	respondOK(c, cfg)
+}
+
+func (r *Router) updateAPIKeyUpstreamAccess(c *gin.Context) {
+	if r.apiKeyUpstreams == nil {
+		respondServiceUnavailable(c, "API Key 上游权限服务未就绪")
+		return
+	}
+	var req apiKeyUpstreamAccessRequest
+	if !bindJSON(c, &req) {
+		return
+	}
+	cfg, err := r.apiKeyUpstreams.Set(c.Request.Context(), c.Param("id"), apikey.UpstreamAccessConfig{
+		Mode: req.Mode, UpstreamIDs: req.UpstreamIDs,
+	})
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	r.recordUpdate(c, audit.ResourceAPIKey, c.Param("id"))
+	respondOK(c, cfg)
 }
 
 // listAPIKeys 返回全部 API Key 元数据（含明文，自部署场景供二次查看/复制）。
@@ -155,8 +206,9 @@ func (r *Router) createAPIKey(c *gin.Context) {
 		return
 	}
 	created, err := r.apiKeys.Create(c.Request.Context(), apikey.CreateInput{
-		Name:      req.Name,
-		ExpiresAt: req.ExpiresAt,
+		Name:        req.Name,
+		ExpiresAt:   req.ExpiresAt,
+		RiskProfile: req.RiskProfile,
 	})
 	if err != nil {
 		respondError(c, err)
@@ -164,6 +216,83 @@ func (r *Router) createAPIKey(c *gin.Context) {
 	}
 	r.recordCreate(c, audit.ResourceAPIKey, req.Name)
 	respondCreated(c, created)
+}
+
+func (r *Router) updateAPIKeyRiskProfile(c *gin.Context) {
+	service, ok := r.apiKeys.(interface {
+		SetRiskProfile(context.Context, string, risk.Profile) error
+	})
+	if !ok {
+		respondServiceUnavailable(c, "API Key 风险档案服务未就绪")
+		return
+	}
+	var req apiKeyRiskProfileRequest
+	if !bindJSON(c, &req) {
+		return
+	}
+	if err := service.SetRiskProfile(c.Request.Context(), c.Param("id"), req.RiskProfile); err != nil {
+		respondError(c, err)
+		return
+	}
+	r.recordUpdate(c, audit.ResourceAPIKey, c.Param("id"))
+	respondOK(c, gin.H{"id": c.Param("id"), "riskProfile": req.RiskProfile})
+}
+
+func (r *Router) getAPIKeyRiskImpact(c *gin.Context) {
+	if r.toolRiskStore == nil || r.apiKeys == nil {
+		respondServiceUnavailable(c, "API Key 风险预览服务未就绪")
+		return
+	}
+	key, err := r.apiKeys.Get(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	target := risk.Profile(c.Query("profile"))
+	if !risk.ValidProfile(target) {
+		respondError(c, domain.NewError(domain.CodeValidation, "目标风险档案无效"))
+		return
+	}
+	current := key.RiskProfile
+	if current == "" {
+		current = risk.ProfileLegacy
+	}
+	currentVisible, targetVisible, newlyHidden, newlyAllowed := 0, 0, 0, 0
+	byLevel := map[risk.Level]int{risk.LevelLow: 0, risk.LevelMedium: 0, risk.LevelHigh: 0, risk.LevelBlocked: 0}
+	page := 1
+	for {
+		result, listErr := r.toolRiskStore.List(c.Request.Context(), store.RiskListQuery{Page: page, PageSize: 200})
+		if listErr != nil {
+			respondError(c, listErr)
+			return
+		}
+		for _, item := range result.Items {
+			if item.Status == risk.StatusRemoved {
+				continue
+			}
+			level := risk.EffectiveLevel(item)
+			byLevel[level]++
+			before, after := risk.ProfileAllows(current, level), risk.ProfileAllows(target, level)
+			if before {
+				currentVisible++
+			}
+			if after {
+				targetVisible++
+			}
+			if before && !after {
+				newlyHidden++
+			}
+			if !before && after {
+				newlyAllowed++
+			}
+		}
+		if page*result.Size >= int(result.Total) || len(result.Items) == 0 {
+			break
+		}
+		page++
+	}
+	respondOK(c, gin.H{"currentProfile": current, "targetProfile": target, "currentVisible": currentVisible,
+		"targetVisible": targetVisible, "newlyHidden": newlyHidden, "newlyAllowed": newlyAllowed, "byLevel": byLevel})
 }
 
 // getAPIKey 查询单个 API Key 的元数据（含明文，Req 12.7）。

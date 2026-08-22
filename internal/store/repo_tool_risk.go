@@ -1,0 +1,457 @@
+package store
+
+import (
+	"context"
+	"encoding/json"
+	"strings"
+	"time"
+
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+
+	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
+	"github.com/myGithub/mcp-proxy-gateway/internal/risk"
+)
+
+type ToolRiskRepo struct{ db *gorm.DB }
+
+func NewToolRiskRepo(db *gorm.DB) *ToolRiskRepo { return &ToolRiskRepo{db: db} }
+
+type RiskListQuery struct {
+	UpstreamID    string
+	Status        risk.Status
+	Keyword       string
+	Level         risk.Level
+	ManualOnly    bool
+	MinConfidence *float64
+	Page          int
+	PageSize      int
+}
+
+type RiskListResult struct {
+	Items   []risk.Assessment `json:"items"`
+	Total   int64             `json:"total"`
+	Page    int               `json:"page"`
+	Size    int               `json:"pageSize"`
+	Summary RiskSummary       `json:"summary"`
+}
+
+type RiskSummary struct {
+	Total       int `json:"total"`
+	Low         int `json:"low"`
+	Medium      int `json:"medium"`
+	High        int `json:"high"`
+	Blocked     int `json:"blocked"`
+	NeedsReview int `json:"needsReview"`
+}
+
+type ReconcileResult struct {
+	Added   int `json:"added"`
+	Changed int `json:"changed"`
+	Removed int `json:"removed"`
+	Current int `json:"current"`
+}
+
+type RiskOverrideTarget struct {
+	UpstreamID   string
+	OriginalName string
+}
+
+func (r *ToolRiskRepo) Get(ctx context.Context, upstreamID, originalName string) (risk.Assessment, error) {
+	var model toolRiskAssessmentModel
+	err := r.db.WithContext(ctx).Where("upstream_id = ? AND original_name = ?", upstreamID, originalName).First(&model).Error
+	if err != nil {
+		return risk.Assessment{}, notFoundIfNoRows(err, "工具风险记录不存在")
+	}
+	return modelToAssessment(model), nil
+}
+
+func (r *ToolRiskRepo) ListByUpstream(ctx context.Context, upstreamID string) ([]risk.Assessment, error) {
+	var models []toolRiskAssessmentModel
+	if err := r.db.WithContext(ctx).Where("upstream_id = ? AND status <> ?", upstreamID, risk.StatusRemoved).Find(&models).Error; err != nil {
+		return nil, err
+	}
+	return modelsToAssessments(models), nil
+}
+
+func (r *ToolRiskRepo) ListAssessable(ctx context.Context, limit int) ([]risk.Assessment, error) {
+	if limit < 1 || limit > 1000 {
+		limit = 500
+	}
+	var models []toolRiskAssessmentModel
+	err := r.db.WithContext(ctx).Where("status IN ?", []risk.Status{risk.StatusPending, risk.StatusStale, risk.StatusError}).
+		Order("updated_at ASC").Limit(limit).Find(&models).Error
+	if err != nil {
+		return nil, err
+	}
+	return modelsToAssessments(models), nil
+}
+
+func (r *ToolRiskRepo) ListNeedsReview(ctx context.Context, limit int) ([]risk.Assessment, error) {
+	if limit < 1 || limit > 1000 {
+		limit = 500
+	}
+	var models []toolRiskAssessmentModel
+	err := r.db.WithContext(ctx).
+		Where("status = ? AND manual_level IS NULL", risk.StatusNeedsReview).
+		Order("updated_at ASC").Limit(limit).Find(&models).Error
+	if err != nil {
+		return nil, err
+	}
+	return modelsToAssessments(models), nil
+}
+
+func (r *ToolRiskRepo) ListAll(ctx context.Context) ([]risk.Assessment, error) {
+	var models []toolRiskAssessmentModel
+	if err := r.db.WithContext(ctx).Order("created_at ASC").Find(&models).Error; err != nil {
+		return nil, err
+	}
+	return modelsToAssessments(models), nil
+}
+
+func (r *ToolRiskRepo) Restore(ctx context.Context, item risk.Assessment) (risk.Assessment, error) {
+	aiTags, _ := json.Marshal(item.AITags)
+	reviewReasons, _ := json.Marshal(item.ReviewReasons)
+	manualTags, _ := json.Marshal(item.ManualTags)
+	var aiLevel, manualLevel *string
+	if risk.ValidLevel(item.AILevel) {
+		value := string(item.AILevel)
+		aiLevel = &value
+	}
+	if item.ManualConfirmed && risk.ValidLevel(item.ManualLevel) {
+		value := string(item.ManualLevel)
+		manualLevel = &value
+	}
+	var providerID *string
+	if item.ProviderID != "" {
+		providerID = &item.ProviderID
+	}
+	now := time.Now().UTC()
+	created := item.CreatedAt
+	if created.IsZero() {
+		created = now
+	}
+	model := toolRiskAssessmentModel{ID: newUUID(), UpstreamID: item.UpstreamID, OriginalName: item.OriginalName,
+		ExposedNameSnapshot: item.ExposedName, DescriptionSnapshot: item.Description, DescriptionZhSnapshot: item.DescriptionZh, InputSchemaSnapshot: schemaSnapshot(item.InputSchema), SchemaFingerprint: item.Fingerprint,
+		DeterministicFloor: string(item.Floor), RuleVersion: item.RuleVersion, AILevel: aiLevel, AITags: JSONB(aiTags),
+		AIConfidence: item.AIConfidence, AIReason: item.AIReason, ReviewReasons: JSONB(reviewReasons), ProviderID: providerID, ProviderNameSnapshot: item.ProviderName,
+		ModelSnapshot: item.Model, PromptVersion: item.PromptVersion, Status: string(item.Status), LastError: item.LastError,
+		ManualLevel: manualLevel, ManualTags: JSONB(manualTags), ManualReason: item.ManualReason,
+		ManualForceDowngrade: item.ManualForce, ReviewedAt: item.ReviewedAt, AssessedAt: item.AssessedAt,
+		CreatedAt: created, UpdatedAt: now}
+	if err := r.db.WithContext(ctx).Create(&model).Error; err != nil {
+		return risk.Assessment{}, err
+	}
+	return modelToAssessment(model), nil
+}
+
+func (r *ToolRiskRepo) ApplyAIResult(ctx context.Context, upstreamID, originalName string, result risk.AIResult, provider risk.Provider) (risk.Assessment, error) {
+	current, err := r.Get(ctx, upstreamID, originalName)
+	if err != nil {
+		return risk.Assessment{}, err
+	}
+	status := risk.StatusRated
+	reviewReasons := risk.ReviewReasonsFor(result, current.Floor)
+	if len(reviewReasons) > 0 {
+		status = risk.StatusNeedsReview
+	}
+	tags, _ := json.Marshal(result.RiskTags)
+	encodedReviewReasons, _ := json.Marshal(reviewReasons)
+	now := time.Now().UTC()
+	res := r.db.WithContext(ctx).Model(&toolRiskAssessmentModel{}).
+		Where("upstream_id = ? AND original_name = ?", upstreamID, originalName).
+		Updates(map[string]any{"ai_level": result.RiskLevel, "ai_tags": JSONB(tags), "ai_confidence": result.Confidence,
+			"ai_reason": result.Reason, "review_reasons": JSONB(encodedReviewReasons), "description_zh_snapshot": result.FunctionSummaryZh, "provider_id": provider.ID, "provider_name_snapshot": provider.Name,
+			"model_snapshot": provider.Model, "prompt_version": risk.PromptVersion, "status": status,
+			"last_error": "", "assessed_at": now, "updated_at": now})
+	if res.Error != nil {
+		return risk.Assessment{}, res.Error
+	}
+	return r.Get(ctx, upstreamID, originalName)
+}
+
+func (r *ToolRiskRepo) MarkAIError(ctx context.Context, upstreamID, originalName string, message string) error {
+	if len(message) > 500 {
+		message = message[:500]
+	}
+	return r.db.WithContext(ctx).Model(&toolRiskAssessmentModel{}).
+		Where("upstream_id = ? AND original_name = ?", upstreamID, originalName).
+		Updates(map[string]any{"status": risk.StatusError, "last_error": message, "updated_at": time.Now().UTC()}).Error
+}
+
+func (r *ToolRiskRepo) List(ctx context.Context, q RiskListQuery) (RiskListResult, error) {
+	summary, err := r.summary(ctx)
+	if err != nil {
+		return RiskListResult{}, err
+	}
+	db := r.db.WithContext(ctx).Model(&toolRiskAssessmentModel{})
+	if q.UpstreamID != "" {
+		db = db.Where("upstream_id = ?", q.UpstreamID)
+	}
+	if q.Status != "" {
+		db = db.Where("status = ?", q.Status)
+	}
+	if q.Keyword != "" {
+		term := "%" + strings.ToLower(q.Keyword) + "%"
+		db = db.Where("LOWER(original_name) LIKE ? OR LOWER(exposed_name_snapshot) LIKE ? OR LOWER(description_snapshot) LIKE ?", term, term, term)
+	}
+	if q.ManualOnly {
+		db = db.Where("manual_level IS NOT NULL")
+	}
+	if q.MinConfidence != nil {
+		db = db.Where("ai_confidence >= ?", *q.MinConfidence)
+	}
+	page, size := q.Page, q.PageSize
+	if page < 1 {
+		page = 1
+	}
+	if size < 1 || size > 200 {
+		size = 50
+	}
+	if q.Level != "" {
+		var models []toolRiskAssessmentModel
+		if err := db.Order("updated_at DESC").Find(&models).Error; err != nil {
+			return RiskListResult{}, err
+		}
+		filtered := make([]risk.Assessment, 0, len(models))
+		for _, item := range modelsToAssessments(models) {
+			if risk.EffectiveLevel(item) == q.Level {
+				filtered = append(filtered, item)
+			}
+		}
+		total := int64(len(filtered))
+		start := min((page-1)*size, len(filtered))
+		end := min(start+size, len(filtered))
+		return RiskListResult{Items: filtered[start:end], Total: total, Page: page, Size: size, Summary: summary}, nil
+	}
+	var total int64
+	if err := db.Count(&total).Error; err != nil {
+		return RiskListResult{}, err
+	}
+	var models []toolRiskAssessmentModel
+	if err := db.Order("updated_at DESC").Offset((page - 1) * size).Limit(size).Find(&models).Error; err != nil {
+		return RiskListResult{}, err
+	}
+	return RiskListResult{Items: modelsToAssessments(models), Total: total, Page: page, Size: size, Summary: summary}, nil
+}
+
+func (r *ToolRiskRepo) summary(ctx context.Context) (RiskSummary, error) {
+	var models []toolRiskAssessmentModel
+	if err := r.db.WithContext(ctx).Where("status <> ?", risk.StatusRemoved).Find(&models).Error; err != nil {
+		return RiskSummary{}, err
+	}
+	summary := RiskSummary{Total: len(models)}
+	for _, item := range modelsToAssessments(models) {
+		switch item.Effective {
+		case risk.LevelLow:
+			summary.Low++
+		case risk.LevelMedium:
+			summary.Medium++
+		case risk.LevelHigh:
+			summary.High++
+		case risk.LevelBlocked:
+			summary.Blocked++
+		}
+		if item.Status == risk.StatusNeedsReview {
+			summary.NeedsReview++
+		}
+	}
+	return summary, nil
+}
+
+func (r *ToolRiskRepo) Reconcile(ctx context.Context, upstreamID string, tools []domain.ToolDef) (ReconcileResult, error) {
+	result := ReconcileResult{Current: len(tools)}
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var existing []toolRiskAssessmentModel
+		if err := tx.Where("upstream_id = ?", upstreamID).Find(&existing).Error; err != nil {
+			return err
+		}
+		byName := make(map[string]toolRiskAssessmentModel, len(existing))
+		for _, model := range existing {
+			byName[model.OriginalName] = model
+		}
+		seen := make(map[string]struct{}, len(tools))
+		now := time.Now().UTC()
+		for _, tool := range tools {
+			tool.UpstreamID = upstreamID
+			fingerprint, err := risk.ToolFingerprint(tool)
+			if err != nil {
+				return err
+			}
+			deterministic := risk.DeterministicAssessment(tool.OriginalName, tool.Description)
+			seen[tool.OriginalName] = struct{}{}
+			old, ok := byName[tool.OriginalName]
+			if !ok {
+				model := toolRiskAssessmentModel{ID: newUUID(), UpstreamID: upstreamID, OriginalName: tool.OriginalName,
+					ExposedNameSnapshot: tool.Name, DescriptionSnapshot: tool.Description, InputSchemaSnapshot: schemaSnapshot(tool.InputSchema), SchemaFingerprint: fingerprint,
+					DeterministicFloor: string(deterministic.Floor), RuleVersion: risk.RuleVersion,
+					AITags: JSONB(`[]`), ReviewReasons: JSONB(`[]`), ManualTags: JSONB(`[]`), Status: string(risk.StatusPending), CreatedAt: now, UpdatedAt: now}
+				if err := tx.Create(&model).Error; err != nil {
+					return err
+				}
+				result.Added++
+				continue
+			}
+			status := old.Status
+			if old.SchemaFingerprint != fingerprint || old.RuleVersion != risk.RuleVersion {
+				status = string(risk.StatusStale)
+				result.Changed++
+			} else if old.Status == string(risk.StatusRemoved) {
+				status = string(risk.StatusPending)
+				result.Changed++
+			}
+			if err := tx.Model(&toolRiskAssessmentModel{}).Where("id = ?", old.ID).Updates(map[string]any{
+				"exposed_name_snapshot": tool.Name, "description_snapshot": tool.Description,
+				"input_schema_snapshot": schemaSnapshot(tool.InputSchema),
+				"schema_fingerprint":    fingerprint, "deterministic_floor": deterministic.Floor,
+				"rule_version": risk.RuleVersion, "status": status, "updated_at": now,
+			}).Error; err != nil {
+				return err
+			}
+		}
+		for _, old := range existing {
+			if _, ok := seen[old.OriginalName]; ok || old.Status == string(risk.StatusRemoved) {
+				continue
+			}
+			if err := tx.Model(&toolRiskAssessmentModel{}).Where("id = ?", old.ID).Updates(map[string]any{"status": risk.StatusRemoved, "updated_at": now}).Error; err != nil {
+				return err
+			}
+			result.Removed++
+		}
+		return nil
+	})
+	return result, err
+}
+
+func (r *ToolRiskRepo) SetManualOverride(ctx context.Context, upstreamID, originalName string, level risk.Level, tags []string, reason string, force bool) (risk.Assessment, error) {
+	items, err := r.BulkSetManualOverride(ctx, []RiskOverrideTarget{{UpstreamID: upstreamID, OriginalName: originalName}}, level, tags, reason, force)
+	if err != nil {
+		return risk.Assessment{}, err
+	}
+	return items[0], nil
+}
+
+func (r *ToolRiskRepo) BulkSetManualOverride(ctx context.Context, targets []RiskOverrideTarget, level risk.Level, tags []string, reason string, force bool) ([]risk.Assessment, error) {
+	if len(targets) == 0 {
+		return nil, domain.NewError(domain.CodeValidation, "批量覆写目标不能为空")
+	}
+	encoded, _ := json.Marshal(tags)
+	now := time.Now().UTC()
+	updated := make([]risk.Assessment, 0, len(targets))
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		models := make([]toolRiskAssessmentModel, 0, len(targets))
+		seen := make(map[string]struct{}, len(targets))
+		for _, target := range targets {
+			key := target.UpstreamID + "\x00" + target.OriginalName
+			if _, exists := seen[key]; exists {
+				return domain.NewError(domain.CodeValidation, "批量覆写包含重复工具")
+			}
+			seen[key] = struct{}{}
+			var model toolRiskAssessmentModel
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("upstream_id = ? AND original_name = ?", target.UpstreamID, target.OriginalName).First(&model).Error; err != nil {
+				return notFoundIfNoRows(err, "工具风险记录不存在")
+			}
+			if err := risk.ValidateManualOverride(level, risk.Level(model.DeterministicFloor), force, reason); err != nil {
+				return domain.NewError(domain.CodeValidation, model.OriginalName+"："+err.Error())
+			}
+			models = append(models, model)
+		}
+		for _, model := range models {
+			res := tx.Model(&toolRiskAssessmentModel{}).Where("id = ?", model.ID).
+				Updates(map[string]any{"manual_level": level, "manual_tags": JSONB(encoded), "manual_reason": strings.TrimSpace(reason), "status": risk.StatusRated,
+					"manual_force_downgrade": force, "reviewed_at": now, "updated_at": now})
+			if res.Error != nil {
+				return res.Error
+			}
+			var saved toolRiskAssessmentModel
+			if err := tx.Where("id = ?", model.ID).First(&saved).Error; err != nil {
+				return err
+			}
+			updated = append(updated, modelToAssessment(saved))
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return updated, nil
+}
+
+func (r *ToolRiskRepo) ClearManualOverride(ctx context.Context, upstreamID, originalName string) (risk.Assessment, error) {
+	var updated risk.Assessment
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var model toolRiskAssessmentModel
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("upstream_id = ? AND original_name = ?", upstreamID, originalName).
+			First(&model).Error; err != nil {
+			return notFoundIfNoRows(err, "工具风险记录不存在")
+		}
+		status := risk.StatusAfterClearingManualOverride(modelToAssessment(model))
+		if err := tx.Model(&toolRiskAssessmentModel{}).Where("id = ?", model.ID).
+			Updates(map[string]any{"manual_level": nil, "manual_tags": JSONB(`[]`), "manual_reason": "", "manual_force_downgrade": false, "reviewed_at": nil, "status": status, "updated_at": time.Now().UTC()}).Error; err != nil {
+			return err
+		}
+		var saved toolRiskAssessmentModel
+		if err := tx.Where("id = ?", model.ID).First(&saved).Error; err != nil {
+			return err
+		}
+		updated = modelToAssessment(saved)
+		return nil
+	})
+	if err != nil {
+		return risk.Assessment{}, err
+	}
+	return updated, nil
+}
+
+func modelsToAssessments(models []toolRiskAssessmentModel) []risk.Assessment {
+	out := make([]risk.Assessment, 0, len(models))
+	for _, model := range models {
+		out = append(out, modelToAssessment(model))
+	}
+	return out
+}
+
+func modelToAssessment(m toolRiskAssessmentModel) risk.Assessment {
+	var aiTags, manualTags []string
+	var reviewReasons []risk.ReviewReason
+	_ = json.Unmarshal(m.AITags, &aiTags)
+	_ = json.Unmarshal(m.ManualTags, &manualTags)
+	_ = json.Unmarshal(m.ReviewReasons, &reviewReasons)
+	if len(reviewReasons) == 0 && m.Status == string(risk.StatusNeedsReview) {
+		if m.AIConfidence != nil && *m.AIConfidence < 0.80 {
+			reviewReasons = append(reviewReasons, risk.ReviewReasonLowConfidence)
+		}
+		if m.AILevel != nil && risk.MaxLevel(risk.Level(*m.AILevel), risk.Level(m.DeterministicFloor)) != risk.Level(*m.AILevel) {
+			reviewReasons = append(reviewReasons, risk.ReviewReasonBelowRuleFloor)
+		}
+		if len(reviewReasons) == 0 {
+			reviewReasons = append(reviewReasons, risk.ReviewReasonLegacyAIRequest)
+		}
+	}
+	a := risk.Assessment{ID: m.ID, UpstreamID: m.UpstreamID, OriginalName: m.OriginalName,
+		ExposedName: m.ExposedNameSnapshot, Description: m.DescriptionSnapshot, DescriptionZh: m.DescriptionZhSnapshot, InputSchema: append([]byte(nil), m.InputSchemaSnapshot...), Fingerprint: m.SchemaFingerprint,
+		Floor: risk.Level(m.DeterministicFloor), RuleVersion: m.RuleVersion, AITags: aiTags,
+		AIConfidence: m.AIConfidence, AIReason: m.AIReason, ReviewReasons: reviewReasons, ProviderName: m.ProviderNameSnapshot,
+		Model: m.ModelSnapshot, PromptVersion: m.PromptVersion, Status: risk.Status(m.Status), LastError: m.LastError,
+		ManualTags: manualTags, ManualReason: m.ManualReason, ManualForce: m.ManualForceDowngrade,
+		ReviewedAt: m.ReviewedAt, AssessedAt: m.AssessedAt, CreatedAt: m.CreatedAt, UpdatedAt: m.UpdatedAt}
+	if m.AILevel != nil {
+		a.AILevel = risk.Level(*m.AILevel)
+	}
+	if m.ManualLevel != nil {
+		a.ManualLevel, a.ManualConfirmed = risk.Level(*m.ManualLevel), true
+	}
+	if m.ProviderID != nil {
+		a.ProviderID = *m.ProviderID
+	}
+	a.Effective = risk.EffectiveLevel(a)
+	return a
+}
+
+func schemaSnapshot(raw json.RawMessage) JSONB {
+	if len(raw) == 0 || !json.Valid(raw) {
+		return JSONB(`{}`)
+	}
+	return JSONB(append([]byte(nil), raw...))
+}

@@ -118,18 +118,20 @@ type toolPolicyRuleModel struct {
 func (toolPolicyRuleModel) TableName() string { return "tool_policy_rule" }
 
 type apiKeyModel struct {
-	ID            string     `gorm:"column:id;type:uuid;primaryKey"`
-	Name          string     `gorm:"column:name;type:varchar(100);not null"`
-	KeyHash       []byte     `gorm:"column:key_hash;type:bytea;not null"`
-	KeyPlain      string     `gorm:"column:key_plain;type:text;not null;default:''"`
-	KeyPrefix     string     `gorm:"column:key_prefix;type:varchar(12);not null"`
-	Enabled       bool       `gorm:"column:enabled;type:boolean;not null;default:true"`
-	ExpiresAt     *time.Time `gorm:"column:expires_at;type:timestamptz"`
-	RateLimit     *int       `gorm:"column:rate_limit;type:integer"`
-	RateWindowS   *int       `gorm:"column:rate_window_s;type:integer"`
-	QuotaPerDay   *int       `gorm:"column:quota_per_day;type:integer"`
-	QuotaPerMonth *int       `gorm:"column:quota_per_month;type:integer"`
-	CreatedAt     time.Time  `gorm:"column:created_at;type:timestamptz;not null;default:now()"`
+	ID                 string     `gorm:"column:id;type:uuid;primaryKey"`
+	Name               string     `gorm:"column:name;type:varchar(100);not null"`
+	KeyHash            []byte     `gorm:"column:key_hash;type:bytea;not null"`
+	KeyPlain           string     `gorm:"column:key_plain;type:text;not null;default:''"`
+	KeyPrefix          string     `gorm:"column:key_prefix;type:varchar(12);not null"`
+	Enabled            bool       `gorm:"column:enabled;type:boolean;not null;default:true"`
+	ExpiresAt          *time.Time `gorm:"column:expires_at;type:timestamptz"`
+	RateLimit          *int       `gorm:"column:rate_limit;type:integer"`
+	RateWindowS        *int       `gorm:"column:rate_window_s;type:integer"`
+	QuotaPerDay        *int       `gorm:"column:quota_per_day;type:integer"`
+	QuotaPerMonth      *int       `gorm:"column:quota_per_month;type:integer"`
+	RiskProfile        string     `gorm:"column:risk_profile;type:varchar(32);not null;default:'legacy_unrestricted'"`
+	UpstreamAccessMode string     `gorm:"column:upstream_access_mode;type:varchar(16);not null;default:'all'"`
+	CreatedAt          time.Time  `gorm:"column:created_at;type:timestamptz;not null;default:now()"`
 }
 
 func (apiKeyModel) TableName() string { return "api_key" }
@@ -153,6 +155,13 @@ type apiKeyACLModel struct {
 
 func (apiKeyACLModel) TableName() string { return "api_key_acl" }
 
+type apiKeyUpstreamAccessModel struct {
+	APIKeyID   string `gorm:"column:api_key_id;type:uuid;primaryKey;index:idx_api_key_upstream_access_upstream,priority:2"`
+	UpstreamID string `gorm:"column:upstream_id;type:uuid;primaryKey;index:idx_api_key_upstream_access_upstream,priority:1"`
+}
+
+func (apiKeyUpstreamAccessModel) TableName() string { return "api_key_upstream_access" }
+
 type toolCacheModel struct {
 	UpstreamID     string    `gorm:"column:upstream_id;type:uuid;primaryKey"`
 	Tools          JSONB     `gorm:"column:tools;type:jsonb;not null"`
@@ -164,6 +173,83 @@ type toolCacheModel struct {
 }
 
 func (toolCacheModel) TableName() string { return "tool_cache" }
+
+type aiProviderModel struct {
+	ID               string    `gorm:"column:id;type:uuid;primaryKey"`
+	Name             string    `gorm:"column:name;type:varchar(100);not null;unique"`
+	BaseURL          string    `gorm:"column:base_url;type:text;not null"`
+	APIStyle         string    `gorm:"column:api_style;type:varchar(32);not null;default:'chat_completions'"`
+	Model            string    `gorm:"column:model;type:varchar(200);not null"`
+	APIKeyCiphertext []byte    `gorm:"column:api_key_ciphertext;type:bytea"`
+	APIKeyNonce      []byte    `gorm:"column:api_key_nonce;type:bytea"`
+	Enabled          bool      `gorm:"column:enabled;type:boolean;not null;default:true"`
+	Active           bool      `gorm:"column:active;type:boolean;not null;default:false"`
+	TimeoutS         int       `gorm:"column:timeout_s;type:integer;not null;default:60"`
+	BatchSize        int       `gorm:"column:batch_size;type:integer;not null;default:10"`
+	MaxConcurrency   int       `gorm:"column:max_concurrency;type:integer;not null;default:1"`
+	AutoAssess       bool      `gorm:"column:auto_assess;type:boolean;not null;default:false"`
+	CreatedAt        time.Time `gorm:"column:created_at;type:timestamptz;not null;default:now();autoCreateTime:false"`
+	UpdatedAt        time.Time `gorm:"column:updated_at;type:timestamptz;not null;default:now();autoUpdateTime:false"`
+}
+
+func (aiProviderModel) TableName() string { return "ai_provider" }
+
+type toolRiskAssessmentModel struct {
+	ID                    string     `gorm:"column:id;type:uuid;primaryKey"`
+	UpstreamID            string     `gorm:"column:upstream_id;type:uuid;not null;uniqueIndex:idx_tool_risk_source,priority:1"`
+	OriginalName          string     `gorm:"column:original_name;type:varchar(200);not null;uniqueIndex:idx_tool_risk_source,priority:2"`
+	ExposedNameSnapshot   string     `gorm:"column:exposed_name_snapshot;type:varchar(200);not null;default:''"`
+	DescriptionSnapshot   string     `gorm:"column:description_snapshot;type:text;not null;default:''"`
+	DescriptionZhSnapshot string     `gorm:"column:description_zh_snapshot;type:text;not null;default:''"`
+	InputSchemaSnapshot   JSONB      `gorm:"column:input_schema_snapshot;type:jsonb;not null;default:'{}'"`
+	SchemaFingerprint     string     `gorm:"column:schema_fingerprint;type:char(64);not null"`
+	DeterministicFloor    string     `gorm:"column:deterministic_floor;type:varchar(16);not null"`
+	RuleVersion           string     `gorm:"column:rule_version;type:varchar(32);not null"`
+	AITags                JSONB      `gorm:"column:ai_tags;type:jsonb;not null;default:'[]'"`
+	AILevel               *string    `gorm:"column:ai_level;type:varchar(16)"`
+	AIConfidence          *float64   `gorm:"column:ai_confidence;type:numeric(5,4)"`
+	AIReason              string     `gorm:"column:ai_reason;type:text;not null;default:''"`
+	ReviewReasons         JSONB      `gorm:"column:review_reasons;type:jsonb;not null;default:'[]'"`
+	ProviderID            *string    `gorm:"column:provider_id;type:uuid"`
+	ProviderNameSnapshot  string     `gorm:"column:provider_name_snapshot;type:varchar(100);not null;default:''"`
+	ModelSnapshot         string     `gorm:"column:model_snapshot;type:varchar(200);not null;default:''"`
+	PromptVersion         string     `gorm:"column:prompt_version;type:varchar(32);not null;default:''"`
+	Status                string     `gorm:"column:status;type:varchar(20);not null"`
+	LastError             string     `gorm:"column:last_error;type:text;not null;default:''"`
+	ManualLevel           *string    `gorm:"column:manual_level;type:varchar(16)"`
+	ManualTags            JSONB      `gorm:"column:manual_tags;type:jsonb;not null;default:'[]'"`
+	ManualReason          string     `gorm:"column:manual_reason;type:text;not null;default:''"`
+	ManualForceDowngrade  bool       `gorm:"column:manual_force_downgrade;type:boolean;not null;default:false"`
+	ReviewedAt            *time.Time `gorm:"column:reviewed_at;type:timestamptz"`
+	AssessedAt            *time.Time `gorm:"column:assessed_at;type:timestamptz"`
+	CreatedAt             time.Time  `gorm:"column:created_at;type:timestamptz;not null;default:now();autoCreateTime:false"`
+	UpdatedAt             time.Time  `gorm:"column:updated_at;type:timestamptz;not null;default:now();autoUpdateTime:false"`
+}
+
+func (toolRiskAssessmentModel) TableName() string { return "tool_risk_assessment" }
+
+type riskAssessmentJobModel struct {
+	ID             string     `gorm:"column:id;type:uuid;primaryKey"`
+	ProviderID     string     `gorm:"column:provider_id;type:uuid;not null"`
+	Scope          string     `gorm:"column:scope;type:varchar(20);not null"`
+	ScopePayload   JSONB      `gorm:"column:scope_payload;type:jsonb;not null;default:'{}'"`
+	Status         string     `gorm:"column:status;type:varchar(20);not null"`
+	RequestedCount int        `gorm:"column:requested_count;type:integer;not null;default:0"`
+	ProcessedCount int        `gorm:"column:processed_count;type:integer;not null;default:0"`
+	SuccessCount   int        `gorm:"column:success_count;type:integer;not null;default:0"`
+	ReviewCount    int        `gorm:"column:review_count;type:integer;not null;default:0"`
+	FailureCount   int        `gorm:"column:failure_count;type:integer;not null;default:0"`
+	RetryCount     int        `gorm:"column:retry_count;type:integer;not null;default:0"`
+	SplitCount     int        `gorm:"column:split_count;type:integer;not null;default:0"`
+	ErrorCounts    JSONB      `gorm:"column:error_counts;type:jsonb;not null;default:'{}'"`
+	LastError      string     `gorm:"column:last_error;type:text;not null;default:''"`
+	CreatedAt      time.Time  `gorm:"column:created_at;type:timestamptz;not null;default:now();autoCreateTime:false"`
+	StartedAt      *time.Time `gorm:"column:started_at;type:timestamptz"`
+	FinishedAt     *time.Time `gorm:"column:finished_at;type:timestamptz"`
+	UpdatedAt      time.Time  `gorm:"column:updated_at;type:timestamptz;not null;default:now();autoUpdateTime:false"`
+}
+
+func (riskAssessmentJobModel) TableName() string { return "risk_assessment_job" }
 
 type callStatDailyModel struct {
 	StatDate             time.Time  `gorm:"column:stat_date;type:date;primaryKey"`

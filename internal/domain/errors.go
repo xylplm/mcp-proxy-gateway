@@ -24,6 +24,8 @@ const (
 	CodeUpstreamTimeout ErrorCode = "UPSTREAM_TIMEOUT"
 	// CodeToolNotFound 表示目标工具不存在于可见聚合工具集合中。
 	CodeToolNotFound ErrorCode = "TOOL_NOT_FOUND"
+	// CodeToolRiskForbidden 表示来源工具被当前 API Key 风险档案拒绝。
+	CodeToolRiskForbidden ErrorCode = "TOOL_RISK_FORBIDDEN"
 	// CodeBackupInvalid 表示导入的配置备份文件格式无效或内容校验失败（Req 23.6）。
 	CodeBackupInvalid ErrorCode = "BACKUP_INVALID"
 	// CodeInternal 表示未归类的服务器内部错误，用于兜底未知 error，避免泄露内部细节。

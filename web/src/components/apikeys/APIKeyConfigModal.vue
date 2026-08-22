@@ -20,11 +20,19 @@ import {
   deleteACL,
   getRateLimit,
   updateRateLimit,
+  setAPIKeyRiskProfile,
+  getAPIKeyRiskImpact,
+  getAPIKeyUpstreamAccess,
+  updateAPIKeyUpstreamAccess,
   type APIKey,
   type APIKeyFilter,
   type ACLEntry,
+  type UpstreamAccessMode,
 } from '@/api/apikeys'
+import type { RiskProfile } from '@/api/aiRisk'
+import { riskProfileDescription, riskProfileLabel } from '@/utils/riskLevel'
 import { getAggregatedTools, type ToolDetail } from '@/api/tools'
+import { CONN_STATE_LABELS, listUpstreams, type Upstream } from '@/api/upstreams'
 import { getAPIKeyUsageProfile, type APIKeyToolUsage, type APIKeyUsageProfile } from '@/api/stats'
 import { useConfirm } from '@/composables/useConfirm'
 import { useToast } from '@/composables/useToast'
@@ -44,7 +52,7 @@ const { confirm } = useConfirm()
 const toast = useToast()
 
 /** 当前激活的分页签。 */
-type Tab = 'profile' | 'filters' | 'acl' | 'ratelimit'
+type Tab = 'profile' | 'risk' | 'upstreams' | 'filters' | 'acl' | 'ratelimit'
 const activeTab = ref<Tab>('filters')
 
 /** 通用提示与加载状态。 */
@@ -181,7 +189,7 @@ async function loadACL(id: string): Promise<void> {
   try {
     aclEntries.value = await listACL(id)
   } catch (err) {
-    showError(err, '加载来源白名单失败')
+    showError(err, '加载 IP 白名单失败')
   } finally {
     aclLoading.value = false
   }
@@ -199,7 +207,7 @@ async function addACL(): Promise<void> {
     await createACL(props.apiKey.id, { cidr })
     newCidr.value = ''
     await loadACL(props.apiKey.id)
-    showToast('已添加来源白名单')
+    showToast('已添加 IP 白名单')
   } catch (err) {
     showError(err, '添加来源白名单失败')
   } finally {
@@ -211,7 +219,7 @@ async function removeACL(entry: ACLEntry): Promise<void> {
   if (props.apiKey === null) return
   const ok = await confirm({
     title: '确认删除',
-    message: `确定删除来源白名单「${entry.CIDR}」吗？该操作不可恢复。`,
+    message: `确定删除 IP 白名单「${entry.CIDR}」吗？该操作不可恢复。`,
     confirmText: '删除',
     tone: 'danger',
   })
@@ -219,7 +227,7 @@ async function removeACL(entry: ACLEntry): Promise<void> {
   try {
     await deleteACL(entry.ID)
     await loadACL(props.apiKey.id)
-    showToast('已删除来源白名单')
+    showToast('已删除 IP 白名单')
   } catch (err) {
     showError(err, '删除来源白名单失败')
   }
@@ -291,7 +299,110 @@ function positiveNumberOrNull(value: number | null): number | null {
 // ── 使用画像 ──────────────────────────────────────────────────────────────
 const usageProfile = ref<APIKeyUsageProfile | null>(null)
 const profileLoading = ref(false)
+const riskProfile = ref<RiskProfile>('standard')
+const riskProfileSaving = ref(false)
+const riskProfiles: RiskProfile[] = ['readonly', 'standard', 'privileged', 'legacy_unrestricted']
 let profileRequestSeq = 0
+
+// ── 上游权限 ─────────────────────────────────────────────
+const upstreamAccessMode = ref<UpstreamAccessMode>('all')
+const selectedUpstreamIDs = ref<string[]>([])
+const upstreamOptions = ref<Upstream[]>([])
+const upstreamAccessLoading = ref(false)
+const upstreamAccessSaving = ref(false)
+const upstreamSearch = ref('')
+
+const filteredUpstreamOptions = computed(() => {
+  const keyword = upstreamSearch.value.trim().toLowerCase()
+  if (keyword === '') return upstreamOptions.value
+  return upstreamOptions.value.filter((item) =>
+    [item.config.name, ...(item.config.tags ?? [])].some((value) =>
+      value.toLowerCase().includes(keyword),
+    ),
+  )
+})
+
+const selectedUpstreamCount = computed(() =>
+  upstreamAccessMode.value === 'all'
+    ? upstreamOptions.value.length
+    : selectedUpstreamIDs.value.length,
+)
+
+function upstreamSelected(id: string): boolean {
+  return selectedUpstreamIDs.value.includes(id)
+}
+
+function toggleUpstream(id: string): void {
+  const current = new Set(selectedUpstreamIDs.value)
+  if (current.has(id)) current.delete(id)
+  else current.add(id)
+  selectedUpstreamIDs.value = Array.from(current)
+}
+
+function selectAllUpstreams(): void {
+  selectedUpstreamIDs.value = upstreamOptions.value.map((item) => item.id)
+}
+
+function clearSelectedUpstreams(): void {
+  selectedUpstreamIDs.value = []
+}
+
+function upstreamToolCount(upstreamID: string): number {
+  const names = new Set<string>()
+  for (const detail of toolDetails.value) {
+    for (const source of detail.sources ?? []) {
+      if (source.upstreamId === upstreamID) names.add(source.originalName)
+    }
+    if (detail.tool.upstreamId === upstreamID) names.add(detail.tool.originalName)
+  }
+  return names.size
+}
+
+async function loadUpstreamAccess(id: string): Promise<void> {
+  upstreamAccessLoading.value = true
+  try {
+    const [access, upstreams] = await Promise.all([getAPIKeyUpstreamAccess(id), listUpstreams()])
+    upstreamAccessMode.value = access.mode
+    selectedUpstreamIDs.value = access.upstreamIds
+    upstreamOptions.value = upstreams
+  } catch (err) {
+    showError(err, '加载上游权限失败')
+  } finally {
+    upstreamAccessLoading.value = false
+  }
+}
+
+async function saveUpstreamAccess(): Promise<void> {
+  if (props.apiKey === null) return
+  const selectedCount = selectedUpstreamIDs.value.length
+  const denyAll = upstreamAccessMode.value === 'selected' && selectedCount === 0
+  const accepted = await confirm({
+    title: denyAll ? '确认禁止全部上游' : '确认更新上游权限',
+    message:
+      upstreamAccessMode.value === 'all'
+        ? '保存后该 API Key 可访问全部已启用上游，仍受风险档案和屏蔽规则限制。'
+        : denyAll
+          ? '当前没有选择任何上游，保存后该 API Key 将无法发现或调用任何 MCP 工具。'
+          : `保存后仅允许访问 ${selectedCount} 个上游；新增上游默认不会自动放行。`,
+    confirmText: '确认保存',
+    tone: denyAll || upstreamAccessMode.value === 'all' ? 'warning' : 'info',
+  })
+  if (!accepted) return
+  upstreamAccessSaving.value = true
+  try {
+    const saved = await updateAPIKeyUpstreamAccess(props.apiKey.id, {
+      mode: upstreamAccessMode.value,
+      upstreamIds: upstreamAccessMode.value === 'selected' ? selectedUpstreamIDs.value : [],
+    })
+    upstreamAccessMode.value = saved.mode
+    selectedUpstreamIDs.value = saved.upstreamIds
+    showToast('上游权限已更新')
+  } catch (err) {
+    showError(err, '更新上游权限失败')
+  } finally {
+    upstreamAccessSaving.value = false
+  }
+}
 
 function emptyUsageProfile(apiKeyId = ''): APIKeyUsageProfile {
   return {
@@ -374,6 +485,28 @@ async function loadUsageProfile(id: string): Promise<void> {
   }
 }
 
+async function saveRiskProfile(): Promise<void> {
+  if (props.apiKey === null) return
+  riskProfileSaving.value = true
+  try {
+    const impact = await getAPIKeyRiskImpact(props.apiKey.id, riskProfile.value)
+    const expands = impact.newlyAllowed > 0
+    const accepted = await confirm({
+      title: expands ? '确认扩大工具权限' : '确认切换风险档案',
+      message: `切换后可见来源 ${impact.targetVisible} 个；新增放行 ${impact.newlyAllowed} 个，新增隐藏 ${impact.newlyHidden} 个。${expands ? '请确认该 Key 仅交给可信客户端。' : ''}`,
+      confirmText: '确认切换',
+      tone: expands ? 'warning' : 'info',
+    })
+    if (!accepted) return
+    await setAPIKeyRiskProfile(props.apiKey.id, riskProfile.value)
+    showToast('风险档案已更新')
+  } catch (err) {
+    showError(err, '更新风险档案失败')
+  } finally {
+    riskProfileSaving.value = false
+  }
+}
+
 // ── 打开时加载全部从属配置 ────────────────────────────────────────────────
 watch(
   () => props.apiKey,
@@ -390,11 +523,14 @@ watch(
     newFilterIsRegex.value = false
     newCidr.value = ''
     usageProfile.value = emptyUsageProfile(key.id)
+    riskProfile.value = key.riskProfile || 'legacy_unrestricted'
+    upstreamSearch.value = ''
     void loadFilters(key.id)
     void loadToolDetails()
     void loadACL(key.id)
     void loadRateLimit(key.id)
     void loadUsageProfile(key.id)
+    void loadUpstreamAccess(key.id)
   },
   { immediate: true },
 )
@@ -450,9 +586,11 @@ function buildFilterPreviewSummary(rule: APIKeyFilter): APIKeyFilterPreviewSumma
           <button
             v-for="tab in [
               { key: 'profile', label: '使用画像' },
+              { key: 'risk', label: '风险档案' },
+              { key: 'upstreams', label: '上游权限' },
               { key: 'filters', label: '屏蔽规则' },
-              { key: 'acl', label: '来源白名单' },
-              { key: 'ratelimit', label: '限流配置' },
+              { key: 'acl', label: 'IP 白名单' },
+              { key: 'ratelimit', label: '调用限制' },
             ]"
             :key="tab.key"
             type="button"
@@ -585,6 +723,183 @@ function buildFilterPreviewSummary(rule: APIKeyFilter): APIKeyFilterPreviewSumma
                 </div>
               </div>
             </div>
+          </section>
+
+          <!-- 风险档案 -->
+          <section v-else-if="activeTab === 'risk'" class="space-y-4">
+            <div
+              class="rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-white/[0.03]"
+            >
+              <h4 class="text-sm font-semibold text-gray-800 dark:text-white/90">工具风险档案</h4>
+              <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
+                根据工具的有效风险等级控制可见性和调用权限，与上游权限、屏蔽规则共同生效。
+              </p>
+              <div class="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end">
+                <label class="min-w-0 flex-1 text-sm font-medium text-gray-700 dark:text-gray-300">
+                  选择档案
+                  <select
+                    v-model="riskProfile"
+                    class="mt-1.5 w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm dark:border-gray-700 dark:bg-gray-800"
+                  >
+                    <option v-for="item in riskProfiles" :key="item" :value="item">
+                      {{ riskProfileLabel[item] }}：{{ riskProfileDescription[item] }}
+                    </option>
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  class="bg-brand-500 hover:bg-brand-600 h-10 rounded-lg px-4 text-sm font-medium text-white transition disabled:bg-gray-300 disabled:text-gray-500 dark:disabled:bg-gray-700 dark:disabled:text-gray-400"
+                  :disabled="riskProfileSaving"
+                  @click="saveRiskProfile"
+                >
+                  {{ riskProfileSaving ? '保存中…' : '保存档案' }}
+                </button>
+              </div>
+              <p v-if="riskProfile === 'legacy_unrestricted'" class="text-warning-600 mt-3 text-xs">
+                兼容无限制会跳过风险目录，仅建议用于迁移旧客户端。
+              </p>
+            </div>
+          </section>
+
+          <!-- 上游权限 -->
+          <section v-else-if="activeTab === 'upstreams'" class="space-y-4">
+            <div
+              v-if="upstreamAccessLoading"
+              class="rounded-xl border border-gray-200 px-4 py-8 text-center text-sm text-gray-400 dark:border-gray-800"
+            >
+              加载中…
+            </div>
+            <template v-else>
+              <div
+                class="rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-white/[0.03]"
+              >
+                <h4 class="text-sm font-semibold text-gray-800 dark:text-white/90">上游访问范围</h4>
+                <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
+                  限制该 API Key 可访问的 MCP 上游。此配置只缩小范围，不会绕过风险档案或屏蔽规则。
+                </p>
+                <div class="mt-4 grid gap-2 sm:grid-cols-2">
+                  <button
+                    type="button"
+                    class="rounded-xl border p-3 text-left transition"
+                    :class="
+                      upstreamAccessMode === 'all'
+                        ? 'border-brand-400 bg-brand-50 dark:border-brand-500/50 dark:bg-brand-500/10'
+                        : 'border-gray-200 hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-gray-800'
+                    "
+                    @click="upstreamAccessMode = 'all'"
+                  >
+                    <span class="block text-sm font-medium text-gray-800 dark:text-white/90"
+                      >允许全部上游</span
+                    >
+                    <span class="mt-1 block text-xs text-gray-500"
+                      >新增上游会自动纳入可访问范围</span
+                    >
+                  </button>
+                  <button
+                    type="button"
+                    class="rounded-xl border p-3 text-left transition"
+                    :class="
+                      upstreamAccessMode === 'selected'
+                        ? 'border-brand-400 bg-brand-50 dark:border-brand-500/50 dark:bg-brand-500/10'
+                        : 'border-gray-200 hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-gray-800'
+                    "
+                    @click="upstreamAccessMode = 'selected'"
+                  >
+                    <span class="block text-sm font-medium text-gray-800 dark:text-white/90"
+                      >仅允许已选上游</span
+                    >
+                    <span class="mt-1 block text-xs text-gray-500"
+                      >新增上游默认不放行，适合严格授权</span
+                    >
+                  </button>
+                </div>
+              </div>
+
+              <div v-if="upstreamAccessMode === 'selected'" class="space-y-3">
+                <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
+                  <input
+                    v-model="upstreamSearch"
+                    type="search"
+                    placeholder="搜索上游名称或标签"
+                    class="min-w-0 flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-800"
+                  />
+                  <div class="flex items-center gap-2 text-xs">
+                    <button
+                      type="button"
+                      class="text-brand-600 dark:text-brand-400"
+                      @click="selectAllUpstreams"
+                    >
+                      全选
+                    </button>
+                    <span class="text-gray-300 dark:text-gray-700">|</span>
+                    <button type="button" class="text-gray-500" @click="clearSelectedUpstreams">
+                      清空
+                    </button>
+                  </div>
+                </div>
+                <div
+                  v-if="filteredUpstreamOptions.length === 0"
+                  class="rounded-xl border border-dashed border-gray-300 px-4 py-8 text-center text-sm text-gray-400 dark:border-gray-700"
+                >
+                  没有匹配的上游 MCP
+                </div>
+                <div v-else class="space-y-2">
+                  <button
+                    v-for="upstream in filteredUpstreamOptions"
+                    :key="upstream.id"
+                    type="button"
+                    class="flex w-full items-center gap-3 rounded-xl border p-3 text-left transition"
+                    :class="
+                      upstreamSelected(upstream.id)
+                        ? 'border-brand-300 bg-brand-50/60 dark:border-brand-500/40 dark:bg-brand-500/10'
+                        : 'border-gray-200 hover:bg-gray-50 dark:border-gray-800 dark:hover:bg-gray-800'
+                    "
+                    @click="toggleUpstream(upstream.id)"
+                  >
+                    <span
+                      class="flex h-5 w-5 shrink-0 items-center justify-center rounded border text-xs"
+                      :class="
+                        upstreamSelected(upstream.id)
+                          ? 'border-brand-500 bg-brand-500 text-white'
+                          : 'border-gray-300 dark:border-gray-600'
+                      "
+                      >{{ upstreamSelected(upstream.id) ? '✓' : '' }}</span
+                    >
+                    <span class="min-w-0 flex-1">
+                      <span
+                        class="block truncate text-sm font-medium text-gray-800 dark:text-white/90"
+                        >{{ upstream.config.name }}</span
+                      >
+                      <span class="mt-0.5 block text-xs text-gray-400">
+                        {{ CONN_STATE_LABELS[upstream.state] }} ·
+                        {{ upstreamToolCount(upstream.id) }} 个工具来源
+                        <template v-if="!upstream.config.enabled"> · 已停用</template>
+                      </span>
+                    </span>
+                  </button>
+                </div>
+              </div>
+
+              <div
+                class="flex flex-col gap-3 border-t border-gray-200 pt-4 sm:flex-row sm:items-center sm:justify-between dark:border-gray-800"
+              >
+                <p class="text-xs text-gray-500">
+                  {{
+                    upstreamAccessMode === 'all'
+                      ? `将允许全部 ${upstreamOptions.length} 个上游`
+                      : `已选择 ${selectedUpstreamCount} / ${upstreamOptions.length} 个上游`
+                  }}
+                </p>
+                <button
+                  type="button"
+                  class="bg-brand-500 hover:bg-brand-600 rounded-lg px-4 py-2.5 text-sm font-medium text-white transition disabled:bg-gray-300 disabled:text-gray-500 dark:disabled:bg-gray-700 dark:disabled:text-gray-400"
+                  :disabled="upstreamAccessSaving"
+                  @click="saveUpstreamAccess"
+                >
+                  {{ upstreamAccessSaving ? '保存中…' : '保存上游权限' }}
+                </button>
+              </div>
+            </template>
           </section>
 
           <!-- 屏蔽规则 -->
@@ -756,7 +1071,7 @@ function buildFilterPreviewSummary(rule: APIKeyFilter): APIKeyFilterPreviewSumma
             </div>
           </section>
 
-          <!-- 来源白名单 -->
+          <!-- IP 白名单 -->
           <section v-else-if="activeTab === 'acl'">
             <div class="mb-4 flex flex-wrap items-end gap-2">
               <div class="min-w-[200px] flex-1">
@@ -795,7 +1110,7 @@ function buildFilterPreviewSummary(rule: APIKeyFilter): APIKeyFilterPreviewSumma
               v-else-if="aclEntries.length === 0"
               class="rounded-xl border border-dashed border-gray-300 px-4 py-8 text-center text-sm text-gray-400 dark:border-gray-700"
             >
-              暂无来源白名单（不限制来源）
+              暂无 IP 白名单（不限制客户端 IP）
             </div>
             <div v-else class="space-y-2">
               <div

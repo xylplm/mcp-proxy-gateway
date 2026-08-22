@@ -7,6 +7,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
+	"github.com/myGithub/mcp-proxy-gateway/internal/risk"
 )
 
 // APIKey 是 API Key 元数据（api_key 表）的持久层表示。
@@ -38,6 +39,10 @@ type APIKey struct {
 	QuotaPerDay *int
 	// QuotaPerMonth 为每月调用上限；nil 表示不限额。
 	QuotaPerMonth *int
+	// RiskProfile 为工具风险授权档案。旧记录迁移时使用 legacy_unrestricted。
+	RiskProfile risk.Profile
+	// UpstreamAccessMode 为上游访问范围：all 或 selected。
+	UpstreamAccessMode string
 	// CreatedAt 为创建时间。
 	CreatedAt time.Time
 }
@@ -56,17 +61,19 @@ func NewAPIKeyRepo(db *gorm.DB) *APIKeyRepo {
 func (r *APIKeyRepo) Create(ctx context.Context, key APIKey) (APIKey, error) {
 	id := newUUID()
 	err := r.db.WithContext(ctx).Model(&apiKeyModel{}).Create(map[string]any{
-		"id":              id,
-		"name":            key.Name,
-		"key_hash":        key.KeyHash,
-		"key_plain":       key.KeyPlain,
-		"key_prefix":      key.KeyPrefix,
-		"enabled":         key.Enabled,
-		"expires_at":      key.ExpiresAt,
-		"rate_limit":      key.RateLimit,
-		"rate_window_s":   key.RateWindowS,
-		"quota_per_day":   key.QuotaPerDay,
-		"quota_per_month": key.QuotaPerMonth,
+		"id":                   id,
+		"name":                 key.Name,
+		"key_hash":             key.KeyHash,
+		"key_plain":            key.KeyPlain,
+		"key_prefix":           key.KeyPrefix,
+		"enabled":              key.Enabled,
+		"expires_at":           key.ExpiresAt,
+		"rate_limit":           key.RateLimit,
+		"rate_window_s":        key.RateWindowS,
+		"quota_per_day":        key.QuotaPerDay,
+		"quota_per_month":      key.QuotaPerMonth,
+		"risk_profile":         normalizeNewRiskProfile(key.RiskProfile),
+		"upstream_access_mode": normalizeUpstreamAccessMode(key.UpstreamAccessMode),
 	}).Error
 	if err != nil {
 		return APIKey{}, classifyWrite(err, "API Key 名称已存在："+key.Name, "API Key 不存在")
@@ -120,13 +127,15 @@ func (r *APIKeyRepo) Update(ctx context.Context, key APIKey) (APIKey, error) {
 		return APIKey{}, err
 	}
 	res := r.db.WithContext(ctx).Model(&apiKeyModel{}).Where("id = ?", uid).Updates(map[string]any{
-		"name":            key.Name,
-		"enabled":         key.Enabled,
-		"expires_at":      key.ExpiresAt,
-		"rate_limit":      key.RateLimit,
-		"rate_window_s":   key.RateWindowS,
-		"quota_per_day":   key.QuotaPerDay,
-		"quota_per_month": key.QuotaPerMonth,
+		"name":                 key.Name,
+		"enabled":              key.Enabled,
+		"expires_at":           key.ExpiresAt,
+		"rate_limit":           key.RateLimit,
+		"rate_window_s":        key.RateWindowS,
+		"quota_per_day":        key.QuotaPerDay,
+		"quota_per_month":      key.QuotaPerMonth,
+		"risk_profile":         key.RiskProfile,
+		"upstream_access_mode": normalizeUpstreamAccessMode(key.UpstreamAccessMode),
 	})
 	if res.Error != nil {
 		return APIKey{}, classifyWrite(res.Error, "API Key 名称已存在："+key.Name, "API Key 不存在")
@@ -135,6 +144,25 @@ func (r *APIKeyRepo) Update(ctx context.Context, key APIKey) (APIKey, error) {
 		return APIKey{}, domain.NewError(domain.CodeNotFound, "API Key 不存在")
 	}
 	return r.Get(ctx, key.ID)
+}
+
+// SetRiskProfile 原子更新 API Key 风险档案。
+func (r *APIKeyRepo) SetRiskProfile(ctx context.Context, id string, profile risk.Profile) error {
+	uid, err := parseUUID(id)
+	if err != nil {
+		return err
+	}
+	if !risk.ValidProfile(profile) {
+		return domain.NewError(domain.CodeValidation, "API Key 风险档案无效")
+	}
+	res := r.db.WithContext(ctx).Model(&apiKeyModel{}).Where("id = ?", uid).Update("risk_profile", profile)
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return domain.NewError(domain.CodeNotFound, "API Key 不存在")
+	}
+	return nil
 }
 
 // SetEnabled 仅更新 API Key 的启停状态（Req 12.4）；不存在返回 CodeNotFound。
@@ -172,17 +200,33 @@ func (r *APIKeyRepo) Delete(ctx context.Context, id string) error {
 
 func modelToAPIKey(model apiKeyModel) APIKey {
 	return APIKey{
-		ID:            model.ID,
-		Name:          model.Name,
-		KeyHash:       model.KeyHash,
-		KeyPlain:      model.KeyPlain,
-		KeyPrefix:     model.KeyPrefix,
-		Enabled:       model.Enabled,
-		ExpiresAt:     model.ExpiresAt,
-		RateLimit:     model.RateLimit,
-		RateWindowS:   model.RateWindowS,
-		QuotaPerDay:   model.QuotaPerDay,
-		QuotaPerMonth: model.QuotaPerMonth,
-		CreatedAt:     model.CreatedAt,
+		ID:                 model.ID,
+		Name:               model.Name,
+		KeyHash:            model.KeyHash,
+		KeyPlain:           model.KeyPlain,
+		KeyPrefix:          model.KeyPrefix,
+		Enabled:            model.Enabled,
+		ExpiresAt:          model.ExpiresAt,
+		RateLimit:          model.RateLimit,
+		RateWindowS:        model.RateWindowS,
+		QuotaPerDay:        model.QuotaPerDay,
+		QuotaPerMonth:      model.QuotaPerMonth,
+		RiskProfile:        risk.Profile(model.RiskProfile),
+		UpstreamAccessMode: normalizeUpstreamAccessMode(model.UpstreamAccessMode),
+		CreatedAt:          model.CreatedAt,
 	}
+}
+
+func normalizeUpstreamAccessMode(mode string) string {
+	if mode == "selected" {
+		return mode
+	}
+	return "all"
+}
+
+func normalizeNewRiskProfile(profile risk.Profile) risk.Profile {
+	if profile == "" {
+		return risk.ProfileStandard
+	}
+	return profile
 }

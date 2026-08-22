@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
+	"github.com/myGithub/mcp-proxy-gateway/internal/risk"
 	"github.com/myGithub/mcp-proxy-gateway/internal/store"
 )
 
@@ -75,6 +76,11 @@ func (a *StoreAdapter) ExportBusiness(ctx context.Context) (BusinessConfig, erro
 			return BusinessConfig{}, err
 		}
 		entry := APIKeyEntry{Meta: k}
+		access, err := a.repos.APIKeyUpstreamAccess.Get(ctx, k.ID)
+		if err != nil {
+			return BusinessConfig{}, err
+		}
+		entry.UpstreamIDs = append(entry.UpstreamIDs, access.UpstreamIDs...)
 		for _, fr := range filterRows {
 			entry.FilterRules = append(entry.FilterRules, fr.FilterRule)
 		}
@@ -82,6 +88,18 @@ func (a *StoreAdapter) ExportBusiness(ctx context.Context) (BusinessConfig, erro
 			entry.ACLCIDRs = append(entry.ACLCIDRs, ace.CIDR)
 		}
 		bc.APIKeys = append(bc.APIKeys, entry)
+	}
+	providers, err := a.repos.AIProvider.List(ctx)
+	if err != nil {
+		return BusinessConfig{}, err
+	}
+	bc.AIProviders = make([]AIProviderEntry, 0, len(providers))
+	for _, provider := range providers {
+		bc.AIProviders = append(bc.AIProviders, AIProviderEntry{Provider: provider, KeyCiphertext: provider.APIKeyCiphertext, KeyNonce: provider.APIKeyNonce})
+	}
+	bc.ToolRisks, err = a.repos.ToolRisk.ListAll(ctx)
+	if err != nil {
+		return BusinessConfig{}, err
 	}
 
 	return bc, nil
@@ -145,6 +163,15 @@ func (a *StoreAdapter) importBusiness(ctx context.Context, bc BusinessConfig) er
 			return err
 		}
 	}
+	existingProviders, err := a.repos.AIProvider.List(ctx)
+	if err != nil {
+		return err
+	}
+	for _, provider := range existingProviders {
+		if err := a.repos.AIProvider.Delete(ctx, provider.ID); err != nil {
+			return err
+		}
+	}
 
 	// 2. 重建上游并记录旧标识到新标识的映射。
 	upstreamIDMap := make(map[string]string, len(bc.Upstreams))
@@ -154,6 +181,19 @@ func (a *StoreAdapter) importBusiness(ctx context.Context, bc BusinessConfig) er
 			return err
 		}
 		upstreamIDMap[ue.ID] = created.ID
+	}
+	providerIDMap := make(map[string]string, len(bc.AIProviders))
+	for _, entry := range bc.AIProviders {
+		provider := entry.Provider
+		oldID := provider.ID
+		provider.ID = ""
+		provider.APIKeyCiphertext = append([]byte(nil), entry.KeyCiphertext...)
+		provider.APIKeyNonce = append([]byte(nil), entry.KeyNonce...)
+		created, err := a.repos.AIProvider.Create(ctx, provider)
+		if err != nil {
+			return err
+		}
+		providerIDMap[oldID] = created.ID
 	}
 
 	// 3. 重建独立别名与 MCP 级屏蔽规则。
@@ -182,8 +222,15 @@ func (a *StoreAdapter) importBusiness(ctx context.Context, bc BusinessConfig) er
 	for _, ke := range bc.APIKeys {
 		meta := ke.Meta
 		meta.ID = "" // 由仓储生成新标识
+		if meta.RiskProfile == "" {
+			meta.RiskProfile = risk.ProfileLegacy
+		}
 		created, err := a.repos.APIKey.Create(ctx, meta)
 		if err != nil {
+			return err
+		}
+		mappedAccessIDs := remapIDs(ke.UpstreamIDs, upstreamIDMap)
+		if err := a.repos.APIKeyUpstreamAccess.Replace(ctx, created.ID, meta.UpstreamAccessMode, mappedAccessIDs); err != nil {
 			return err
 		}
 		for _, fr := range ke.FilterRules {
@@ -197,6 +244,20 @@ func (a *StoreAdapter) importBusiness(ctx context.Context, bc BusinessConfig) er
 			if _, err := a.repos.ACL.Create(ctx, store.ACLEntry{APIKeyID: created.ID, CIDR: cidr}); err != nil {
 				return err
 			}
+		}
+	}
+	for _, item := range bc.ToolRisks {
+		mappedUpstream, ok := upstreamIDMap[item.UpstreamID]
+		if !ok {
+			continue
+		}
+		item.ID = ""
+		item.UpstreamID = mappedUpstream
+		if item.ProviderID != "" {
+			item.ProviderID = providerIDMap[item.ProviderID]
+		}
+		if _, err := a.repos.ToolRisk.Restore(ctx, item); err != nil {
+			return err
 		}
 	}
 
