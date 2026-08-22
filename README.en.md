@@ -11,7 +11,7 @@ Connect heterogeneous MCP services once, aggregate tools into one governed catal
 [![Release](https://img.shields.io/github/v/release/xylplm/mcp-proxy-gateway?sort=semver&label=release)](https://github.com/xylplm/mcp-proxy-gateway/releases)
 [![Docker Image](https://img.shields.io/docker/v/xylplm/mcp-proxy-gateway?sort=semver&label=docker&logo=docker)](https://hub.docker.com/r/xylplm/mcp-proxy-gateway)
 [![Docker Pulls](https://img.shields.io/docker/pulls/xylplm/mcp-proxy-gateway?logo=docker)](https://hub.docker.com/r/xylplm/mcp-proxy-gateway)
-[![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)](https://go.dev/)
+[![Go](https://img.shields.io/badge/Go-1.27-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![Vue](https://img.shields.io/badge/Vue-3-42b883?logo=vuedotjs&logoColor=white)](https://vuejs.org/)
 [![License](https://img.shields.io/badge/license-AGPL--3.0%20%2B%20Commercial-blue.svg)](#license)
 
@@ -100,7 +100,7 @@ The backend is written in Go. The admin console is built with Vue 3, Vite and Ta
 
 | Layer | Choice |
 | --- | --- |
-| Backend | Go 1.25, Gin, GORM, pgx/PostgreSQL, go-redis/v9, robfig/cron/v3, golang-jwt/v5, MCP Go SDK |
+| Backend | Go 1.27, Gin, GORM, pgx/PostgreSQL, go-redis/v9, robfig/cron/v3, golang-jwt/v5, MCP Go SDK |
 | Frontend | Vue 3, Vite, TypeScript, Tailwind CSS, Pinia, Vue Router, ApexCharts |
 | Storage | PostgreSQL for business data and partitioned statistics; Redis for tool cache, rate limits and stats buffers |
 | Deployment | GitHub Actions builds linux/amd64 and linux/arm64 binaries, then packages them into a multi-arch Debian bookworm-slim/glibc Docker image |
@@ -275,7 +275,7 @@ Startup validates required env vars, reads YAML, generates a missing JWT secret,
 
 ### Requirements
 
-- Go 1.25+
+- Go 1.27+
 - Node.js 24+, matching the CI frontend toolchain
 - PostgreSQL 16+
 - Redis 7+

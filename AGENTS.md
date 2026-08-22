@@ -17,7 +17,7 @@
 
 ## 后端约定
 
-- Go 版本以 `go.mod` 为准，当前为 Go 1.25。
+- Go 版本以 `go.mod` 为准，当前为 Go 1.27。
 - HTTP 框架使用 Gin；管理端点统一挂在 `/api/admin`，由 `internal/httpapi/router.go` 装配。
 - 管理 API 统一响应信封，前端依赖 `{ code, message, data }`，成功业务码为 `20000`。
 - `httpapi` 是组合层：解析请求、调用应用服务或仓储、复用领域校验、返回统一错误；不要把复杂业务流程直接堆在 handler 里。

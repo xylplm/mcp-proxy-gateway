@@ -11,7 +11,7 @@
 [![Release](https://img.shields.io/github/v/release/xylplm/mcp-proxy-gateway?sort=semver&label=release)](https://github.com/xylplm/mcp-proxy-gateway/releases)
 [![Docker Image](https://img.shields.io/docker/v/xylplm/mcp-proxy-gateway?sort=semver&label=docker&logo=docker)](https://hub.docker.com/r/xylplm/mcp-proxy-gateway)
 [![Docker Pulls](https://img.shields.io/docker/pulls/xylplm/mcp-proxy-gateway?logo=docker)](https://hub.docker.com/r/xylplm/mcp-proxy-gateway)
-[![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)](https://go.dev/)
+[![Go](https://img.shields.io/badge/Go-1.27-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![Vue](https://img.shields.io/badge/Vue-3-42b883?logo=vuedotjs&logoColor=white)](https://vuejs.org/)
 [![License](https://img.shields.io/badge/license-AGPL--3.0%20%2B%20Commercial-blue.svg)](#许可证)
 
@@ -100,7 +100,7 @@ MCP Proxy Gateway 是一个自托管的 MCP 能力网关。它负责把分散在
 
 | 层级 | 选型 |
 | --- | --- |
-| 后端 | Go 1.25、Gin、GORM、pgx/PostgreSQL、go-redis/v9、robfig/cron/v3、golang-jwt/v5、MCP Go SDK |
+| 后端 | Go 1.27、Gin、GORM、pgx/PostgreSQL、go-redis/v9、robfig/cron/v3、golang-jwt/v5、MCP Go SDK |
 | 前端 | Vue 3、Vite、TypeScript、Tailwind CSS、Pinia、Vue Router、ApexCharts |
 | 存储 | PostgreSQL 业务数据与分区统计表；Redis 工具缓存、限流计数、统计缓冲 |
 | 部署 | GitHub Actions 预编译 linux/amd64 与 linux/arm64 二进制，Debian bookworm-slim/glibc 运行镜像，多架构 Docker Hub 发布 |
@@ -275,7 +275,7 @@ Authorization: Bearer <your-api-key>
 
 ### 环境要求
 
-- Go 1.25+
+- Go 1.27+
 - Node.js 24+，项目当前前端工具链在 CI 中使用 Node 24
 - PostgreSQL 16+
 - Redis 7+
