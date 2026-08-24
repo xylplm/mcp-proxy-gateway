@@ -178,7 +178,14 @@ func (r *ToolRiskRepo) ApplyAIResult(ctx context.Context, upstreamID, originalNa
 	tags, _ := json.Marshal(result.RiskTags)
 	encodedReviewReasons, _ := json.Marshal(reviewReasons)
 	aiLevelStr := string(result.RiskLevel)
-	effectiveLevel := computeEffectiveLevel(string(status), &aiLevelStr, nil, string(current.Floor))
+	// 若该工具已有人工覆盖，effective_level 应继续以 manual_level 为准，
+	// AI 评级结果不得覆盖已确认的人工结论。
+	var manualLevelPtr *string
+	if current.ManualConfirmed && risk.ValidLevel(current.ManualLevel) {
+		s := string(current.ManualLevel)
+		manualLevelPtr = &s
+	}
+	effectiveLevel := computeEffectiveLevel(string(status), &aiLevelStr, manualLevelPtr, string(current.Floor))
 	now := time.Now().UTC()
 	res := r.db.WithContext(ctx).Model(&toolRiskAssessmentModel{}).
 		Where("upstream_id = ? AND original_name = ?", upstreamID, originalName).
@@ -193,8 +200,21 @@ func (r *ToolRiskRepo) ApplyAIResult(ctx context.Context, upstreamID, originalNa
 }
 
 func (r *ToolRiskRepo) MarkAIError(ctx context.Context, upstreamID, originalName string, message string) error {
+	// 按 rune 截断，避免按字节截断切断多字节 UTF-8 字符导致写入非法编码。
 	if len(message) > 500 {
-		message = message[:500]
+		runes := []rune(message)
+		if len(runes) > 200 {
+			runes = runes[:200]
+		}
+		message = string(runes)
+		if len(message) > 500 {
+			// 极端情况下 200 个宽字符仍超过 500 字节，再按字节二次截断到安全边界
+			// 并补全至最近有效 UTF-8 字符边界。
+			message = message[:500]
+			for len(message) > 0 && message[len(message)-1]>>6 == 0b10 {
+				message = message[:len(message)-1]
+			}
+		}
 	}
 	return r.db.WithContext(ctx).Model(&toolRiskAssessmentModel{}).
 		Where("upstream_id = ? AND original_name = ?", upstreamID, originalName).
@@ -251,41 +271,35 @@ func (r *ToolRiskRepo) List(ctx context.Context, q RiskListQuery) (RiskListResul
 }
 
 func (r *ToolRiskRepo) summary(ctx context.Context) (RiskSummary, error) {
-	// 直接用 GROUP BY effective_level + COUNT 聚合，避免全表拉取到应用层计算。
-	type levelCount struct {
+	// 单次查询同时聚合等级分布和待复核数，避免两次独立查询之间的轻微不一致。
+	type levelAgg struct {
 		EffectiveLevel string `gorm:"column:effective_level"`
-		Count          int    `gorm:"column:count"`
+		Count          int    `gorm:"column:cnt"`
+		NeedsReview    int    `gorm:"column:needs_review_cnt"`
 	}
-	var counts []levelCount
+	var rows []levelAgg
 	err := r.db.WithContext(ctx).
 		Model(&toolRiskAssessmentModel{}).
-		Select("effective_level, COUNT(*) as count").
-		Where("status <> ?", risk.StatusRemoved).
+		Select("effective_level, COUNT(*) AS cnt, COUNT(*) FILTER (WHERE status = ?) AS needs_review_cnt", string(risk.StatusNeedsReview)).
+		Where("status <> ?", string(risk.StatusRemoved)).
 		Group("effective_level").
-		Scan(&counts).Error
+		Scan(&rows).Error
 	if err != nil {
 		return RiskSummary{}, err
 	}
-
-	var needsReview int64
-	if err := r.db.WithContext(ctx).Model(&toolRiskAssessmentModel{}).
-		Where("status = ?", risk.StatusNeedsReview).
-		Count(&needsReview).Error; err != nil {
-		return RiskSummary{}, err
-	}
-
-	s := RiskSummary{NeedsReview: int(needsReview)}
-	for _, c := range counts {
-		s.Total += c.Count
-		switch risk.Level(c.EffectiveLevel) {
+	var s RiskSummary
+	for _, row := range rows {
+		s.Total += row.Count
+		s.NeedsReview += row.NeedsReview
+		switch risk.Level(row.EffectiveLevel) {
 		case risk.LevelLow:
-			s.Low = c.Count
+			s.Low = row.Count
 		case risk.LevelMedium:
-			s.Medium = c.Count
+			s.Medium = row.Count
 		case risk.LevelHigh:
-			s.High = c.Count
+			s.High = row.Count
 		case risk.LevelBlocked:
-			s.Blocked = c.Count
+			s.Blocked = row.Count
 		}
 	}
 	return s, nil

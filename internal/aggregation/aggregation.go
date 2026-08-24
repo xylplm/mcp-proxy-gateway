@@ -168,8 +168,9 @@ type Service struct {
 }
 
 // SetUpstreamAccessAuthorizer 注入 API Key 上游范围授权器。
-func (s *Service) SetUpstreamAccessAuthorizer(authorizer UpstreamAccessAuthorizer) {
+func (s *Service) SetUpstreamAccessAuthorizer(authorizer UpstreamAccessAuthorizer) *Service {
 	s.upstreamAccessAuthorizer = authorizer
+	return s
 }
 
 const (

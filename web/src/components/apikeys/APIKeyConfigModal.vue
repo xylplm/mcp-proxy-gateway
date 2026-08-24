@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 /**
  * API Key 配置弹窗（任务 26.3）。
  *
@@ -58,11 +58,16 @@ const activeTab = ref<Tab>('filters')
 /** 通用提示与加载状态。 */
 const errorMessage = ref('')
 
+// ── 竞态保护：每次 apiKey 变化时递增，各 load 函数在写入响应式状态前比对序号。 ─────
+let loadSeq = 0
+
 function showToast(msg: string): void {
   toast.success(msg)
 }
 
-function showError(err: unknown, fallback: string): void {
+function showError(err: unknown, fallback: string, seq?: number): void {
+  // 若传入了 seq，只在序号仍有效时显示错误，避免旧请求污染当前 tab。
+  if (seq !== undefined && seq !== loadSeq) return
   errorMessage.value = err instanceof Error ? err.message : fallback
   setTimeout(() => {
     errorMessage.value = ''
@@ -103,14 +108,16 @@ const draftFilterPreviewSummary = computed<APIKeyFilterPreviewSummary>(() =>
   ),
 )
 
-async function loadFilters(id: string): Promise<void> {
+async function loadFilters(id: string, seq: number): Promise<void> {
   filtersLoading.value = true
   try {
-    filters.value = await listAPIKeyFilters(id)
+    const data = await listAPIKeyFilters(id)
+    if (seq !== loadSeq) return
+    filters.value = data
   } catch (err) {
-    showError(err, '加载屏蔽规则失败')
+    showError(err, '加载屏蔽规则失败', seq)
   } finally {
-    filtersLoading.value = false
+    if (seq === loadSeq) filtersLoading.value = false
   }
 }
 
@@ -141,7 +148,7 @@ async function addFilter(): Promise<void> {
     })
     newFilterPattern.value = ''
     newFilterIsRegex.value = false
-    await loadFilters(props.apiKey.id)
+    await loadFilters(props.apiKey.id, loadSeq)
     showToast('已添加屏蔽规则')
   } catch (err) {
     showError(err, '添加屏蔽规则失败')
@@ -154,7 +161,7 @@ async function toggleFilter(rule: APIKeyFilter): Promise<void> {
   if (props.apiKey === null) return
   try {
     await setAPIKeyFilterEnabled(rule.id, !rule.enabled)
-    await loadFilters(props.apiKey.id)
+    await loadFilters(props.apiKey.id, loadSeq)
   } catch (err) {
     showError(err, '操作失败')
   }
@@ -171,7 +178,7 @@ async function removeFilter(rule: APIKeyFilter): Promise<void> {
   if (!ok) return
   try {
     await deleteAPIKeyFilter(rule.id)
-    await loadFilters(props.apiKey.id)
+    await loadFilters(props.apiKey.id, loadSeq)
     showToast('已删除屏蔽规则')
   } catch (err) {
     showError(err, '删除屏蔽规则失败')
@@ -184,14 +191,16 @@ const aclLoading = ref(false)
 const newCidr = ref('')
 const aclBusy = ref(false)
 
-async function loadACL(id: string): Promise<void> {
+async function loadACL(id: string, seq: number): Promise<void> {
   aclLoading.value = true
   try {
-    aclEntries.value = await listACL(id)
+    const data = await listACL(id)
+    if (seq !== loadSeq) return
+    aclEntries.value = data
   } catch (err) {
-    showError(err, '加载 IP 白名单失败')
+    showError(err, '加载 IP 白名单失败', seq)
   } finally {
-    aclLoading.value = false
+    if (seq === loadSeq) aclLoading.value = false
   }
 }
 
@@ -206,7 +215,7 @@ async function addACL(): Promise<void> {
   try {
     await createACL(props.apiKey.id, { cidr })
     newCidr.value = ''
-    await loadACL(props.apiKey.id)
+    await loadACL(props.apiKey.id, loadSeq)
     showToast('已添加 IP 白名单')
   } catch (err) {
     showError(err, '添加来源白名单失败')
@@ -226,7 +235,7 @@ async function removeACL(entry: ACLEntry): Promise<void> {
   if (!ok) return
   try {
     await deleteACL(entry.ID)
-    await loadACL(props.apiKey.id)
+    await loadACL(props.apiKey.id, loadSeq)
     showToast('已删除 IP 白名单')
   } catch (err) {
     showError(err, '删除来源白名单失败')
@@ -241,18 +250,19 @@ const quotaPerMonth = ref<number | null>(null)
 const rateLoading = ref(false)
 const rateSaving = ref(false)
 
-async function loadRateLimit(id: string): Promise<void> {
+async function loadRateLimit(id: string, seq: number): Promise<void> {
   rateLoading.value = true
   try {
     const cfg = await getRateLimit(id)
+    if (seq !== loadSeq) return
     rateLimit.value = cfg.rateLimit ?? null
     rateWindowS.value = cfg.rateWindowS ?? null
     quotaPerDay.value = cfg.quotaPerDay ?? null
     quotaPerMonth.value = cfg.quotaPerMonth ?? null
   } catch (err) {
-    showError(err, '加载限流配置失败')
+    showError(err, '加载限流配置失败', seq)
   } finally {
-    rateLoading.value = false
+    if (seq === loadSeq) rateLoading.value = false
   }
 }
 
@@ -347,28 +357,41 @@ function clearSelectedUpstreams(): void {
   selectedUpstreamIDs.value = []
 }
 
-function upstreamToolCount(upstreamID: string): number {
-  const names = new Set<string>()
+// 预聚合每个上游的工具数量，避免模板渲染时对每个上游都全量遍历 toolDetails。
+const toolCountByUpstream = computed<Map<string, number>>(() => {
+  const countMap = new Map<string, Set<string>>()
   for (const detail of toolDetails.value) {
     for (const source of detail.sources ?? []) {
-      if (source.upstreamId === upstreamID) names.add(source.originalName)
+      if (!countMap.has(source.upstreamId)) countMap.set(source.upstreamId, new Set())
+      countMap.get(source.upstreamId)!.add(source.originalName)
     }
-    if (detail.tool.upstreamId === upstreamID) names.add(detail.tool.originalName)
+    // tool.upstreamId 是来源上游，originalName 是原始名
+    if (detail.tool.upstreamId) {
+      if (!countMap.has(detail.tool.upstreamId)) countMap.set(detail.tool.upstreamId, new Set())
+      countMap.get(detail.tool.upstreamId)!.add(detail.tool.originalName)
+    }
   }
-  return names.size
+  const result = new Map<string, number>()
+  for (const [id, names] of countMap) result.set(id, names.size)
+  return result
+})
+
+function upstreamToolCount(upstreamID: string): number {
+  return toolCountByUpstream.value.get(upstreamID) ?? 0
 }
 
-async function loadUpstreamAccess(id: string): Promise<void> {
+async function loadUpstreamAccess(id: string, seq: number): Promise<void> {
   upstreamAccessLoading.value = true
   try {
     const [access, upstreams] = await Promise.all([getAPIKeyUpstreamAccess(id), listUpstreams()])
+    if (seq !== loadSeq) return
     upstreamAccessMode.value = access.mode
     selectedUpstreamIDs.value = access.upstreamIds
     upstreamOptions.value = upstreams
   } catch (err) {
-    showError(err, '加载上游权限失败')
+    showError(err, '加载上游权限失败', seq)
   } finally {
-    upstreamAccessLoading.value = false
+    if (seq === loadSeq) upstreamAccessLoading.value = false
   }
 }
 
@@ -513,10 +536,14 @@ watch(
   (key) => {
     if (key === null) {
       profileRequestSeq += 1
+      loadSeq += 1
       usageProfile.value = null
       profileLoading.value = false
       return
     }
+    // 每次切换 key 都产生新序号，使所有飞行中的旧请求在写入状态前被丢弃。
+    const seq = ++loadSeq
+    profileRequestSeq += 1
     activeTab.value = 'filters'
     errorMessage.value = ''
     newFilterPattern.value = ''
@@ -525,12 +552,12 @@ watch(
     usageProfile.value = emptyUsageProfile(key.id)
     riskProfile.value = key.riskProfile || 'legacy_unrestricted'
     upstreamSearch.value = ''
-    void loadFilters(key.id)
+    void loadFilters(key.id, seq)
     void loadToolDetails()
-    void loadACL(key.id)
-    void loadRateLimit(key.id)
+    void loadACL(key.id, seq)
+    void loadRateLimit(key.id, seq)
     void loadUsageProfile(key.id)
-    void loadUpstreamAccess(key.id)
+    void loadUpstreamAccess(key.id, seq)
   },
   { immediate: true },
 )
@@ -582,7 +609,7 @@ function buildFilterPreviewSummary(rule: APIKeyFilter): APIKeyFilterPreviewSumma
         </div>
 
         <!-- 分页签 -->
-        <div class="flex gap-1 overflow-x-auto border-b border-gray-200 px-6 dark:border-gray-800">
+        <div class="no-scrollbar flex gap-1 overflow-x-auto border-b border-gray-200 px-6 dark:border-gray-800">
           <button
             v-for="tab in [
               { key: 'profile', label: '使用画像' },

@@ -377,6 +377,9 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   if (pollTimer) window.clearInterval(pollTimer)
+  // 递增序号使所有飞行中的 loadAll Promise 在写入响应式状态前被丢弃，
+  // 避免组件卸载后仍触发 Vue 的 "component is already unmounted" 警告。
+  loadRequestSeq++
 })
 </script>
 
@@ -419,10 +422,10 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <div
-          class="mt-5 grid grid-cols-2 gap-px border-y border-gray-200 bg-gray-200 sm:grid-cols-5 dark:border-gray-800 dark:bg-gray-800"
+          class="mt-5 grid grid-cols-3 gap-px border-y border-gray-200 bg-gray-200 sm:grid-cols-5 dark:border-gray-800 dark:bg-gray-800"
         >
           <div
-            v-for="item in [
+            v-for="(item, idx) in [
               {
                 label: '低风险',
                 value: summary.low,
@@ -456,7 +459,7 @@ onBeforeUnmount(() => {
             ]"
             :key="item.label"
             v-tooltip:top="item.tooltip"
-            class="cursor-help bg-white px-4 py-3 dark:bg-gray-900"
+            :class="['cursor-help bg-white px-4 py-3 dark:bg-gray-900', idx === 4 ? 'col-span-3 sm:col-span-1' : '']"
           >
             <div class="text-xs text-gray-500">{{ item.label }}</div>
             <div class="mt-1 text-xl font-semibold text-gray-900 dark:text-white">
@@ -559,10 +562,10 @@ onBeforeUnmount(() => {
       <section
         class="border-y border-gray-200 bg-white px-4 py-5 sm:px-6 dark:border-gray-800 dark:bg-gray-900"
       >
-        <div class="grid gap-3 md:grid-cols-[minmax(0,1fr)_180px_180px_auto]">
+        <div class="grid gap-2 grid-cols-2 md:grid-cols-[minmax(0,1fr)_180px_180px_auto]">
           <input
             v-model="filters.keyword"
-            class="h-10 rounded-md border-gray-300 text-sm dark:border-gray-700 dark:bg-gray-900"
+            class="col-span-2 h-10 rounded-md border-gray-300 text-sm md:col-span-1 dark:border-gray-700 dark:bg-gray-900"
             placeholder="搜索原始名、对外名或描述"
             @keyup.enter="applyFilters"
           />
@@ -624,7 +627,7 @@ onBeforeUnmount(() => {
           <article
             v-for="item in tools"
             :key="item.id"
-            class="grid gap-3 py-4 lg:grid-cols-[minmax(0,1fr)_160px_180px_auto] lg:items-center"
+            class="grid gap-2 py-4 md:grid-cols-[minmax(0,1fr)_auto] lg:grid-cols-[minmax(0,1fr)_160px_180px_auto] lg:items-center"
           >
             <div class="min-w-0">
               <div class="flex flex-wrap items-center gap-2">
@@ -644,6 +647,12 @@ onBeforeUnmount(() => {
                   ]"
                   >{{ riskLevelLabel[item.effectiveLevel] }}</span
                 ><span class="text-xs text-gray-500">{{ riskStatusLabel[item.status] }}</span>
+                <!-- md 以下把 AI/下限、置信度内联在名称行附近，减少垂直高度 -->
+                <span class="hidden text-xs text-gray-400 md:hidden sm:inline-flex gap-1">
+                  <span>{{ item.aiLevel ? riskLevelLabel[item.aiLevel] : '—' }}/{{ riskLevelLabel[item.deterministicFloor] }}</span>
+                  <span class="text-gray-300">·</span>
+                  <span>{{ item.aiConfidence == null ? '—' : `${Math.round(item.aiConfidence * 100)}%` }}</span>
+                </span>
               </div>
               <p
                 v-if="item.status === 'needs_review' && item.reviewReasons.length"
@@ -660,21 +669,36 @@ onBeforeUnmount(() => {
                 {{ item.upstreamId }} · {{ item.exposedName }}
               </p>
             </div>
-            <div class="text-sm">
+            <!-- md 以下操作按钮在主区域右侧，lg 时恢复独立列 -->
+            <div class="flex items-start gap-2 md:items-center lg:hidden">
+              <button
+                class="rounded-md border px-2.5 py-1.5 text-sm dark:border-gray-700"
+                @click="openOverride(item)"
+              >
+                覆盖</button
+              ><button
+                v-if="item.manualConfirmed"
+                class="text-error-600 rounded-md border px-2.5 py-1.5 text-sm dark:border-gray-700"
+                @click="clearOverride(item)"
+              >
+                清除
+              </button>
+            </div>
+            <div class="hidden text-sm lg:block">
               <div class="text-gray-500">AI / 下限</div>
               <div class="mt-1 text-gray-800 dark:text-gray-200">
                 {{ item.aiLevel ? riskLevelLabel[item.aiLevel] : '未评级' }} /
                 {{ riskLevelLabel[item.deterministicFloor] }}
               </div>
             </div>
-            <div class="text-sm">
+            <div class="hidden text-sm lg:block">
               <div class="text-gray-500">置信度 / 模型</div>
               <div class="mt-1 truncate text-gray-800 dark:text-gray-200">
                 {{ item.aiConfidence == null ? '—' : `${Math.round(item.aiConfidence * 100)}%` }} ·
                 {{ item.model || '—' }}
               </div>
             </div>
-            <div class="flex gap-2">
+            <div class="hidden gap-2 lg:flex">
               <button
                 class="rounded-md border px-3 py-1.5 text-sm dark:border-gray-700"
                 @click="openOverride(item)"

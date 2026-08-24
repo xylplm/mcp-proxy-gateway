@@ -229,10 +229,16 @@ func (s *GovernanceService) TriggerAutoAssessment(ctx context.Context) error {
 	if !p.AutoAssess {
 		return nil
 	}
-	if _, running := s.running.Load(p.ID); running {
-		return nil
-	}
+	// 不在这里做 running.Load 提前检查：LoadOrStore 竞态会导致重复创建 queued job。
+	// 直接调用 QueueAssessment，其内部 launchJob.LoadOrStore 保证同一 provider 只有一个
+	// goroutine 在运行；若已运行则新 job 进入 queued，由当前 job 结束时的 defer 捡起。
 	_, err = s.QueueAssessment(ctx, 500)
+	if err != nil {
+		if apiErr, ok := err.(*domain.APIError); ok && apiErr.Code == domain.CodeConflict {
+			// 没有待评级工具，不是错误。
+			return nil
+		}
+	}
 	return err
 }
 
@@ -260,6 +266,9 @@ func (s *GovernanceService) launchJob(ctx context.Context, job AssessmentJob) {
 
 func (s *GovernanceService) runJob(ctx context.Context, job AssessmentJob) error {
 	if err := s.jobs.SetRunning(ctx, job.ID); err != nil {
+		// SetRunning 失败（DB 短暂不可用）时，将 job 标记为失败，避免永久卡在 queued 状态。
+		job.Status, job.LastError = JobFailed, err.Error()
+		_ = s.jobs.UpdateProgress(ctx, job)
 		return err
 	}
 	jobCtx, cancel := context.WithCancel(ctx)

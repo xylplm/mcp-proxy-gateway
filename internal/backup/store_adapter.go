@@ -254,7 +254,15 @@ func (a *StoreAdapter) importBusiness(ctx context.Context, bc BusinessConfig) er
 		item.ID = ""
 		item.UpstreamID = mappedUpstream
 		if item.ProviderID != "" {
-			item.ProviderID = providerIDMap[item.ProviderID]
+			mapped, ok := providerIDMap[item.ProviderID]
+			if !ok {
+				// providerID 在备份中找不到对应新 provider，清空引用而不是写入空串。
+				// validate_business.go 已在导入前校验 providerID 合法性，
+				// 此处只处理跨版本备份或数据损坏的防御路径。
+				item.ProviderID = ""
+			} else {
+				item.ProviderID = mapped
+			}
 		}
 		if _, err := a.repos.ToolRisk.Restore(ctx, item); err != nil {
 			return err
