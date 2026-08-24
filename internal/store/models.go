@@ -195,35 +195,38 @@ type aiProviderModel struct {
 func (aiProviderModel) TableName() string { return "ai_provider" }
 
 type toolRiskAssessmentModel struct {
-	ID                    string     `gorm:"column:id;type:uuid;primaryKey"`
-	UpstreamID            string     `gorm:"column:upstream_id;type:uuid;not null;uniqueIndex:idx_tool_risk_source,priority:1"`
-	OriginalName          string     `gorm:"column:original_name;type:varchar(200);not null;uniqueIndex:idx_tool_risk_source,priority:2"`
-	ExposedNameSnapshot   string     `gorm:"column:exposed_name_snapshot;type:varchar(200);not null;default:''"`
-	DescriptionSnapshot   string     `gorm:"column:description_snapshot;type:text;not null;default:''"`
-	DescriptionZhSnapshot string     `gorm:"column:description_zh_snapshot;type:text;not null;default:''"`
-	InputSchemaSnapshot   JSONB      `gorm:"column:input_schema_snapshot;type:jsonb;not null;default:'{}'"`
-	SchemaFingerprint     string     `gorm:"column:schema_fingerprint;type:char(64);not null"`
-	DeterministicFloor    string     `gorm:"column:deterministic_floor;type:varchar(16);not null"`
-	RuleVersion           string     `gorm:"column:rule_version;type:varchar(32);not null"`
-	AITags                JSONB      `gorm:"column:ai_tags;type:jsonb;not null;default:'[]'"`
-	AILevel               *string    `gorm:"column:ai_level;type:varchar(16)"`
-	AIConfidence          *float64   `gorm:"column:ai_confidence;type:numeric(5,4)"`
-	AIReason              string     `gorm:"column:ai_reason;type:text;not null;default:''"`
-	ReviewReasons         JSONB      `gorm:"column:review_reasons;type:jsonb;not null;default:'[]'"`
-	ProviderID            *string    `gorm:"column:provider_id;type:uuid"`
-	ProviderNameSnapshot  string     `gorm:"column:provider_name_snapshot;type:varchar(100);not null;default:''"`
-	ModelSnapshot         string     `gorm:"column:model_snapshot;type:varchar(200);not null;default:''"`
-	PromptVersion         string     `gorm:"column:prompt_version;type:varchar(32);not null;default:''"`
-	Status                string     `gorm:"column:status;type:varchar(20);not null"`
-	LastError             string     `gorm:"column:last_error;type:text;not null;default:''"`
-	ManualLevel           *string    `gorm:"column:manual_level;type:varchar(16)"`
-	ManualTags            JSONB      `gorm:"column:manual_tags;type:jsonb;not null;default:'[]'"`
-	ManualReason          string     `gorm:"column:manual_reason;type:text;not null;default:''"`
-	ManualForceDowngrade  bool       `gorm:"column:manual_force_downgrade;type:boolean;not null;default:false"`
-	ReviewedAt            *time.Time `gorm:"column:reviewed_at;type:timestamptz"`
-	AssessedAt            *time.Time `gorm:"column:assessed_at;type:timestamptz"`
-	CreatedAt             time.Time  `gorm:"column:created_at;type:timestamptz;not null;default:now();autoCreateTime:false"`
-	UpdatedAt             time.Time  `gorm:"column:updated_at;type:timestamptz;not null;default:now();autoUpdateTime:false"`
+	ID                    string   `gorm:"column:id;type:uuid;primaryKey"`
+	UpstreamID            string   `gorm:"column:upstream_id;type:uuid;not null;uniqueIndex:idx_tool_risk_source,priority:1"`
+	OriginalName          string   `gorm:"column:original_name;type:varchar(200);not null;uniqueIndex:idx_tool_risk_source,priority:2"`
+	ExposedNameSnapshot   string   `gorm:"column:exposed_name_snapshot;type:varchar(200);not null;default:''"`
+	DescriptionSnapshot   string   `gorm:"column:description_snapshot;type:text;not null;default:''"`
+	DescriptionZhSnapshot string   `gorm:"column:description_zh_snapshot;type:text;not null;default:''"`
+	InputSchemaSnapshot   JSONB    `gorm:"column:input_schema_snapshot;type:jsonb;not null;default:'{}'"`
+	SchemaFingerprint     string   `gorm:"column:schema_fingerprint;type:char(64);not null"`
+	DeterministicFloor    string   `gorm:"column:deterministic_floor;type:varchar(16);not null"`
+	RuleVersion           string   `gorm:"column:rule_version;type:varchar(32);not null"`
+	AITags                JSONB    `gorm:"column:ai_tags;type:jsonb;not null;default:'[]'"`
+	AILevel               *string  `gorm:"column:ai_level;type:varchar(16)"`
+	AIConfidence          *float64 `gorm:"column:ai_confidence;type:numeric(5,4)"`
+	AIReason              string   `gorm:"column:ai_reason;type:text;not null;default:''"`
+	ReviewReasons         JSONB    `gorm:"column:review_reasons;type:jsonb;not null;default:'[]'"`
+	ProviderID            *string  `gorm:"column:provider_id;type:uuid"`
+	ProviderNameSnapshot  string   `gorm:"column:provider_name_snapshot;type:varchar(100);not null;default:''"`
+	ModelSnapshot         string   `gorm:"column:model_snapshot;type:varchar(200);not null;default:''"`
+	PromptVersion         string   `gorm:"column:prompt_version;type:varchar(32);not null;default:''"`
+	Status                string   `gorm:"column:status;type:varchar(20);not null"`
+	LastError             string   `gorm:"column:last_error;type:text;not null;default:''"`
+	ManualLevel           *string  `gorm:"column:manual_level;type:varchar(16)"`
+	ManualTags            JSONB    `gorm:"column:manual_tags;type:jsonb;not null;default:'[]'"`
+	ManualReason          string   `gorm:"column:manual_reason;type:text;not null;default:''"`
+	ManualForceDowngrade  bool     `gorm:"column:manual_force_downgrade;type:boolean;not null;default:false"`
+	// EffectiveLevel 是持久化的有效风险等级，在每次写路径（新增/评级/人工覆盖/清除覆盖/对账）时同步计算并写入，
+	// 供 List 按等级过滤和 summary 统计时直接走 DB 索引，避免全表拉到应用层计算。
+	EffectiveLevel string     `gorm:"column:effective_level;type:varchar(16);not null;default:'high'"`
+	ReviewedAt     *time.Time `gorm:"column:reviewed_at;type:timestamptz"`
+	AssessedAt     *time.Time `gorm:"column:assessed_at;type:timestamptz"`
+	CreatedAt      time.Time  `gorm:"column:created_at;type:timestamptz;not null;default:now();autoCreateTime:false"`
+	UpdatedAt      time.Time  `gorm:"column:updated_at;type:timestamptz;not null;default:now();autoUpdateTime:false"`
 }
 
 func (toolRiskAssessmentModel) TableName() string { return "tool_risk_assessment" }

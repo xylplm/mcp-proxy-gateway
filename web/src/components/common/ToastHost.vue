@@ -38,7 +38,7 @@ const hostStyle = computed(() => ({
 
 <template>
   <div
-    class="pointer-events-none fixed top-5 right-0 z-[1100000] flex justify-center px-4 transition-[left] duration-300 ease-in-out sm:top-6"
+    class="pointer-events-none fixed top-5 right-0 z-[100010] flex justify-center px-4 transition-[left] duration-300 ease-in-out sm:top-6"
     :style="hostStyle"
   >
     <transition name="toast">

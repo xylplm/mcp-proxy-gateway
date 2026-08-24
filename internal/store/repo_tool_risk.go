@@ -57,6 +57,25 @@ type RiskOverrideTarget struct {
 	OriginalName string
 }
 
+// computeEffectiveLevel 从已有字段计算有效风险等级，与 risk.EffectiveLevel 语义一致，
+// 但直接操作 model 字段，供写路径计算后持久化到 effective_level 列。
+func computeEffectiveLevel(status string, aiLevel, manualLevel *string, floor string) string {
+	if status != string(risk.StatusRated) && status != string(risk.StatusNeedsReview) {
+		return string(risk.LevelHigh)
+	}
+	if manualLevel != nil && risk.ValidLevel(risk.Level(*manualLevel)) {
+		return *manualLevel
+	}
+	if aiLevel == nil || !risk.ValidLevel(risk.Level(*aiLevel)) {
+		return string(risk.LevelHigh)
+	}
+	f := risk.Level(floor)
+	if !risk.ValidLevel(f) {
+		f = risk.LevelLow
+	}
+	return string(risk.MaxLevel(risk.Level(*aiLevel), f))
+}
+
 func (r *ToolRiskRepo) Get(ctx context.Context, upstreamID, originalName string) (risk.Assessment, error) {
 	var model toolRiskAssessmentModel
 	err := r.db.WithContext(ctx).Where("upstream_id = ? AND original_name = ?", upstreamID, originalName).First(&model).Error
@@ -138,7 +157,8 @@ func (r *ToolRiskRepo) Restore(ctx context.Context, item risk.Assessment) (risk.
 		ModelSnapshot: item.Model, PromptVersion: item.PromptVersion, Status: string(item.Status), LastError: item.LastError,
 		ManualLevel: manualLevel, ManualTags: JSONB(manualTags), ManualReason: item.ManualReason,
 		ManualForceDowngrade: item.ManualForce, ReviewedAt: item.ReviewedAt, AssessedAt: item.AssessedAt,
-		CreatedAt: created, UpdatedAt: now}
+		EffectiveLevel: string(risk.EffectiveLevel(item)),
+		CreatedAt:      created, UpdatedAt: now}
 	if err := r.db.WithContext(ctx).Create(&model).Error; err != nil {
 		return risk.Assessment{}, err
 	}
@@ -157,13 +177,15 @@ func (r *ToolRiskRepo) ApplyAIResult(ctx context.Context, upstreamID, originalNa
 	}
 	tags, _ := json.Marshal(result.RiskTags)
 	encodedReviewReasons, _ := json.Marshal(reviewReasons)
+	aiLevelStr := string(result.RiskLevel)
+	effectiveLevel := computeEffectiveLevel(string(status), &aiLevelStr, nil, string(current.Floor))
 	now := time.Now().UTC()
 	res := r.db.WithContext(ctx).Model(&toolRiskAssessmentModel{}).
 		Where("upstream_id = ? AND original_name = ?", upstreamID, originalName).
 		Updates(map[string]any{"ai_level": result.RiskLevel, "ai_tags": JSONB(tags), "ai_confidence": result.Confidence,
 			"ai_reason": result.Reason, "review_reasons": JSONB(encodedReviewReasons), "description_zh_snapshot": result.FunctionSummaryZh, "provider_id": provider.ID, "provider_name_snapshot": provider.Name,
 			"model_snapshot": provider.Model, "prompt_version": risk.PromptVersion, "status": status,
-			"last_error": "", "assessed_at": now, "updated_at": now})
+			"effective_level": effectiveLevel, "last_error": "", "assessed_at": now, "updated_at": now})
 	if res.Error != nil {
 		return risk.Assessment{}, res.Error
 	}
@@ -176,7 +198,12 @@ func (r *ToolRiskRepo) MarkAIError(ctx context.Context, upstreamID, originalName
 	}
 	return r.db.WithContext(ctx).Model(&toolRiskAssessmentModel{}).
 		Where("upstream_id = ? AND original_name = ?", upstreamID, originalName).
-		Updates(map[string]any{"status": risk.StatusError, "last_error": message, "updated_at": time.Now().UTC()}).Error
+		Updates(map[string]any{
+			"status":          risk.StatusError,
+			"effective_level": string(risk.LevelHigh),
+			"last_error":      message,
+			"updated_at":      time.Now().UTC(),
+		}).Error
 }
 
 func (r *ToolRiskRepo) List(ctx context.Context, q RiskListQuery) (RiskListResult, error) {
@@ -201,28 +228,16 @@ func (r *ToolRiskRepo) List(ctx context.Context, q RiskListQuery) (RiskListResul
 	if q.MinConfidence != nil {
 		db = db.Where("ai_confidence >= ?", *q.MinConfidence)
 	}
+	// effective_level 已持久化，直接走索引过滤，不再全表拉到应用层计算。
+	if q.Level != "" {
+		db = db.Where("effective_level = ?", string(q.Level))
+	}
 	page, size := q.Page, q.PageSize
 	if page < 1 {
 		page = 1
 	}
 	if size < 1 || size > 200 {
 		size = 50
-	}
-	if q.Level != "" {
-		var models []toolRiskAssessmentModel
-		if err := db.Order("updated_at DESC").Find(&models).Error; err != nil {
-			return RiskListResult{}, err
-		}
-		filtered := make([]risk.Assessment, 0, len(models))
-		for _, item := range modelsToAssessments(models) {
-			if risk.EffectiveLevel(item) == q.Level {
-				filtered = append(filtered, item)
-			}
-		}
-		total := int64(len(filtered))
-		start := min((page-1)*size, len(filtered))
-		end := min(start+size, len(filtered))
-		return RiskListResult{Items: filtered[start:end], Total: total, Page: page, Size: size, Summary: summary}, nil
 	}
 	var total int64
 	if err := db.Count(&total).Error; err != nil {
@@ -236,27 +251,44 @@ func (r *ToolRiskRepo) List(ctx context.Context, q RiskListQuery) (RiskListResul
 }
 
 func (r *ToolRiskRepo) summary(ctx context.Context) (RiskSummary, error) {
-	var models []toolRiskAssessmentModel
-	if err := r.db.WithContext(ctx).Where("status <> ?", risk.StatusRemoved).Find(&models).Error; err != nil {
+	// 直接用 GROUP BY effective_level + COUNT 聚合，避免全表拉取到应用层计算。
+	type levelCount struct {
+		EffectiveLevel string `gorm:"column:effective_level"`
+		Count          int    `gorm:"column:count"`
+	}
+	var counts []levelCount
+	err := r.db.WithContext(ctx).
+		Model(&toolRiskAssessmentModel{}).
+		Select("effective_level, COUNT(*) as count").
+		Where("status <> ?", risk.StatusRemoved).
+		Group("effective_level").
+		Scan(&counts).Error
+	if err != nil {
 		return RiskSummary{}, err
 	}
-	summary := RiskSummary{Total: len(models)}
-	for _, item := range modelsToAssessments(models) {
-		switch item.Effective {
+
+	var needsReview int64
+	if err := r.db.WithContext(ctx).Model(&toolRiskAssessmentModel{}).
+		Where("status = ?", risk.StatusNeedsReview).
+		Count(&needsReview).Error; err != nil {
+		return RiskSummary{}, err
+	}
+
+	s := RiskSummary{NeedsReview: int(needsReview)}
+	for _, c := range counts {
+		s.Total += c.Count
+		switch risk.Level(c.EffectiveLevel) {
 		case risk.LevelLow:
-			summary.Low++
+			s.Low = c.Count
 		case risk.LevelMedium:
-			summary.Medium++
+			s.Medium = c.Count
 		case risk.LevelHigh:
-			summary.High++
+			s.High = c.Count
 		case risk.LevelBlocked:
-			summary.Blocked++
-		}
-		if item.Status == risk.StatusNeedsReview {
-			summary.NeedsReview++
+			s.Blocked = c.Count
 		}
 	}
-	return summary, nil
+	return s, nil
 }
 
 func (r *ToolRiskRepo) Reconcile(ctx context.Context, upstreamID string, tools []domain.ToolDef) (ReconcileResult, error) {
@@ -282,10 +314,14 @@ func (r *ToolRiskRepo) Reconcile(ctx context.Context, upstreamID string, tools [
 			seen[tool.OriginalName] = struct{}{}
 			old, ok := byName[tool.OriginalName]
 			if !ok {
+				pendingStatus := string(risk.StatusPending)
 				model := toolRiskAssessmentModel{ID: newUUID(), UpstreamID: upstreamID, OriginalName: tool.OriginalName,
 					ExposedNameSnapshot: tool.Name, DescriptionSnapshot: tool.Description, InputSchemaSnapshot: schemaSnapshot(tool.InputSchema), SchemaFingerprint: fingerprint,
 					DeterministicFloor: string(deterministic.Floor), RuleVersion: risk.RuleVersion,
-					AITags: JSONB(`[]`), ReviewReasons: JSONB(`[]`), ManualTags: JSONB(`[]`), Status: string(risk.StatusPending), CreatedAt: now, UpdatedAt: now}
+					AITags: JSONB(`[]`), ReviewReasons: JSONB(`[]`), ManualTags: JSONB(`[]`),
+					Status:         pendingStatus,
+					EffectiveLevel: computeEffectiveLevel(pendingStatus, nil, nil, string(deterministic.Floor)),
+					CreatedAt:      now, UpdatedAt: now}
 				if err := tx.Create(&model).Error; err != nil {
 					return err
 				}
@@ -304,7 +340,10 @@ func (r *ToolRiskRepo) Reconcile(ctx context.Context, upstreamID string, tools [
 				"exposed_name_snapshot": tool.Name, "description_snapshot": tool.Description,
 				"input_schema_snapshot": schemaSnapshot(tool.InputSchema),
 				"schema_fingerprint":    fingerprint, "deterministic_floor": deterministic.Floor,
-				"rule_version": risk.RuleVersion, "status": status, "updated_at": now,
+				"rule_version":    risk.RuleVersion,
+				"status":          status,
+				"effective_level": computeEffectiveLevel(status, old.AILevel, old.ManualLevel, string(deterministic.Floor)),
+				"updated_at":      now,
 			}).Error; err != nil {
 				return err
 			}
@@ -313,7 +352,11 @@ func (r *ToolRiskRepo) Reconcile(ctx context.Context, upstreamID string, tools [
 			if _, ok := seen[old.OriginalName]; ok || old.Status == string(risk.StatusRemoved) {
 				continue
 			}
-			if err := tx.Model(&toolRiskAssessmentModel{}).Where("id = ?", old.ID).Updates(map[string]any{"status": risk.StatusRemoved, "updated_at": now}).Error; err != nil {
+			if err := tx.Model(&toolRiskAssessmentModel{}).Where("id = ?", old.ID).Updates(map[string]any{
+				"status":          risk.StatusRemoved,
+				"effective_level": string(risk.LevelHigh),
+				"updated_at":      now,
+			}).Error; err != nil {
 				return err
 			}
 			result.Removed++
@@ -357,9 +400,20 @@ func (r *ToolRiskRepo) BulkSetManualOverride(ctx context.Context, targets []Risk
 			models = append(models, model)
 		}
 		for _, model := range models {
+			newStatus := string(risk.StatusRated)
+			levelStr := string(level)
+			effectiveLevel := computeEffectiveLevel(newStatus, model.AILevel, &levelStr, model.DeterministicFloor)
 			res := tx.Model(&toolRiskAssessmentModel{}).Where("id = ?", model.ID).
-				Updates(map[string]any{"manual_level": level, "manual_tags": JSONB(encoded), "manual_reason": strings.TrimSpace(reason), "status": risk.StatusRated,
-					"manual_force_downgrade": force, "reviewed_at": now, "updated_at": now})
+				Updates(map[string]any{
+					"manual_level":           level,
+					"manual_tags":            JSONB(encoded),
+					"manual_reason":          strings.TrimSpace(reason),
+					"status":                 newStatus,
+					"effective_level":        effectiveLevel,
+					"manual_force_downgrade": force,
+					"reviewed_at":            now,
+					"updated_at":             now,
+				})
 			if res.Error != nil {
 				return res.Error
 			}
@@ -387,8 +441,18 @@ func (r *ToolRiskRepo) ClearManualOverride(ctx context.Context, upstreamID, orig
 			return notFoundIfNoRows(err, "工具风险记录不存在")
 		}
 		status := risk.StatusAfterClearingManualOverride(modelToAssessment(model))
+		effectiveLevel := computeEffectiveLevel(string(status), model.AILevel, nil, model.DeterministicFloor)
 		if err := tx.Model(&toolRiskAssessmentModel{}).Where("id = ?", model.ID).
-			Updates(map[string]any{"manual_level": nil, "manual_tags": JSONB(`[]`), "manual_reason": "", "manual_force_downgrade": false, "reviewed_at": nil, "status": status, "updated_at": time.Now().UTC()}).Error; err != nil {
+			Updates(map[string]any{
+				"manual_level":           nil,
+				"manual_tags":            JSONB(`[]`),
+				"manual_reason":          "",
+				"manual_force_downgrade": false,
+				"reviewed_at":            nil,
+				"status":                 status,
+				"effective_level":        effectiveLevel,
+				"updated_at":             time.Now().UTC(),
+			}).Error; err != nil {
 			return err
 		}
 		var saved toolRiskAssessmentModel

@@ -1,8 +1,10 @@
 package httpapi
 
 import (
+	"context"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -253,15 +255,18 @@ func (r *Router) reconcileRiskCatalog(c *gin.Context) {
 	if !r.requireAIRisk(c) {
 		return
 	}
-	upstreams, err := r.upstream.List(c.Request.Context())
+	// 同步遍历所有上游逐个 Reconcile 属于低频管理操作，加 30s 超时避免长时间阻塞。
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
+	defer cancel()
+	upstreams, err := r.upstream.List(ctx)
 	if err != nil {
 		respondError(c, err)
 		return
 	}
 	total := store.ReconcileResult{}
 	for _, upstream := range upstreams {
-		tools, _, _ := r.toolCache.Get(c.Request.Context(), upstream.ID)
-		result, reconcileErr := r.toolRiskStore.Reconcile(c.Request.Context(), upstream.ID, tools)
+		tools, _, _ := r.toolCache.Get(ctx, upstream.ID)
+		result, reconcileErr := r.toolRiskStore.Reconcile(ctx, upstream.ID, tools)
 		if reconcileErr != nil {
 			respondError(c, reconcileErr)
 			return

@@ -56,6 +56,8 @@ export default defineConfig({
     // 开发态把后端路由代理到 Go 网关，避免 Vite SPA fallback 把
     // /api/* 等路径吞成 index.html（导致前端拿到 HTML 而非 JSON）。
     proxy: {
+      // 使用正则确保精确匹配 /api 前缀，避免 /apiary 等路径被误代理。
+      // vite-proxy 正则模式下不会自动剥除匹配前缀，路径会原样转发给后端，行为与后端路由一致。
       '^/api(?:/|$)': { target: BACKEND_URL, changeOrigin: true },
       '/mcp': { target: BACKEND_URL, changeOrigin: true, ws: true },
       '/healthz': { target: BACKEND_URL, changeOrigin: true },

@@ -150,7 +150,6 @@ func AutoMigrate(ctx context.Context, db *gorm.DB, logger *slog.Logger) error {
 func ensureSchemaExtras(ctx context.Context, db *gorm.DB) error {
 	steps := []string{
 		createCallStatDailyTableSQL,
-		`ALTER TABLE ai_provider DROP COLUMN IF EXISTS allow_private_network`,
 		`UPDATE ai_provider SET active = false WHERE enabled = false AND active = true`,
 		`CREATE INDEX IF NOT EXISTS idx_call_stat_daily_date ON call_stat_daily (stat_date)`,
 		`CREATE INDEX IF NOT EXISTS idx_call_stat_daily_upstream_date ON call_stat_daily (upstream_id, stat_date)`,
@@ -167,6 +166,21 @@ func ensureSchemaExtras(ctx context.Context, db *gorm.DB) error {
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_provider_single_active ON ai_provider (active) WHERE active = true`,
 		`CREATE INDEX IF NOT EXISTS idx_tool_risk_status ON tool_risk_assessment (status, updated_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_tool_risk_level ON tool_risk_assessment (deterministic_floor, ai_level)`,
+		`CREATE INDEX IF NOT EXISTS idx_tool_risk_effective_level ON tool_risk_assessment (effective_level, status)`,
+		// 存量行 effective_level 默认为 'high'，对 status 非 rated/needs_review 的行这已经正确；
+		// 对已评级行需要按业务规则补全：manual_level 优先，否则取 ai_level 与 deterministic_floor 的较高值。
+		`UPDATE tool_risk_assessment SET effective_level = CASE
+			WHEN status NOT IN ('rated','needs_review') THEN 'high'
+			WHEN manual_level IS NOT NULL THEN manual_level
+			WHEN ai_level IS NULL THEN 'high'
+			WHEN (CASE ai_level WHEN 'low' THEN 1 WHEN 'medium' THEN 2 WHEN 'high' THEN 3 WHEN 'blocked' THEN 4 ELSE 0 END)
+			  >= (CASE deterministic_floor WHEN 'low' THEN 1 WHEN 'medium' THEN 2 WHEN 'high' THEN 3 WHEN 'blocked' THEN 4 ELSE 0 END)
+			THEN ai_level
+			ELSE deterministic_floor
+		END
+		WHERE effective_level = 'high'
+		  AND status IN ('rated','needs_review')
+		  AND (manual_level IS NOT NULL OR ai_level IS NOT NULL)`,
 		`CREATE INDEX IF NOT EXISTS idx_risk_job_status ON risk_assessment_job (status, created_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_audit_log_occurred_at ON audit_log (occurred_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_security_event_created_at ON security_event (created_at DESC)`,

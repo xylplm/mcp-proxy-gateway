@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import AdminLayout from '@/components/layout/AdminLayout.vue'
 import PageBreadcrumb from '@/components/common/PageBreadcrumb.vue'
@@ -741,7 +741,7 @@ onBeforeUnmount(() => {
 
     <div
       v-if="jobHistoryOpen"
-      class="fixed inset-0 z-999999 flex items-center justify-center bg-black/40 p-4"
+      class="fixed inset-0 z-[100001] flex items-center justify-center bg-black/40 p-4"
     >
       <div
         class="flex max-h-[85dvh] w-full max-w-3xl flex-col rounded-md bg-white shadow-xl dark:bg-gray-900"
@@ -775,7 +775,7 @@ onBeforeUnmount(() => {
 
     <div
       v-if="providerOpen"
-      class="fixed inset-0 z-999999 flex items-center justify-center bg-black/40 p-4"
+      class="fixed inset-0 z-[100001] flex items-center justify-center bg-black/40 p-4"
     >
       <form
         class="max-h-[90dvh] w-full max-w-2xl overflow-y-auto rounded-md bg-white p-5 shadow-xl dark:bg-gray-900"
@@ -923,7 +923,7 @@ onBeforeUnmount(() => {
 
     <div
       v-if="overrideTarget || bulkOverrideOpen"
-      class="fixed inset-0 z-999999 flex items-center justify-center bg-black/40 p-4"
+      class="fixed inset-0 z-[100001] flex items-center justify-center bg-black/40 p-4"
     >
       <form
         class="max-h-[90dvh] w-full max-w-3xl overflow-y-auto rounded-md bg-white p-5 shadow-xl dark:bg-gray-900"
