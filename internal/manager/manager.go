@@ -79,6 +79,10 @@ type Manager struct {
 	validate ConnParamsValidator
 	// logger 用于记录告警/降级路径的诊断信息。
 	logger *slog.Logger
+	// invalidateToolSetCache clears derived aggregate views after upstream
+	// configuration changes. It is optional to preserve the manager's narrow
+	// dependency boundary in tests and embedders.
+	invalidateToolSetCache func()
 
 	// policy 为连接重试退避策略（Req 5.1-5.6）。
 	policy RetryPolicy
@@ -119,6 +123,14 @@ func WithRetryPolicy(policy RetryPolicy) Option {
 func WithDialer(d Dialer) Option {
 	return func(m *Manager) {
 		m.dialer = d
+	}
+}
+
+// WithToolSetCacheInvalidator makes upstream configuration changes visible to
+// discovery and routing immediately instead of waiting for the aggregate TTL.
+func WithToolSetCacheInvalidator(invalidate func()) Option {
+	return func(m *Manager) {
+		m.invalidateToolSetCache = invalidate
 	}
 }
 
@@ -182,6 +194,7 @@ func (m *Manager) Create(ctx context.Context, cfg domain.UpstreamConfig) (domain
 	// 连接持有完整配置（含明文凭证，仅内存），供拨号与后续重建使用。
 	cfg.SortOrder = row.Config.SortOrder
 	m.rebuildConnection(row.ID, cfg)
+	m.invalidateAggregateCache()
 	return m.toUpstream(row), nil
 }
 
@@ -222,6 +235,7 @@ func (m *Manager) Update(ctx context.Context, id string, cfg domain.UpstreamConf
 	// 按新配置重建对应连接（Req 2.4）。
 	cfg.SortOrder = row.Config.SortOrder
 	m.rebuildConnection(id, cfg)
+	m.invalidateAggregateCache()
 	return m.toUpstream(row), nil
 }
 
@@ -274,15 +288,14 @@ func (m *Manager) Delete(ctx context.Context, id string) error {
 		m.logger.Warn("删除上游后清理工具缓存失败（DB 已删除，缓存为尽力而为）",
 			"upstreamID", id, "error", err)
 	}
+	m.invalidateAggregateCache()
 	return nil
 }
 
 // SetEnabled 启用或停用某个上游 MCP 服务（Req 3.1、3.2）。
 //
-// 将该上游标记为启用/停用并持久化。启停对聚合「即时生效」无需额外处理：聚合管线
-// 每次实时从工具缓存读取 enabled=true 的上游构建可见集合（见设计「为何不缓存聚合
-// 结果」），因此该次更新之后接收的聚合请求自然按最新启停状态纳入或排除其工具
-// （Req 3.1、3.2、3.3）。标识不存在返回 NOT_FOUND。
+// 将该上游标记为启用/停用并持久化。成功后主动清空聚合集短缓存，使后续请求立即按
+// 最新启停状态纳入或排除其工具（Req 3.1、3.2、3.3）。标识不存在返回 NOT_FOUND。
 //
 // 同时同步连接生命周期：启用时启动重试退避循环建立连接，停用时停止循环并置为不可用。
 func (m *Manager) SetEnabled(ctx context.Context, id string, enabled bool) error {
@@ -309,6 +322,7 @@ func (m *Manager) SetEnabled(ctx context.Context, id string, enabled bool) error
 	}
 
 	m.rebuildConnection(id, cfg)
+	m.invalidateAggregateCache()
 	return nil
 }
 
@@ -357,7 +371,17 @@ func (m *Manager) Reorder(ctx context.Context, orderedIDs []string) error {
 	}
 
 	// 校验通过：交由仓储层事务更新全部排序值，保证成功整体生效、失败整体不变。
-	return m.repo.Reorder(ctx, orderedIDs)
+	if err := m.repo.Reorder(ctx, orderedIDs); err != nil {
+		return err
+	}
+	m.invalidateAggregateCache()
+	return nil
+}
+
+func (m *Manager) invalidateAggregateCache() {
+	if m.invalidateToolSetCache != nil {
+		m.invalidateToolSetCache()
+	}
 }
 
 // GetState 返回连接状态与最近一次失败原因（Req 5.4）。

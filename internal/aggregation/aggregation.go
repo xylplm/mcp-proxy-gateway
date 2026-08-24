@@ -8,12 +8,14 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"slices"
 	"sort"
 	"sync"
 	"time"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
 	"github.com/myGithub/mcp-proxy-gateway/internal/store"
+	"github.com/myGithub/mcp-proxy-gateway/internal/toolsearch"
 )
 
 // StatRecorder 是聚合服务异步记录调用统计的窄接口（Req 16.1、16.8）。
@@ -133,6 +135,14 @@ type Service struct {
 	// upstreamConfigs 保存最近一次构建管线读取到的上游配置，供路由选择读取限流配置。
 	upstreamConfigs   map[string]domain.UpstreamConfig
 	upstreamConfigsMu sync.RWMutex
+	// toolSetCache keeps the fully-authorized aggregate and routing map briefly.
+	// It is scoped by API key, so cached entries can never cross visibility
+	// boundaries. The five-second lifetime is deliberately short: cache hits do
+	// not refresh upstreamConfigs, which routing uses for rate-limit settings.
+	// Do not increase toolSetCacheTTL without revisiting that side effect.
+	toolSetCache        map[string]cachedToolSet
+	toolSetCacheVersion uint64
+	toolSetCacheMu      sync.RWMutex
 	// routingStrategy 为同名工具多来源时的调用选择策略。
 	routingStrategy        domain.ToolRoutingStrategy
 	routingMu              sync.RWMutex
@@ -178,6 +188,10 @@ const (
 	defaultSourceFailureCooldown  = 30 * time.Second
 	maxResultCacheEntries         = 512
 	maxCachedToolResultBytes      = 1 << 20
+	toolSetCacheTTL               = 5 * time.Second
+	// Aggregates can hold thousands of tools (and Smart-mode search indexes),
+	// so keep the per-API-key cache deliberately small and bounded.
+	maxToolSetCacheEntries = 32
 )
 
 type sourceFailureState struct {
@@ -190,6 +204,15 @@ type cachedToolResult struct {
 	expiresAt   time.Time
 	apiKeyID    string
 	exposedName string
+}
+
+type cachedToolSet struct {
+	tools            []domain.ToolDef
+	reverse          map[string]ReverseEntry
+	builtAt          time.Time
+	discoveries      []domain.ToolDiscovery
+	discoveriesReady bool
+	searchIndex      *toolsearch.Index
 }
 
 // 编译期断言：Service 必须满足 domain.Aggregation_Service 接口契约。
@@ -217,6 +240,7 @@ func NewService(
 		apiKeyFilters:          apiKeyFilters,
 		toolPolicies:           toolPolicies,
 		upstreamConfigs:        make(map[string]domain.UpstreamConfig),
+		toolSetCache:           make(map[string]cachedToolSet),
 		routingStrategy:        domain.ToolRoutingSmartBalance,
 		roundRobin:             make(map[string]uint64),
 		resultCache:            make(map[string]cachedToolResult),
@@ -365,6 +389,22 @@ func (s *Service) BuildToolSet(ctx context.Context, apiKeyID string) ([]domain.T
 	return tools, err
 }
 
+// InvalidateToolSetCache clears every API-key-scoped aggregate and any cached
+// call result. A visibility or routing change can leave the same exposed name
+// backed by a different source, so preserving a result keyed only by that name
+// would be incorrect. The tool-cache decorator, Manager, risk integrations,
+// and visibility-affecting administrative writes all use this boundary.
+func (s *Service) InvalidateToolSetCache() {
+	if s == nil {
+		return
+	}
+	s.toolSetCacheMu.Lock()
+	clear(s.toolSetCache)
+	s.toolSetCacheVersion++
+	s.toolSetCacheMu.Unlock()
+	s.ClearToolResultCache(domain.ToolResultCacheClearFilter{})
+}
+
 // BuildToolDetails 构建管理台可读的聚合工具详情，包含每个工具的来源上游列表。
 func (s *Service) BuildToolDetails(ctx context.Context, apiKeyID string) ([]domain.ToolDetail, error) {
 	tools, reverse, err := s.buildToolSetWithReverseMap(ctx, apiKeyID)
@@ -415,6 +455,7 @@ func (s *Service) BuildToolDetails(ctx context.Context, apiKeyID string) ([]doma
 				DegradationReason:   degradationReason,
 				DegradationUntil:    degradationUntil,
 				RateLimits:          cfg.RateLimits,
+				UpstreamTags:        append([]string(nil), cfg.Tags...),
 			})
 		}
 		var policyView *domain.ToolPolicyView
@@ -424,6 +465,161 @@ func (s *Service) BuildToolDetails(ctx context.Context, apiKeyID string) ([]doma
 		out = append(out, domain.ToolDetail{Tool: tool, Sources: sources, Policy: policyView})
 	}
 	return out, nil
+}
+
+// BuildToolDiscoveries returns the authorized Smart-mode discovery projection.
+// Unlike BuildToolDetails, it does not read tool policies, because policies do
+// not affect discovery visibility or source labels. It is cached with the
+// aggregate, but does not allocate a search index for list_tools callers.
+func (s *Service) BuildToolDiscoveries(ctx context.Context, apiKeyID string) ([]domain.ToolDiscovery, error) {
+	now := s.currentTime()
+	if discoveries, ok := s.cachedToolDiscoveries(apiKeyID, now); ok {
+		return discoveries, nil
+	}
+	tools, reverse, err := s.buildToolSetWithReverseMap(ctx, apiKeyID)
+	if err != nil {
+		return nil, err
+	}
+	now = s.currentTime()
+	if discoveries, ok := s.cachedToolDiscoveries(apiKeyID, now); ok {
+		return discoveries, nil
+	}
+
+	discoveries := s.buildToolDiscoveries(tools, reverse)
+	s.toolSetCacheMu.Lock()
+	entry, ok := s.toolSetCache[apiKeyID]
+	if ok && toolSetCacheEntryValid(entry, now) {
+		if entry.discoveriesReady {
+			discoveries = entry.discoveries
+		} else {
+			entry.discoveries = cloneToolDiscoveries(discoveries)
+			entry.discoveriesReady = true
+			// A lexical index is only meaningful for the exact discovery slice
+			// it was built from. Clear any incomplete concurrent publication
+			// before marking this projection ready.
+			entry.searchIndex = nil
+			s.toolSetCache[apiKeyID] = entry
+		}
+	}
+	s.toolSetCacheMu.Unlock()
+	return cloneToolDiscoveries(discoveries), nil
+}
+
+// BuildToolSearchSet returns the authorized Smart-mode discovery projection
+// and its immutable lexical index. The index is built lazily, only for
+// search_tools, and then shares the aggregate cache lifetime.
+func (s *Service) BuildToolSearchSet(ctx context.Context, apiKeyID string) ([]domain.ToolDiscovery, *toolsearch.Index, error) {
+	now := s.currentTime()
+	if discoveries, index, ok := s.cachedToolSearchSet(apiKeyID, now); ok {
+		return discoveries, index, nil
+	}
+	discoveries, err := s.BuildToolDiscoveries(ctx, apiKeyID)
+	if err != nil {
+		return nil, nil, err
+	}
+	now = s.currentTime()
+	if discoveries, index, ok := s.cachedToolSearchSet(apiKeyID, now); ok {
+		return discoveries, index, nil
+	}
+
+	docs := make([]toolsearch.Doc, 0, len(discoveries))
+	for _, discovery := range discoveries {
+		docs = append(docs, toolsearch.Doc{
+			Name:          discovery.Tool.Name,
+			OriginalName:  discovery.Tool.OriginalName,
+			Description:   discovery.Tool.Description,
+			UpstreamNames: discovery.UpstreamNames,
+			UpstreamTags:  discovery.UpstreamTags,
+		})
+	}
+	index := toolsearch.Build(docs)
+
+	// A concurrent request may have completed the same lazy build. Reuse its
+	// immutable result; concurrent misses are intentionally allowed elsewhere
+	// in this short cache too.
+	s.toolSetCacheMu.Lock()
+	entry, ok := s.toolSetCache[apiKeyID]
+	if ok && toolSetCacheEntryValid(entry, now) && entry.discoveriesReady {
+		if entry.searchIndex != nil {
+			discoveries, index = entry.discoveries, entry.searchIndex
+		} else if sameToolSearchDiscoveries(entry.discoveries, discoveries) {
+			// Never attach an index built for a prior cache generation. An
+			// invalidation or expiry can replace the entry while this request is
+			// building; in that case returning the local, self-consistent pair is
+			// safer than caching a mismatched projection and index.
+			entry.searchIndex = index
+			s.toolSetCache[apiKeyID] = entry
+		}
+	}
+	s.toolSetCacheMu.Unlock()
+	return cloneToolDiscoveries(discoveries), index, nil
+}
+
+func (s *Service) cachedToolDiscoveries(apiKeyID string, now time.Time) ([]domain.ToolDiscovery, bool) {
+	s.toolSetCacheMu.RLock()
+	entry, ok := s.toolSetCache[apiKeyID]
+	if ok && toolSetCacheEntryValid(entry, now) && entry.discoveriesReady {
+		discoveries := cloneToolDiscoveries(entry.discoveries)
+		s.toolSetCacheMu.RUnlock()
+		return discoveries, true
+	}
+	s.toolSetCacheMu.RUnlock()
+	return nil, false
+}
+
+func (s *Service) cachedToolSearchSet(apiKeyID string, now time.Time) ([]domain.ToolDiscovery, *toolsearch.Index, bool) {
+	s.toolSetCacheMu.RLock()
+	entry, ok := s.toolSetCache[apiKeyID]
+	if ok && toolSetCacheEntryValid(entry, now) && entry.discoveriesReady && entry.searchIndex != nil {
+		discoveries, index := cloneToolDiscoveries(entry.discoveries), entry.searchIndex
+		s.toolSetCacheMu.RUnlock()
+		return discoveries, index, true
+	}
+	s.toolSetCacheMu.RUnlock()
+	return nil, nil, false
+}
+
+// sameToolSearchDiscoveries verifies that the cached discovery projection is
+// exactly the one used to build a pending lexical index. It runs only on an
+// index-cache miss, so the linear comparison keeps the hot search path free of
+// extra work while preventing a concurrent cache generation change from
+// pairing different document orders.
+func sameToolSearchDiscoveries(left, right []domain.ToolDiscovery) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		leftTool, rightTool := left[index].Tool, right[index].Tool
+		if leftTool.Name != rightTool.Name ||
+			leftTool.OriginalName != rightTool.OriginalName ||
+			leftTool.Description != rightTool.Description ||
+			!slices.Equal(left[index].UpstreamNames, right[index].UpstreamNames) ||
+			!slices.Equal(left[index].UpstreamTags, right[index].UpstreamTags) {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Service) buildToolDiscoveries(tools []domain.ToolDef, reverse map[string]ReverseEntry) []domain.ToolDiscovery {
+	out := make([]domain.ToolDiscovery, 0, len(tools))
+	for _, tool := range tools {
+		entry := reverse[tool.Name]
+		names := make([]string, 0, len(entry.Candidates))
+		tags := make([]string, 0, len(entry.Candidates))
+		for _, candidate := range entry.Candidates {
+			names = append(names, candidate.UpstreamName)
+			if cfg, ok := s.upstreamConfig(candidate.UpstreamID); ok {
+				tags = append(tags, cfg.Tags...)
+			}
+		}
+		out = append(out, domain.ToolDiscovery{
+			Tool:          discoveryToolDef(tool),
+			UpstreamNames: sortedUniqueStrings(names),
+			UpstreamTags:  sortedUniqueStrings(tags),
+		})
+	}
+	return out
 }
 
 // InvokeTool 调用聚合工具：可见性校验 → 别名反向映射 → 路由到上游 → 原样返回结果。
@@ -1035,15 +1231,59 @@ func domainErrorBusinessCode(code domain.ErrorCode) int {
 // 该方法供 BuildToolSet 与（任务 4.6）InvokeTool 共同复用：后者需要反向映射来把对外名
 // 还原为 (上游标识, 原始名) 后转发调用（Req 10.6）。
 func (s *Service) buildToolSetWithReverseMap(ctx context.Context, apiKeyID string) ([]domain.ToolDef, map[string]ReverseEntry, error) {
+	now := s.currentTime()
+	s.toolSetCacheMu.RLock()
+	entry, ok := s.toolSetCache[apiKeyID]
+	cacheVersion := s.toolSetCacheVersion
+	s.toolSetCacheMu.RUnlock()
+	if ok && toolSetCacheEntryValid(entry, now) {
+		return cloneToolDefs(entry.tools), entry.reverse, nil
+	}
+	if ok {
+		// Expired values must not accumulate indefinitely as API keys are
+		// created and deleted. Keep cleanup on the miss path, where it is both
+		// cheap and sufficient for this bounded cache.
+		s.toolSetCacheMu.Lock()
+		if current, exists := s.toolSetCache[apiKeyID]; exists && !toolSetCacheEntryValid(current, now) {
+			delete(s.toolSetCache, apiKeyID)
+		}
+		cacheVersion = s.toolSetCacheVersion
+		s.toolSetCacheMu.Unlock()
+	}
+
+	tools, reverse, err := s.buildToolSetWithReverseMapFresh(ctx, apiKeyID)
+	if err != nil {
+		return nil, nil, err
+	}
+	s.toolSetCacheMu.Lock()
+	// Do not reinsert a result that was built concurrently with a successful
+	// tool-cache write. InvalidateToolSetCache advances the version first.
+	if s.toolSetCacheVersion == cacheVersion {
+		s.pruneToolSetCacheLocked(s.currentTime(), apiKeyID)
+		s.toolSetCache[apiKeyID] = cachedToolSet{
+			tools:   cloneToolDefs(tools),
+			reverse: reverse,
+			builtAt: s.currentTime(),
+		}
+	}
+	s.toolSetCacheMu.Unlock()
+	return tools, reverse, nil
+}
+
+// buildToolSetWithReverseMapFresh executes the full data-read and pipeline
+// path. Cache hits intentionally skip it; see Service.toolSetCache for the
+// corresponding upstreamConfigs freshness constraint.
+func (s *Service) buildToolSetWithReverseMapFresh(ctx context.Context, apiKeyID string) ([]domain.ToolDef, map[string]ReverseEntry, error) {
 	log := s.logger()
 	bundles := make([]upstreamBundle, 0)
 
 	// 阶段 1：仅取启用上游，并从缓存读取其工具列表与绑定的规则。
-	upstreams, err := s.upstreams.ListUpstreams(ctx)
+	allUpstreams, err := s.upstreams.ListUpstreams(ctx)
 	if err != nil {
 		log.Warn("读取上游列表失败", "apiKeyID", apiKeyID, "error", err)
 		return nil, nil, err
 	}
+	upstreams := allUpstreams
 	if s.upstreamAccessAuthorizer != nil && apiKeyID != "" {
 		upstreams, err = s.upstreamAccessAuthorizer.FilterUpstreams(ctx, apiKeyID, upstreams)
 		if err != nil {
@@ -1089,8 +1329,11 @@ func (s *Service) buildToolSetWithReverseMap(ctx context.Context, apiKeyID strin
 			mcpFilters:   mcpFilters,
 		})
 	}
-	configs := make(map[string]domain.UpstreamConfig, len(upstreams))
-	for _, up := range upstreams {
+	// Keep routing configuration for every configured upstream, not only the
+	// API-key-filtered subset. Cached aggregates for another key can still
+	// route to their own authorized source while this request is in flight.
+	configs := make(map[string]domain.UpstreamConfig, len(allUpstreams))
+	for _, up := range allUpstreams {
 		configs[up.ID] = up.Config
 	}
 	s.upstreamConfigsMu.Lock()
@@ -1110,6 +1353,87 @@ func (s *Service) buildToolSetWithReverseMap(ctx context.Context, apiKeyID strin
 	// 阶段 2-6：交由确定性纯函数管线处理。
 	tools, reverse := runPipeline(s.engine, bundles, apiKeyFilters)
 	return tools, reverse, nil
+}
+
+func cloneToolDefs(in []domain.ToolDef) []domain.ToolDef {
+	out := make([]domain.ToolDef, len(in))
+	for i := range out {
+		out[i] = cloneToolDef(in[i])
+	}
+	return out
+}
+
+func cloneToolDef(in domain.ToolDef) domain.ToolDef {
+	out := in
+	out.InputSchema = append(json.RawMessage(nil), in.InputSchema...)
+	return out
+}
+
+// discoveryToolDef deliberately omits inputSchema. Discovery and lexical
+// search only need tool identity, text, and source-count metadata; copying
+// every schema here would turn each Smart-mode search into a full catalogue
+// allocation. get_tool continues to read the authorized aggregate on demand.
+func discoveryToolDef(in domain.ToolDef) domain.ToolDef {
+	out := in
+	out.InputSchema = nil
+	return out
+}
+
+func cloneToolDiscoveries(in []domain.ToolDiscovery) []domain.ToolDiscovery {
+	out := make([]domain.ToolDiscovery, len(in))
+	for index := range in {
+		out[index] = domain.ToolDiscovery{
+			Tool:          cloneToolDef(in[index].Tool),
+			UpstreamNames: append([]string(nil), in[index].UpstreamNames...),
+			UpstreamTags:  append([]string(nil), in[index].UpstreamTags...),
+		}
+	}
+	return out
+}
+
+func toolSetCacheEntryValid(entry cachedToolSet, now time.Time) bool {
+	return !entry.builtAt.After(now) && now.Sub(entry.builtAt) < toolSetCacheTTL
+}
+
+// pruneToolSetCacheLocked removes expired entries and evicts the oldest entry
+// before a new API-key scope is inserted. The cache is intentionally tiny, so
+// this bounded linear scan is simpler and faster than maintaining LRU state.
+func (s *Service) pruneToolSetCacheLocked(now time.Time, incomingKey string) {
+	for key, entry := range s.toolSetCache {
+		if !toolSetCacheEntryValid(entry, now) {
+			delete(s.toolSetCache, key)
+		}
+	}
+	if _, exists := s.toolSetCache[incomingKey]; exists {
+		return
+	}
+	for len(s.toolSetCache) >= maxToolSetCacheEntries {
+		var oldestKey string
+		var oldest time.Time
+		for key, entry := range s.toolSetCache {
+			if oldestKey == "" || entry.builtAt.Before(oldest) {
+				oldestKey, oldest = key, entry.builtAt
+			}
+		}
+		delete(s.toolSetCache, oldestKey)
+	}
+}
+
+func sortedUniqueStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func (s *Service) reserveCandidateQuota(ctx context.Context, candidate ToolCandidate) error {

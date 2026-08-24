@@ -542,9 +542,9 @@ InvokeTool(apiKeyID, exposedName, args):
 
 | 网关工具 | 输入 | 输出 | 说明 |
 |----------|------|------|------|
-| `list_tools` | `{ cursor?, limit? }` | 工具名称+简述的分页列表 | 概览可见工具，不返回完整 schema |
-| `search_tools` | `{ query: string, limit?=50 }` | 名称或描述包含关键字的工具列表（默认 50，范围 1-200） | 关键字检索（Req 11.4）；无匹配返回空列表（Req 11.5） |
-| `get_tool` | `{ name: string }` | 单个工具的完整定义（名称、描述、`inputSchema`） | 调用前获取入参结构，闭环 `call_tool` 的参数构造；工具不可见时返回工具不存在错误 |
+| `list_tools` | `{ cursor?, limit?, upstream? }` | 工具名称+简述的分页列表；首页附上游概览 | 可按上游筛选可见工具，不返回完整 schema |
+| `search_tools` | `{ query: string(≤512), cursor?, limit?=50 }` | 相关度排序的工具列表、下一页游标与零结果建议 | 归一化、分词和常见缩写检索（Req 11.4）；无匹配返回空列表与引导（Req 11.5、11.10） |
+| `get_tool` | `{ name }` 或 `{ names: string[1..20] }` | 单个完整定义，或批量定义与 `notFound` | 仅可二选一；越界或空批量返回校验错误，单个工具不可见时返回工具不存在错误 |
 | `call_tool` | `{ name: string, arguments: object }` | 目标工具执行结果 | 路由到具体聚合工具（Req 11.6）；不存在则报错（Req 11.7） |
 
 **为什么需要 `get_tool`**：`list_tools` 与 `search_tools` 只返回名称+简述以节省上下文，客户端据此选定目标工具后，需先用 `get_tool` 取回该工具的完整 `inputSchema`，才能正确构造 `call_tool` 的 `arguments`。这样既保持检索结果轻量（不把所有 schema 塞进上下文），又让单个工具的调用参数闭环可用——这是智能模式真正能跑通的关键。
@@ -560,9 +560,9 @@ sequenceDiagram
     G-->>C: 仅 [list_tools, search_tools, get_tool, call_tool]
     Note over C: 上下文只占 4 个工具定义
     C->>G: search_tools("数据库 查询")
-    G->>A: BuildToolSet(apiKey) + 关键字过滤
-    A-->>G: 命中的工具名称+描述（≤limit）
-    G-->>C: 候选工具列表
+    G->>A: 当前 API Key 可见工具集合
+    A-->>G: 过滤后的工具与来源信息
+    G-->>C: 相关度排序的候选工具列表（≤limit）
     C->>G: get_tool({name:"pg_query"})
     G->>A: BuildToolSet(apiKey) 查找该工具
     A-->>G: pg_query 的完整 inputSchema
@@ -841,9 +841,9 @@ jobs:
 
 ### Property 11: 智能模式工具发现与获取结果正确
 
-*For any* 可见工具集合与查询关键字，search_tools 返回的每个工具其名称或描述都包含该关键字、返回数量不超过配置上限（默认 50，范围 1-200），且当无任何工具命中时返回空列表而非错误；*for any* 可见工具，get_tool 按其对外名称返回该工具的完整定义（含 inputSchema），对不可见工具名称返回工具不存在错误。
+*For any* 可见工具集合与不超过 512 字符的查询关键字，search_tools 返回的每个工具其名称、上游原始名称、来源上游/标签或描述中至少命中一个展开后有效查询词元（或整串子串命中）；结果严格按「命中词元数降序、加权得分降序、名称长度升序、名称字典序升序」排序，返回数量不超过配置上限（默认 50，范围 1-200），且当无任何工具命中时返回空列表与确定性引导而非错误；超长查询与非法批量 get_tool 入参返回字段级校验错误；*for any* 可见工具，get_tool 按其对外名称返回完整定义（含 inputSchema），对不可见工具名称返回工具不存在错误。
 
-**Validates: Requirements 11.4, 11.5, 11.7**
+**Validates: Requirements 11.4, 11.5, 11.7, 11.10**
 
 ### Property 12: 规则校验拒绝非法规则
 

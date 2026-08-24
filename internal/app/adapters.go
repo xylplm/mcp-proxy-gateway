@@ -93,12 +93,16 @@ type riskProfileReaderAdapter struct {
 type riskCatalogObserver struct {
 	repo       *store.ToolRiskRepo
 	governance *risk.GovernanceService
+	invalidate func()
 }
 
 func (o riskCatalogObserver) ToolsReplaced(ctx context.Context, upstreamID string, tools []domain.ToolDef) error {
 	_, err := o.repo.Reconcile(ctx, upstreamID, tools)
 	if err != nil {
 		return err
+	}
+	if o.invalidate != nil {
+		o.invalidate()
 	}
 	if o.governance != nil {
 		return o.governance.TriggerAutoAssessment(ctx)

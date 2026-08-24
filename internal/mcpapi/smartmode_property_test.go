@@ -113,24 +113,17 @@ func p11EffectiveLimit(discoveryLimit, requested int) int {
 	return requested
 }
 
-// p11Hit 复刻 SmartModeHandler.SearchTools 的命中判定：关键字与名称、描述均经去空白、
-// 转小写后做子串包含，命中任一即为真。
-func p11Hit(kw string, td domain.ToolDef) bool {
-	return strings.Contains(strings.ToLower(td.Name), kw) ||
-		strings.Contains(strings.ToLower(td.Description), kw)
-}
-
 // Feature: mcp-proxy-gateway, Property 11: 智能模式工具发现与获取结果正确
 //
 // Validates: Requirements 11.4, 11.5, 11.7
 //
 // 对任意可见工具集合、查询关键字与返回数（含越界值），断言：
 //   - search_tools（Req 11.4、11.5）：
-//   - 命中关键字——返回的每个工具其名称或描述（不区分大小写）都包含该关键字；
 //   - 数量不超过有效上限——返回条数 ≤ 有效返回数（默认 50、范围 1-200）；
-//   - 不漏——按可见集合原序，返回恰为全部命中工具截断至有效上限的前缀（既不漏命中、
-//     也不乱序、也不超额）；
-//   - 无匹配返回空列表而非错误。
+//   - 任一结果都必须来自当前可见集合，不泄露被过滤工具；
+//   - 同一输入重复请求的结果、游标和引导完全一致。
+//     词元召回与排序规则由 toolsearch 包的独立表驱动/属性测试覆盖，避免在此用被测
+//     检索内核反向计算期望而形成自证。
 //   - get_tool（Req 11.7）：对集合内任一对外名称返回该工具的完整定义（名称、描述与
 //     inputSchema 原样，含默认 schema 回退）；对集合外（不可见）名称返回 TOOL_NOT_FOUND。
 //   - call_tool（Req 11.7 配合 10.3）：经聚合服务路由，可见工具透传成功结果，不可见工具
@@ -151,47 +144,41 @@ func TestProperty11SmartDiscoveryAndGet(t *testing.T) {
 		agg := &smFakeAggregation{buildResult: tools}
 		h := NewSmartModeHandler(agg, discoveryLimit)
 
-		kw := strings.ToLower(strings.TrimSpace(rawKeyword))
 		effLimit := p11EffectiveLimit(discoveryLimit, requested)
 
-		// 独立计算预期命中序列（保序），再截断至有效上限。
-		expected := make([]domain.ToolDef, 0, len(tools))
-		for _, td := range tools {
-			if p11Hit(kw, td) {
-				expected = append(expected, td)
-			}
-		}
-		wantLen := min(len(expected), effLimit)
-
 		// ---- search_tools ----
-		got, err := h.SearchTools(ctx, apiKeyID, rawKeyword, requested)
+		got, err := h.SearchTools(ctx, apiKeyID, rawKeyword, "", requested)
 		if err != nil {
 			t.Fatalf("SearchTools 不应返回错误：%v", err)
 		}
-		if got == nil {
-			t.Fatalf("SearchTools 应返回非 nil 切片")
+		if got.Tools == nil || got.Suggestions == nil {
+			t.Fatalf("SearchTools 应返回非 nil tools 与 suggestions")
 		}
 		// 数量不超过有效上限。
-		if len(got) > effLimit {
-			t.Fatalf("返回条数超过有效上限：got=%d effLimit=%d", len(got), effLimit)
+		if len(got.Tools) > effLimit {
+			t.Fatalf("返回条数超过有效上限：got=%d effLimit=%d", len(got.Tools), effLimit)
 		}
-		// 无匹配返回空列表而非错误。
-		if len(expected) == 0 && len(got) != 0 {
-			t.Fatalf("无命中应返回空列表，got=%d", len(got))
+		visible := make(map[string]domain.ToolDef, len(tools))
+		for _, tool := range tools {
+			visible[tool.Name] = tool
 		}
-		// 不漏 + 保序 + 不超额：got 恰为预期命中序列截断至有效上限的前缀。
-		if len(got) != wantLen {
-			t.Fatalf("返回条数与预期不符：got=%d want=%d (命中总数=%d effLimit=%d kw=%q)",
-				len(got), wantLen, len(expected), effLimit, kw)
-		}
-		for i := range got {
-			if got[i].Name != expected[i].Name || got[i].Description != expected[i].Description {
-				t.Fatalf("第 %d 条与预期命中不一致：got=%+v want=%+v", i, got[i], expected[i])
+		for _, summary := range got.Tools {
+			if _, ok := visible[summary.Name]; !ok {
+				t.Fatalf("检索结果泄露了不可见工具：%q", summary.Name)
 			}
-			// 命中关键字：返回的每个工具其名称或描述（不区分大小写）都包含关键字。
-			if !(strings.Contains(strings.ToLower(got[i].Name), kw) ||
-				strings.Contains(strings.ToLower(got[i].Description), kw)) {
-				t.Fatalf("返回的工具未命中关键字：kw=%q tool=%+v", kw, got[i])
+		}
+		again, againErr := h.SearchTools(ctx, apiKeyID, rawKeyword, "", requested)
+		if againErr != nil || got.NextCursor != again.NextCursor || got.Hint != again.Hint || len(got.Tools) != len(again.Tools) || len(got.Suggestions) != len(again.Suggestions) {
+			t.Fatalf("重复搜索结果不稳定：first=%+v second=%+v err=%v", got, again, againErr)
+		}
+		for i := range got.Tools {
+			if got.Tools[i] != again.Tools[i] {
+				t.Fatalf("第 %d 条重复搜索结果不稳定：first=%+v second=%+v", i, got.Tools[i], again.Tools[i])
+			}
+		}
+		for i := range got.Suggestions {
+			if got.Suggestions[i] != again.Suggestions[i] {
+				t.Fatalf("第 %d 个建议不稳定：first=%q second=%q", i, got.Suggestions[i], again.Suggestions[i])
 			}
 		}
 

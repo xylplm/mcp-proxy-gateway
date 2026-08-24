@@ -15,6 +15,7 @@ export interface ToolDef {
 export interface ToolSource {
   upstreamId: string
   upstreamName: string
+  upstreamTags?: string[]
   originalName: string
   description: string
   inputSchema: unknown

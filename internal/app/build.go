@@ -107,18 +107,6 @@ func (a *App) build(envCfg config.EnvConfig) error {
 	dialer := newSessionDialer(factory)
 	a.dialer = dialer
 
-	// --- 连接管理器（MCP_Manager）：注入退避策略与拨号器 ---
-	retry := retryPolicyFromConfig(yamlCfg.Connection)
-	mgr := manager.New(
-		repos.Upstream,
-		toolCache,
-		transport.ValidateConnParams,
-		a.logger,
-		manager.WithRetryPolicy(retry),
-		manager.WithDialer(dialer),
-	)
-	a.mgr = mgr
-
 	// --- 领域核心：规则引擎 + 聚合服务 ---
 	ruleEngine := domain.NewRuleEngine()
 	agg := aggregation.NewService(
@@ -137,6 +125,22 @@ func (a *App) build(envCfg config.EnvConfig) error {
 	agg.SetRoutingStrategy(yamlCfg.Aggregation.ToolRoutingStrategy)
 	agg.SetQuotaManager(aggregation.NewQuotaManager(aggregation.NewRedisQuotaCounter(a.rdb), a.logger))
 	a.agg = agg
+	// 工具列表写入经装饰器统一失效聚合集缓存；聚合服务自身仍使用原始缓存，
+	// 以保持依赖方向单一。
+	invalidatingToolCache := aggregation.NewInvalidatingCache(toolCache, agg)
+
+	// --- 连接管理器（MCP_Manager）：注入退避策略与拨号器 ---
+	retry := retryPolicyFromConfig(yamlCfg.Connection)
+	mgr := manager.New(
+		repos.Upstream,
+		toolCache,
+		transport.ValidateConnParams,
+		a.logger,
+		manager.WithRetryPolicy(retry),
+		manager.WithDialer(dialer),
+		manager.WithToolSetCacheInvalidator(agg.InvalidateToolSetCache),
+	)
+	a.mgr = mgr
 
 	// --- 聚合调用路由：连接状态来自 manager，会话来自 dialer 注册表（Req 10.3/10.5/10.8）---
 	callTimeout := time.Duration(yamlCfg.Aggregation.UpstreamCallTimeoutS) * time.Second
@@ -170,7 +174,13 @@ func (a *App) build(envCfg config.EnvConfig) error {
 			return err
 		}
 	}
-	riskGovernance := risk.NewGovernanceService(repos.AIProvider, repos.ToolRisk, repos.RiskJob, riskCipher)
+	riskGovernance := risk.NewGovernanceService(
+		repos.AIProvider,
+		repos.ToolRisk,
+		repos.RiskJob,
+		riskCipher,
+		risk.WithCatalogChangeObserver(agg.InvalidateToolSetCache),
+	)
 	if err := riskGovernance.Resume(context.Background()); err != nil {
 		return err
 	}
@@ -183,9 +193,9 @@ func (a *App) build(envCfg config.EnvConfig) error {
 	}
 	syncTimeout := time.Duration(yamlCfg.Sync.TimeoutS) * time.Second
 	a.syncTimeout = syncTimeout
-	a.syncer = syncsvc.NewPeriodicSyncer(fetcher, toolCache, mgr, syncTimeout, a.logger)
-	refresher := syncsvc.NewRefresher(fetcher, toolCache, syncTimeout, a.logger)
-	catalogObserver := riskCatalogObserver{repo: repos.ToolRisk, governance: riskGovernance}
+	a.syncer = syncsvc.NewPeriodicSyncer(fetcher, invalidatingToolCache, mgr, syncTimeout, a.logger)
+	refresher := syncsvc.NewRefresher(fetcher, invalidatingToolCache, syncTimeout, a.logger)
+	catalogObserver := riskCatalogObserver{repo: repos.ToolRisk, governance: riskGovernance, invalidate: agg.InvalidateToolSetCache}
 	a.syncer.SetObserver(catalogObserver)
 	refresher.SetObserver(catalogObserver)
 	a.scheduler = syncsvc.NewScheduler()

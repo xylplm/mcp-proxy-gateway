@@ -306,6 +306,30 @@ func TestAPIKeyFilterEnableByRuleID(t *testing.T) {
 	}
 }
 
+func TestAPIKeyFilterChangesInvalidateAggregateCache(t *testing.T) {
+	filters := &fakeAPIKeyFilters{}
+	agg := &fakeAggregationTools{}
+	e := newTestEngine(Deps{APIKeyFilters: filters, Aggregation: agg})
+
+	for _, request := range []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{http.MethodPost, "/api/admin/apikeys/key-1/filters", `{"pattern":"private*","enabled":true}`},
+		{http.MethodPost, "/api/admin/apikey-filters/flt-1/disable", ""},
+		{http.MethodDelete, "/api/admin/apikey-filters/flt-1", ""},
+	} {
+		w := doJSON(e, request.method, request.path, request.body)
+		if w.Code != http.StatusCreated && w.Code != http.StatusOK {
+			t.Fatalf("%s %s expected success, got %d: %s", request.method, request.path, w.Code, w.Body.String())
+		}
+	}
+	if agg.invalidations != 3 {
+		t.Fatalf("every successful API Key visibility-rule write must invalidate the aggregate cache, got %d", agg.invalidations)
+	}
+}
+
 // TestCreateACLEntry 验证 ACL 创建端点把路径 API Key 与请求体 CIDR 传给仓储。
 func TestCreateACLEntry(t *testing.T) {
 	acl := &fakeACLStore{}

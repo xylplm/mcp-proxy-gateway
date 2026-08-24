@@ -5,9 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
+	"github.com/myGithub/mcp-proxy-gateway/internal/toolsearch"
 )
 
 // 本文件为任务 13.2「实现智能模式网关工具 list_tools / search_tools / get_tool / call_tool」
@@ -60,6 +64,24 @@ func (f *smFakeAggregation) InvokeTool(_ context.Context, apiKeyID, exposedName 
 
 // 编译期断言：fake 必须满足 domain.Aggregation_Service 接口契约。
 var _ domain.Aggregation_Service = (*smFakeAggregation)(nil)
+
+// smDetailedAggregation adds optional source detail capability used in
+// production for Smart-mode disambiguation.
+type smDetailedAggregation struct {
+	smFakeAggregation
+	details     []domain.ToolDetail
+	detailErr   error
+	detailCalls int
+}
+
+func (f *smDetailedAggregation) BuildToolDetails(_ context.Context, apiKeyID string) ([]domain.ToolDetail, error) {
+	f.detailCalls++
+	f.gotBuildKeyID = apiKeyID
+	if f.detailErr != nil {
+		return nil, f.detailErr
+	}
+	return f.details, nil
+}
 
 // smTool 构造一个测试用领域工具定义。
 func smTool(name, desc string) domain.ToolDef {
@@ -118,7 +140,7 @@ func TestSmartListToolsDefaultLimit(t *testing.T) {
 	agg := &smFakeAggregation{buildResult: smTools(120)}
 	h := NewSmartModeHandler(agg, 50)
 
-	page, err := h.ListTools(context.Background(), "key-1", "", 0)
+	page, err := h.ListTools(context.Background(), "key-1", "", "", 0)
 	if err != nil {
 		t.Fatalf("ListTools 不应返回错误：%v", err)
 	}
@@ -146,7 +168,7 @@ func TestSmartListToolsCursorPaging(t *testing.T) {
 	h := NewSmartModeHandler(agg, 50)
 
 	// 第一页：limit=4 → tool_0..tool_3，游标 4。
-	page1, err := h.ListTools(context.Background(), "", "", 4)
+	page1, err := h.ListTools(context.Background(), "", "", "", 4)
 	if err != nil {
 		t.Fatalf("第一页出错：%v", err)
 	}
@@ -155,7 +177,7 @@ func TestSmartListToolsCursorPaging(t *testing.T) {
 	}
 
 	// 第二页：cursor=4 limit=4 → tool_4..tool_7，游标 8。
-	page2, err := h.ListTools(context.Background(), "", page1.NextCursor, 4)
+	page2, err := h.ListTools(context.Background(), "", page1.NextCursor, "", 4)
 	if err != nil {
 		t.Fatalf("第二页出错：%v", err)
 	}
@@ -164,7 +186,7 @@ func TestSmartListToolsCursorPaging(t *testing.T) {
 	}
 
 	// 第三页：cursor=8 limit=4 → tool_8..tool_9（仅 2 条），无下一页游标。
-	page3, err := h.ListTools(context.Background(), "", page2.NextCursor, 4)
+	page3, err := h.ListTools(context.Background(), "", page2.NextCursor, "", 4)
 	if err != nil {
 		t.Fatalf("第三页出错：%v", err)
 	}
@@ -181,7 +203,7 @@ func TestSmartListToolsEmpty(t *testing.T) {
 	agg := &smFakeAggregation{buildResult: nil}
 	h := NewSmartModeHandler(agg, 50)
 
-	page, err := h.ListTools(context.Background(), "", "", 0)
+	page, err := h.ListTools(context.Background(), "", "", "", 0)
 	if err != nil {
 		t.Fatalf("空集合不应返回错误：%v", err)
 	}
@@ -201,7 +223,7 @@ func TestSmartListToolsOffsetBeyondEnd(t *testing.T) {
 	agg := &smFakeAggregation{buildResult: smTools(3)}
 	h := NewSmartModeHandler(agg, 50)
 
-	page, err := h.ListTools(context.Background(), "", "100", 10)
+	page, err := h.ListTools(context.Background(), "", "100", "", 10)
 	if err != nil {
 		t.Fatalf("越界游标不应返回错误：%v", err)
 	}
@@ -215,8 +237,8 @@ func TestSmartListToolsInvalidCursor(t *testing.T) {
 	agg := &smFakeAggregation{buildResult: smTools(3)}
 	h := NewSmartModeHandler(agg, 50)
 
-	for _, bad := range []string{"abc", "-1", "1.5"} {
-		_, err := h.ListTools(context.Background(), "", bad, 0)
+	for _, bad := range []string{"abc", "-1", "1.5", strings.Repeat("1", maxCursorBytes+1)} {
+		_, err := h.ListTools(context.Background(), "", bad, "", 0)
 		var apiErr *domain.APIError
 		if !errors.As(err, &apiErr) {
 			t.Fatalf("游标 %q 应返回 *domain.APIError，got %T: %v", bad, err, err)
@@ -224,6 +246,50 @@ func TestSmartListToolsInvalidCursor(t *testing.T) {
 		if apiErr.Code != domain.CodeValidation {
 			t.Fatalf("游标 %q 应返回 VALIDATION，got %s", bad, apiErr.Code)
 		}
+	}
+}
+
+func TestSmartListToolsProvidesAndFiltersUpstreamOverview(t *testing.T) {
+	pveTool := smTool("vm_list", "列出虚拟机")
+	pveTool.SourceCount = 1
+	githubTool := smTool("create_pull_request", "创建拉取请求")
+	githubTool.SourceCount = 1
+	agg := &smDetailedAggregation{details: []domain.ToolDetail{
+		{Tool: pveTool, Sources: []domain.ToolSourceView{{UpstreamName: "PVE 生产集群", UpstreamTags: []string{"virtualization"}}}},
+		{Tool: githubTool, Sources: []domain.ToolSourceView{{UpstreamName: "GitHub", UpstreamTags: []string{"code"}}}},
+	}}
+	h := NewSmartModeHandler(agg, 50)
+
+	page, err := h.ListTools(context.Background(), "key-1", "", "pve", 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Tools) != 1 || page.Tools[0].Name != "vm_list" {
+		t.Fatalf("upstream substring filter failed: %+v", page)
+	}
+	if len(page.Upstreams) != 2 || page.Upstreams[0].Name != "GitHub" || page.Upstreams[1].Name != "PVE 生产集群" {
+		t.Fatalf("first page should include deterministic overview: %+v", page.Upstreams)
+	}
+	page, err = h.ListTools(context.Background(), "key-1", "1", "", 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Upstreams) != 0 {
+		t.Fatalf("non-first page must not repeat overview: %+v", page.Upstreams)
+	}
+}
+
+func TestSmartDiscoveryFallsBackWhenOptionalSourceDetailsFail(t *testing.T) {
+	agg := &smDetailedAggregation{
+		smFakeAggregation: smFakeAggregation{buildResult: []domain.ToolDef{smTool("pg_query", "查询")}},
+		detailErr:         errors.New("tool policy store unavailable"),
+	}
+	page, err := NewSmartModeHandler(agg, 50).ListTools(context.Background(), "", "", "", 50)
+	if err != nil {
+		t.Fatalf("optional source enrichment failure must not block discovery: %v", err)
+	}
+	if len(page.Tools) != 1 || page.Tools[0].Upstream != "" {
+		t.Fatalf("fallback should retain tools without source metadata: %+v", page)
 	}
 }
 
@@ -240,20 +306,20 @@ func TestSmartSearchToolsMatchesNameAndDescription(t *testing.T) {
 	h := NewSmartModeHandler(agg, 50)
 
 	// 关键字命中名称：query 命中 pg_query。
-	got, err := h.SearchTools(context.Background(), "", "query", 0)
+	got, err := h.SearchTools(context.Background(), "", "query", "", 0)
 	if err != nil {
 		t.Fatalf("SearchTools 出错：%v", err)
 	}
-	if len(got) != 1 || got[0].Name != "pg_query" {
+	if len(got.Tools) != 1 || got.Tools[0].Name != "pg_query" {
 		t.Fatalf("关键字 query 应仅命中 pg_query，got=%v", got)
 	}
 
 	// 关键字命中描述且不区分大小写：database 命中 db_status 的描述。
-	got2, err := h.SearchTools(context.Background(), "", "database", 0)
+	got2, err := h.SearchTools(context.Background(), "", "database", "", 0)
 	if err != nil {
 		t.Fatalf("SearchTools 出错：%v", err)
 	}
-	if len(got2) != 1 || got2[0].Name != "db_status" {
+	if len(got2.Tools) != 1 || got2.Tools[0].Name != "db_status" {
 		t.Fatalf("关键字 database 应命中 db_status，got=%v", got2)
 	}
 }
@@ -263,15 +329,15 @@ func TestSmartSearchToolsNoMatchReturnsEmpty(t *testing.T) {
 	agg := &smFakeAggregation{buildResult: smTools(5)}
 	h := NewSmartModeHandler(agg, 50)
 
-	got, err := h.SearchTools(context.Background(), "", "不存在的关键字", 0)
+	got, err := h.SearchTools(context.Background(), "", "不存在的关键字", "", 0)
 	if err != nil {
 		t.Fatalf("无匹配不应返回错误：%v", err)
 	}
-	if got == nil {
+	if got.Tools == nil || got.Suggestions == nil {
 		t.Fatalf("应返回非 nil 空切片")
 	}
-	if len(got) != 0 {
-		t.Fatalf("无匹配应返回空列表，got=%d", len(got))
+	if len(got.Tools) != 0 {
+		t.Fatalf("无匹配应返回空列表，got=%d", len(got.Tools))
 	}
 }
 
@@ -281,12 +347,12 @@ func TestSmartSearchToolsRespectsLimit(t *testing.T) {
 	agg := &smFakeAggregation{buildResult: smTools(100)}
 	h := NewSmartModeHandler(agg, 50)
 
-	got, err := h.SearchTools(context.Background(), "", "tool", 10)
+	got, err := h.SearchTools(context.Background(), "", "tool", "", 10)
 	if err != nil {
 		t.Fatalf("SearchTools 出错：%v", err)
 	}
-	if len(got) != 10 {
-		t.Fatalf("limit=10 应仅返回 10 条，got=%d", len(got))
+	if len(got.Tools) != 10 {
+		t.Fatalf("limit=10 应仅返回 10 条，got=%d", len(got.Tools))
 	}
 }
 
@@ -295,12 +361,12 @@ func TestSmartSearchToolsDefaultLimit(t *testing.T) {
 	agg := &smFakeAggregation{buildResult: smTools(100)}
 	h := NewSmartModeHandler(agg, 50)
 
-	got, err := h.SearchTools(context.Background(), "", "tool", 0)
+	got, err := h.SearchTools(context.Background(), "", "tool", "", 0)
 	if err != nil {
 		t.Fatalf("SearchTools 出错：%v", err)
 	}
-	if len(got) != 50 {
-		t.Fatalf("默认应返回 50 条，got=%d", len(got))
+	if len(got.Tools) != 50 {
+		t.Fatalf("默认应返回 50 条，got=%d", len(got.Tools))
 	}
 }
 
@@ -309,26 +375,65 @@ func TestSmartSearchToolsLimitClampedToMax(t *testing.T) {
 	agg := &smFakeAggregation{buildResult: smTools(250)}
 	h := NewSmartModeHandler(agg, 50)
 
-	got, err := h.SearchTools(context.Background(), "", "tool", 1000)
+	got, err := h.SearchTools(context.Background(), "", "tool", "", 1000)
 	if err != nil {
 		t.Fatalf("SearchTools 出错：%v", err)
 	}
-	if len(got) != 200 {
-		t.Fatalf("limit 超界应收敛到 200，got=%d", len(got))
+	if len(got.Tools) != 200 {
+		t.Fatalf("limit 超界应收敛到 200，got=%d", len(got.Tools))
 	}
 }
 
-// TestSmartSearchToolsEmptyQueryMatchesAll 验证：空关键字匹配全部（空串为任意串子集）。
-func TestSmartSearchToolsEmptyQueryMatchesAll(t *testing.T) {
+// TestSmartSearchToolsEmptyQueryReturnsGuidance 验证：空关键字不再伪装成工具浏览。
+func TestSmartSearchToolsEmptyQueryReturnsGuidance(t *testing.T) {
 	agg := &smFakeAggregation{buildResult: smTools(5)}
 	h := NewSmartModeHandler(agg, 50)
 
-	got, err := h.SearchTools(context.Background(), "", "   ", 0)
+	got, err := h.SearchTools(context.Background(), "", "   ", "", 0)
 	if err != nil {
 		t.Fatalf("SearchTools 出错：%v", err)
 	}
-	if len(got) != 5 {
-		t.Fatalf("空关键字应匹配全部 5 条，got=%d", len(got))
+	if len(got.Tools) != 0 || got.Hint == "" {
+		t.Fatalf("空关键字应返回空列表和引导，got=%+v", got)
+	}
+}
+
+func TestSmartSearchToolsRejectsOversizedQueryBeforeLoadingTools(t *testing.T) {
+	agg := &smFakeAggregation{buildResult: smTools(1)}
+	h := NewSmartModeHandler(agg, 50)
+	_, err := h.SearchTools(context.Background(), "key-1", strings.Repeat("查", toolsearch.MaxQueryRunes+1), "", 10)
+	var apiErr *domain.APIError
+	if !errors.As(err, &apiErr) || apiErr.Code != domain.CodeValidation {
+		t.Fatalf("oversized query should return VALIDATION, got %T: %v", err, err)
+	}
+	if agg.gotBuildKeyID != "" {
+		t.Fatalf("oversized query must be rejected before aggregate loading, got key=%q", agg.gotBuildKeyID)
+	}
+}
+
+func TestSmartSearchToolsUsesSourceMetadataAndPaging(t *testing.T) {
+	first := smTool("create_pull_request", "创建拉取请求")
+	first.SourceCount = 2
+	first.SchemaConflict = true
+	second := smTool("create_issue", "创建问题")
+	agg := &smDetailedAggregation{details: []domain.ToolDetail{
+		{Tool: first, Sources: []domain.ToolSourceView{{UpstreamName: "GitHub", UpstreamTags: []string{"code"}}, {UpstreamName: "GitHub Mirror", UpstreamTags: []string{"backup"}}}},
+		{Tool: second, Sources: []domain.ToolSourceView{{UpstreamName: "GitHub", UpstreamTags: []string{"code"}}}},
+	}}
+	h := NewSmartModeHandler(agg, 50)
+
+	page, err := h.SearchTools(context.Background(), "", "github create pr", "", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Tools) != 1 || page.Tools[0].Name != "create_pull_request" || page.NextCursor != "1" {
+		t.Fatalf("source-aware search/paging failed: %+v", page)
+	}
+	if page.Tools[0].Upstream != "GitHub, GitHub Mirror" || page.Tools[0].SourceCount != 2 || !page.Tools[0].SchemaConflict {
+		t.Fatalf("result lacks disambiguation metadata: %+v", page.Tools[0])
+	}
+	if len([]rune(truncateDescription(string(make([]rune, 241)), 240))) != 241 {
+		t.Fatalf("truncated description should retain 240 runes plus ellipsis")
 	}
 }
 
@@ -361,6 +466,20 @@ func TestSmartGetToolReturnsFullDefinition(t *testing.T) {
 	}
 }
 
+func TestSmartGetToolSkipsOptionalDetailEnrichment(t *testing.T) {
+	agg := &smDetailedAggregation{
+		smFakeAggregation: smFakeAggregation{buildResult: []domain.ToolDef{smTool("pg_query", "查询")}},
+		details:           []domain.ToolDetail{{Tool: smTool("pg_query", "查询")}},
+	}
+	tool, err := NewSmartModeHandler(agg, 50).GetTool(context.Background(), "", "pg_query")
+	if err != nil || tool == nil {
+		t.Fatalf("GetTool should use the authorized aggregate: tool=%+v err=%v", tool, err)
+	}
+	if agg.detailCalls != 0 {
+		t.Fatalf("GetTool must not read optional details, calls=%d", agg.detailCalls)
+	}
+}
+
 // TestSmartGetToolNotVisible 验证：不可见工具返回 TOOL_NOT_FOUND（Req 11.7）。
 func TestSmartGetToolNotVisible(t *testing.T) {
 	agg := &smFakeAggregation{buildResult: smTools(3)}
@@ -377,6 +496,120 @@ func TestSmartGetToolNotVisible(t *testing.T) {
 	if apiErr.Code != domain.CodeToolNotFound {
 		t.Fatalf("期望 TOOL_NOT_FOUND，got %s", apiErr.Code)
 	}
+}
+
+func TestSmartGetToolsReturnsVisibleItemsAndRejectsOversizedBatch(t *testing.T) {
+	agg := &smFakeAggregation{buildResult: []domain.ToolDef{smTool("one", "first"), smTool("two", "second")}}
+	h := NewSmartModeHandler(agg, 50)
+	batch, err := h.GetTools(context.Background(), "", []string{"one", "missing", "two"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(batch.Tools) != 2 || batch.Tools[0].Name != "one" || len(batch.NotFound) != 1 || batch.NotFound[0] != "missing" {
+		t.Fatalf("batch result unexpected: %+v", batch)
+	}
+	names := make([]string, maxBatchToolNames+1)
+	for i := range names {
+		names[i] = fmt.Sprintf("missing_%d", i)
+	}
+	batch, err = h.GetTools(context.Background(), "", names)
+	if batch.Tools != nil || batch.NotFound != nil {
+		t.Fatalf("oversized batch must not return a partial response: %+v", batch)
+	}
+	var apiErr *domain.APIError
+	if !errors.As(err, &apiErr) || apiErr.Code != domain.CodeValidation {
+		t.Fatalf("oversized batch should return VALIDATION, got %T: %v", err, err)
+	}
+	for _, invalid := range [][]string{nil, {}, {"   "}} {
+		_, err = h.GetTools(context.Background(), "", invalid)
+		if !errors.As(err, &apiErr) || apiErr.Code != domain.CodeValidation {
+			t.Fatalf("invalid batch %q should return VALIDATION, got %T: %v", invalid, err, err)
+		}
+	}
+}
+
+func TestGatewayHandlersReturnExtendedSearchAndBatchShapes(t *testing.T) {
+	agg := &smFakeAggregation{buildResult: []domain.ToolDef{smTool("pg_query", "执行 PostgreSQL 查询")}}
+	svc := NewService(agg, 50, nil)
+	h := NewSmartModeHandler(agg, 50)
+
+	result, err := svc.handleGatewaySearchTools(context.Background(), "", json.RawMessage(`{"query":"pg query"}`), h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var page SearchPage
+	if err := json.Unmarshal([]byte(gatewayResultText(t, result)), &page); err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Tools) != 1 || page.Tools[0].Name != "pg_query" || page.Suggestions == nil {
+		t.Fatalf("search response shape unexpected: %+v", page)
+	}
+
+	result, err = svc.handleGatewayGetTool(context.Background(), "", json.RawMessage(`{"names":["pg_query","missing"]}`), h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var batch ToolBatch
+	if err := json.Unmarshal([]byte(gatewayResultText(t, result)), &batch); err != nil {
+		t.Fatal(err)
+	}
+	if len(batch.Tools) != 1 || batch.Tools[0].Name != "pg_query" || len(batch.NotFound) != 1 || batch.NotFound[0] != "missing" {
+		t.Fatalf("batch response shape unexpected: %+v", batch)
+	}
+	_, err = svc.handleGatewayGetTool(context.Background(), "", json.RawMessage(`{"names":["a","b","c","d","e","f","g","h","i","j","k","l","m","n","o","p","q","r","s","t","u"]}`), h)
+	var apiErr *domain.APIError
+	if !errors.As(err, &apiErr) || apiErr.Code != domain.CodeValidation {
+		t.Fatalf("oversized gateway batch should return VALIDATION, got %T: %v", err, err)
+	}
+	for _, raw := range []json.RawMessage{
+		json.RawMessage(`{"name":"pg_query","names":["pg_query"]}`),
+		json.RawMessage(`{"names":[]}`),
+		json.RawMessage(`{"names":[""]}`),
+	} {
+		_, err = svc.handleGatewayGetTool(context.Background(), "", raw, h)
+		if !errors.As(err, &apiErr) || apiErr.Code != domain.CodeValidation {
+			t.Fatalf("invalid get_tool payload %s should return VALIDATION, got %T: %v", raw, err, err)
+		}
+	}
+}
+
+func TestGatewayHandlersValidateRequiredAndObjectArguments(t *testing.T) {
+	agg := &smFakeAggregation{buildResult: []domain.ToolDef{smTool("pg_query", "执行 PostgreSQL 查询")}}
+	svc := NewService(agg, 50, nil)
+	h := NewSmartModeHandler(agg, 50)
+
+	for _, raw := range []json.RawMessage{json.RawMessage(`{}`), json.RawMessage(`null`)} {
+		_, err := svc.handleGatewaySearchTools(context.Background(), "", raw, h)
+		var apiErr *domain.APIError
+		if !errors.As(err, &apiErr) || apiErr.Code != domain.CodeValidation {
+			t.Fatalf("invalid search payload %s should return VALIDATION, got %T: %v", raw, err, err)
+		}
+	}
+
+	for _, raw := range []json.RawMessage{
+		json.RawMessage(`{}`),
+		json.RawMessage(`{"name":"   "}`),
+		json.RawMessage(`{"name":"pg_query","arguments":null}`),
+		json.RawMessage(`{"name":"pg_query","arguments":[]}`),
+	} {
+		_, err := svc.handleGatewayCallTool(context.Background(), "", raw, h)
+		var apiErr *domain.APIError
+		if !errors.As(err, &apiErr) || apiErr.Code != domain.CodeValidation {
+			t.Fatalf("invalid call payload %s should return VALIDATION, got %T: %v", raw, err, err)
+		}
+	}
+}
+
+func gatewayResultText(t *testing.T, result *mcp.CallToolResult) string {
+	t.Helper()
+	if result == nil || len(result.Content) != 1 {
+		t.Fatalf("expected one gateway text result, got %+v", result)
+	}
+	text, ok := result.Content[0].(*mcp.TextContent)
+	if !ok {
+		t.Fatalf("expected text content, got %T", result.Content[0])
+	}
+	return text.Text
 }
 
 // --- call_tool ---
@@ -439,12 +672,12 @@ func TestSmartNewHandlerClampsDiscoveryLimit(t *testing.T) {
 
 	for _, bad := range []int{0, -5, 201, 1000} {
 		h := NewSmartModeHandler(agg, bad)
-		got, err := h.SearchTools(context.Background(), "", "tool", 0)
+		got, err := h.SearchTools(context.Background(), "", "tool", "", 0)
 		if err != nil {
 			t.Fatalf("SearchTools 出错：%v", err)
 		}
-		if len(got) != 50 {
-			t.Fatalf("越界 discoveryLimit=%d 应回退默认 50，实际默认返回数=%d", bad, len(got))
+		if len(got.Tools) != 50 {
+			t.Fatalf("越界 discoveryLimit=%d 应回退默认 50，实际默认返回数=%d", bad, len(got.Tools))
 		}
 	}
 }
@@ -457,10 +690,10 @@ func TestSmartBuildToolSetErrorPropagates(t *testing.T) {
 	agg := &smFakeAggregation{buildErr: wantErr}
 	h := NewSmartModeHandler(agg, 50)
 
-	if _, err := h.ListTools(context.Background(), "", "", 0); !errors.Is(err, wantErr) {
+	if _, err := h.ListTools(context.Background(), "", "", "", 0); !errors.Is(err, wantErr) {
 		t.Fatalf("list_tools 应原样上抛聚合错误，got=%v", err)
 	}
-	if _, err := h.SearchTools(context.Background(), "", "x", 0); !errors.Is(err, wantErr) {
+	if _, err := h.SearchTools(context.Background(), "", "x", "", 0); !errors.Is(err, wantErr) {
 		t.Fatalf("search_tools 应原样上抛聚合错误，got=%v", err)
 	}
 	if _, err := h.GetTool(context.Background(), "", "x"); !errors.Is(err, wantErr) {

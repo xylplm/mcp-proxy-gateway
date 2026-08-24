@@ -55,16 +55,40 @@ type ProviderInput struct {
 }
 
 type GovernanceService struct {
-	providers ProviderRepository
-	catalog   CatalogRepository
-	cipher    *Cipher
-	client    *OpenAIClient
-	jobs      JobRepository
-	running   sync.Map
+	providers       ProviderRepository
+	catalog         CatalogRepository
+	cipher          *Cipher
+	client          *OpenAIClient
+	jobs            JobRepository
+	running         sync.Map
+	onCatalogChange func()
 }
 
-func NewGovernanceService(providers ProviderRepository, catalog CatalogRepository, jobs JobRepository, cipher *Cipher) *GovernanceService {
-	return &GovernanceService{providers: providers, catalog: catalog, jobs: jobs, cipher: cipher, client: NewOpenAIClient()}
+// GovernanceOption configures an optional integration point without widening
+// the catalog and job repository contracts.
+type GovernanceOption func(*GovernanceService)
+
+// WithCatalogChangeObserver runs after one or more risk assessments are
+// successfully persisted. The callback must be non-blocking and safe for
+// concurrent calls because batch workers can finish simultaneously.
+func WithCatalogChangeObserver(observer func()) GovernanceOption {
+	return func(service *GovernanceService) {
+		service.onCatalogChange = observer
+	}
+}
+
+func NewGovernanceService(providers ProviderRepository, catalog CatalogRepository, jobs JobRepository, cipher *Cipher, options ...GovernanceOption) *GovernanceService {
+	service := &GovernanceService{providers: providers, catalog: catalog, jobs: jobs, cipher: cipher, client: NewOpenAIClient()}
+	for _, option := range options {
+		option(service)
+	}
+	return service
+}
+
+func (s *GovernanceService) notifyCatalogChange() {
+	if s.onCatalogChange != nil {
+		s.onCatalogChange()
+	}
 }
 
 func (s *GovernanceService) ListProviders(ctx context.Context) ([]Provider, error) {
@@ -201,7 +225,11 @@ func (s *GovernanceService) ReassessTool(ctx context.Context, upstreamID, origin
 	if err != nil {
 		return Assessment{}, err
 	}
-	return s.catalog.ApplyAIResult(ctx, item.UpstreamID, item.OriginalName, results[0], p)
+	updated, err := s.catalog.ApplyAIResult(ctx, item.UpstreamID, item.OriginalName, results[0], p)
+	if err == nil {
+		s.notifyCatalogChange()
+	}
+	return updated, err
 }
 
 func (s *GovernanceService) Resume(ctx context.Context) error {
@@ -358,6 +386,9 @@ func (s *GovernanceService) runJob(ctx context.Context, job AssessmentJob) error
 		for category, count := range outcome.errors {
 			job.ErrorCounts[category] += count
 		}
+		if outcome.success > 0 {
+			s.notifyCatalogChange()
+		}
 		_ = s.jobs.UpdateProgress(ctx, job)
 	}
 	if cancelled {
@@ -418,6 +449,9 @@ func (s *GovernanceService) AssessPending(ctx context.Context, limit int) (Asses
 				summary.Review++
 			}
 		}
+	}
+	if summary.Succeeded > 0 {
+		s.notifyCatalogChange()
 	}
 	return summary, nil
 }

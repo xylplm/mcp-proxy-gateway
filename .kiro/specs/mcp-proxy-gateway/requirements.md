@@ -203,12 +203,14 @@ MCP Proxy Gateway（MCP 桥接代理网关）是一个通用的 MCP（Model Cont
 1. THE MCP API 服务 SHALL 以 MCP 协议对外暴露聚合后的工具能力供外部 AI 服务调用。
 2. WHERE 对外 MCP API 配置为全量工具模式，THE MCP API 服务 SHALL 一次性向外部 AI 服务暴露全部聚合工具的定义。
 3. WHERE 对外 MCP API 配置为智能模式，THE MCP API 服务 SHALL 仅向外部 AI 服务暴露少量用于工具发现与工具调用的网关工具（gateway tools），而不一次性暴露全部聚合工具定义。
-4. 在智能模式下，WHEN 外部 AI 服务调用工具发现网关工具时，THE MCP API 服务 SHALL 返回名称或描述中包含查询关键字的聚合工具列表，返回数量默认为 50 条且可在 1 至 200 条范围内配置。
-5. 在智能模式下，IF 外部 AI 服务调用工具发现网关工具且当前可见聚合工具集合中不存在名称或描述包含查询关键字的聚合工具，THEN THE MCP API 服务 SHALL 返回空列表而非返回错误。
+4. 在智能模式下，WHEN 外部 AI 服务调用工具发现网关工具时，THE MCP API 服务 SHALL 对查询关键字做归一化、分词和常见缩写展开后，返回名称、上游原始名称、来源上游/标签或描述命中任一展开后有效词元的聚合工具列表；结果按命中词元数量与字段权重降序稳定排序，返回数量默认为 50 条且可在 1 至 200 条范围内配置。
+5. 在智能模式下，IF 外部 AI 服务调用工具发现网关工具且当前可见聚合工具集合中无任何工具命中查询词元，或查询关键字经归一化后为空，THEN THE MCP API 服务 SHALL 返回空列表而非返回错误。
 6. 在智能模式下，WHEN 外部 AI 服务通过网关工具请求调用某个存在于当前可见聚合工具集合中的具体聚合工具时，THE MCP API 服务 SHALL 将该调用路由到对应聚合工具并返回执行结果。
 7. 在智能模式下，IF 外部 AI 服务通过网关工具请求调用的工具不存在于当前可见聚合工具集合中，THEN THE MCP API 服务 SHALL 拒绝该调用、不对任何聚合工具发起调用，并返回指示该工具不存在的错误。
 8. THE MCP API 服务 SHALL 支持以多种 MCP 传输形式（至少包含 SSE、Streamable-HTTP 与 WebSocket）对外提供聚合 MCP 能力。
 9. WHEN 外部 AI 服务请求对外 MCP API 时，THE MCP API 服务 SHALL 在暴露任何聚合工具能力之前校验请求所携带的 API Key 有效性。
+10. 在智能模式下，WHEN 工具发现网关工具的查询无任何命中时，THE MCP API 服务 SHALL 在空列表之外返回确定性排序的候选关键词与固定引导文案，且不得泄露当前可见集合之外的工具元数据。
+11. 在智能模式下，THE MCP API 服务 SHALL 对 `search_tools.query` 施加 512 个字符的服务端上限，并要求批量 `get_tool.names` 长度在 1 至 20 项；超出边界、空批量或同时传入 `name` 与 `names` 时 SHALL 返回字段级校验错误，不执行部分请求或回显超长输入。
 
 ### Requirement 12: API Key 管理
 

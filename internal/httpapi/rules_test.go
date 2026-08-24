@@ -82,7 +82,8 @@ func TestToolPolicyCRUDRoutes(t *testing.T) {
 		RiskTags:        []string{"外发"},
 		IgnoredRiskTags: []string{"send"},
 	}}}
-	e := newTestEngine(Deps{RuleValidator: fakeRuleValidator{}, ToolPolicyStore: store})
+	agg := &fakeAggregationTools{}
+	e := newTestEngine(Deps{RuleValidator: fakeRuleValidator{}, ToolPolicyStore: store, Aggregation: agg})
 
 	w := doJSON(e, http.MethodGet, "/api/admin/tool-policies", "")
 	if w.Code != http.StatusOK {
@@ -126,6 +127,9 @@ func TestToolPolicyCRUDRoutes(t *testing.T) {
 	}
 	if store.deleted != "policy-1" {
 		t.Fatalf("删除目标不符合预期：%q", store.deleted)
+	}
+	if agg.clearCalls != 4 {
+		t.Fatalf("每次成功的工具策略写入都应清理工具结果缓存，实际 %d", agg.clearCalls)
 	}
 }
 

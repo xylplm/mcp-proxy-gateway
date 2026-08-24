@@ -220,6 +220,7 @@ func (r *Router) bulkRiskOverride(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
+	r.invalidateToolSetCache()
 	r.recordUpdate(c, audit.ResourceSetting, "ai-risk-bulk-override")
 	respondOK(c, gin.H{"items": updated, "updated": len(updated)})
 }
@@ -236,6 +237,7 @@ func (r *Router) setRiskOverride(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
+	r.invalidateToolSetCache()
 	r.recordUpdate(c, audit.ResourceSetting, item.ID)
 	respondOK(c, item)
 }
@@ -248,6 +250,7 @@ func (r *Router) clearRiskOverride(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
+	r.invalidateToolSetCache()
 	r.recordUpdate(c, audit.ResourceSetting, item.ID)
 	respondOK(c, item)
 }
@@ -276,6 +279,7 @@ func (r *Router) reconcileRiskCatalog(c *gin.Context) {
 		total.Removed += result.Removed
 		total.Current += result.Current
 	}
+	r.invalidateToolSetCache()
 	r.recordUpdate(c, audit.ResourceSetting, "ai-risk-reconcile")
 	respondOK(c, total)
 }

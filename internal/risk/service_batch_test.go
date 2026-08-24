@@ -11,10 +11,11 @@ import (
 
 type batchTestCatalog struct {
 	applied atomic.Int32
+	item    Assessment
 }
 
 func (c *batchTestCatalog) Get(context.Context, string, string) (Assessment, error) {
-	return Assessment{}, nil
+	return c.item, nil
 }
 
 func (c *batchTestCatalog) ListAssessable(context.Context, int) ([]Assessment, error) {
@@ -33,6 +34,36 @@ func (c *batchTestCatalog) ApplyAIResult(context.Context, string, string, AIResu
 func (c *batchTestCatalog) MarkAIError(context.Context, string, string, string) error {
 	return nil
 }
+
+type observerTestProviders struct {
+	provider Provider
+}
+
+func (p *observerTestProviders) Create(_ context.Context, provider Provider) (Provider, error) {
+	p.provider = provider
+	return provider, nil
+}
+
+func (p *observerTestProviders) Update(_ context.Context, provider Provider) (Provider, error) {
+	p.provider = provider
+	return provider, nil
+}
+
+func (p *observerTestProviders) Get(context.Context, string) (Provider, error) {
+	return p.provider, nil
+}
+
+func (p *observerTestProviders) Active(context.Context) (Provider, error) {
+	return p.provider, nil
+}
+
+func (p *observerTestProviders) List(context.Context) ([]Provider, error) {
+	return []Provider{p.provider}, nil
+}
+
+func (p *observerTestProviders) Activate(context.Context, string) error { return nil }
+
+func (p *observerTestProviders) Delete(context.Context, string) error { return nil }
 
 func TestProcessBatchSplitsRetryableProviderFailure(t *testing.T) {
 	var requests atomic.Int32
@@ -84,5 +115,51 @@ func TestProcessBatchSplitsRetryableProviderFailure(t *testing.T) {
 	}
 	if catalog.applied.Load() != 2 || requests.Load() != 5 {
 		t.Fatalf("请求或写入次数不符: requests=%d applied=%d", requests.Load(), catalog.applied.Load())
+	}
+}
+
+func TestReassessToolNotifiesCatalogObserverAfterSuccessfulPersist(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		content, err := json.Marshal(map[string]any{"assessments": []AIResult{{
+			ToolID:            "up:read",
+			FunctionSummaryZh: "读取工具信息",
+			RiskLevel:         LevelLow,
+			RiskTags:          []string{"read"},
+			Confidence:        0.9,
+			Reason:            "只读",
+			ReviewReason:      "none",
+		}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{map[string]any{"message": map[string]any{"content": string(content)}}},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}))
+	defer server.Close()
+
+	catalog := &batchTestCatalog{item: Assessment{
+		UpstreamID: "up", OriginalName: "read", ExposedName: "read", Description: "读取数据",
+	}}
+	providers := &observerTestProviders{provider: Provider{
+		ID: "provider-1", Name: "mock", BaseURL: server.URL, APIStyle: APIStyleChatCompletions,
+		Model: "mock", Enabled: true, TimeoutS: 2, BatchSize: 1, MaxConcurrency: 1,
+	}}
+	var notifications atomic.Int32
+	service := NewGovernanceService(
+		providers,
+		catalog,
+		nil,
+		nil,
+		WithCatalogChangeObserver(func() { notifications.Add(1) }),
+	)
+
+	if _, err := service.ReassessTool(context.Background(), "up", "read"); err != nil {
+		t.Fatal(err)
+	}
+	if catalog.applied.Load() != 1 || notifications.Load() != 1 {
+		t.Fatalf("successful reassessment must persist then notify exactly once: applied=%d notifications=%d", catalog.applied.Load(), notifications.Load())
 	}
 }

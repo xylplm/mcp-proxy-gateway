@@ -422,7 +422,8 @@ func TestCreateSuccessPersistsPlaintextCredential(t *testing.T) {
 	row.Config = cfg
 
 	repo := &testUpstreamRepo{createRow: row}
-	m := New(repo, &testToolCacheCleaner{}, nil, nil)
+	invalidations := 0
+	m := New(repo, &testToolCacheCleaner{}, nil, nil, WithToolSetCacheInvalidator(func() { invalidations++ }))
 
 	up, err := m.Create(context.Background(), cfg)
 	if err != nil {
@@ -439,6 +440,9 @@ func TestCreateSuccessPersistsPlaintextCredential(t *testing.T) {
 	}
 	if up.ID != "up-1" {
 		t.Errorf("期望返回 ID 为 up-1，实际 %q", up.ID)
+	}
+	if invalidations != 1 {
+		t.Errorf("创建成功后应失效聚合集缓存一次，实际 %d", invalidations)
 	}
 }
 
@@ -868,7 +872,8 @@ func TestSetEnabledPassesThrough(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			row := testUpstreamRowWithID("up-x")
 			repo := &testUpstreamRepo{getRow: &row}
-			m := New(repo, &testToolCacheCleaner{}, nil, nil)
+			invalidations := 0
+			m := New(repo, &testToolCacheCleaner{}, nil, nil, WithToolSetCacheInvalidator(func() { invalidations++ }))
 
 			if err := m.SetEnabled(context.Background(), "up-x", tc.enabled); err != nil {
 				t.Fatalf("SetEnabled 不应返回错误：%v", err)
@@ -878,6 +883,9 @@ func TestSetEnabledPassesThrough(t *testing.T) {
 			}
 			if repo.lastEnabledID != "up-x" || repo.lastEnabled != tc.enabled {
 				t.Errorf("期望透传 (up-x, %v)，实际 (%q, %v)", tc.enabled, repo.lastEnabledID, repo.lastEnabled)
+			}
+			if invalidations != 1 {
+				t.Errorf("启停成功后应失效聚合集缓存一次，实际 %d", invalidations)
 			}
 		})
 	}

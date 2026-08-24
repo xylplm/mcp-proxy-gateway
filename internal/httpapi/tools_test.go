@@ -10,23 +10,24 @@ import (
 )
 
 type fakeAggregationTools struct {
-	tools       []domain.ToolDef
-	details     []domain.ToolDetail
-	err         error
-	invoke      domain.ToolResult
-	invokeErr   error
-	cacheStats  domain.ToolResultCacheStats
-	clearResult domain.ToolResultCacheClearResult
-	setCalls    int
-	detailCalls int
-	invokeCalls int
-	statsCalls  int
-	clearCalls  int
-	invokeKey   string
-	invokeName  string
-	invokeArgs  json.RawMessage
-	detailKey   string
-	clearFilter domain.ToolResultCacheClearFilter
+	tools         []domain.ToolDef
+	details       []domain.ToolDetail
+	err           error
+	invoke        domain.ToolResult
+	invokeErr     error
+	cacheStats    domain.ToolResultCacheStats
+	clearResult   domain.ToolResultCacheClearResult
+	setCalls      int
+	detailCalls   int
+	invokeCalls   int
+	statsCalls    int
+	clearCalls    int
+	invokeKey     string
+	invokeName    string
+	invokeArgs    json.RawMessage
+	detailKey     string
+	clearFilter   domain.ToolResultCacheClearFilter
+	invalidations int
 }
 
 func (f *fakeAggregationTools) BuildToolSet(context.Context, string) ([]domain.ToolDef, error) {
@@ -63,6 +64,10 @@ func (f *fakeAggregationTools) ClearToolResultCache(filter domain.ToolResultCach
 	f.clearCalls++
 	f.clearFilter = filter
 	return f.clearResult
+}
+
+func (f *fakeAggregationTools) InvalidateToolSetCache() {
+	f.invalidations++
 }
 
 func TestGetAggregatedToolSummaryUsesToolSetOnly(t *testing.T) {

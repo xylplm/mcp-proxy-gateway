@@ -427,6 +427,31 @@ type Router struct {
 	goroutineLeakInFlight atomic.Bool
 }
 
+// invalidateToolSetCache makes visibility-affecting administrative writes
+// visible immediately. The capability is optional so the HTTP composition
+// layer keeps its existing narrow aggregation dependency and remains easy to
+// test with lightweight fakes.
+func (r *Router) invalidateToolSetCache() {
+	if r == nil {
+		return
+	}
+	if invalidator, ok := r.aggregation.(interface{ InvalidateToolSetCache() }); ok {
+		invalidator.InvalidateToolSetCache()
+	}
+}
+
+// invalidateToolResultCache handles policy-only writes. Tool policies do not
+// change discovery visibility, but they do change whether and for how long a
+// previous call result may be reused.
+func (r *Router) invalidateToolResultCache() {
+	if r == nil {
+		return
+	}
+	if cache, ok := r.aggregation.(ToolResultCacheService); ok {
+		cache.ClearToolResultCache(domain.ToolResultCacheClearFilter{})
+	}
+}
+
 // RuntimeEnvironmentService 为管理台「运行环境」页的窄接口。
 type RuntimeEnvironmentService interface {
 	Policy() rtenv.Policy

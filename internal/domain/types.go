@@ -54,9 +54,9 @@ type ToolDef struct {
 	UpstreamID string `json:"upstreamId"`
 	// Order 继承所属上游 MCP 的排序顺序。
 	Order int `json:"order"`
-	// SourceCount 表示该对外工具背后的来源上游数量，仅用于管理台展示。
+	// SourceCount 表示该对外工具背后的来源上游数量，用于管理台和智能模式消歧展示。
 	SourceCount int `json:"sourceCount,omitempty"`
-	// SchemaConflict 表示同名来源中存在与对外展示 schema 不一致的工具，仅用于管理台提示。
+	// SchemaConflict 表示同名来源中存在与对外展示 schema 不一致的工具，用于调用前提示。
 	SchemaConflict bool `json:"schemaConflict,omitempty"`
 }
 
@@ -101,8 +101,11 @@ type ToolResultCacheClearResult struct {
 
 // ToolSourceView 是管理台展示某个对外工具来源上游的只读视图。
 type ToolSourceView struct {
-	UpstreamID          string             `json:"upstreamId"`
-	UpstreamName        string             `json:"upstreamName"`
+	UpstreamID   string `json:"upstreamId"`
+	UpstreamName string `json:"upstreamName"`
+	// UpstreamTags are the source's current administrative labels. They are
+	// informational only and let Smart-mode search describe similar tools.
+	UpstreamTags        []string           `json:"upstreamTags,omitempty"`
 	OriginalName        string             `json:"originalName"`
 	Description         string             `json:"description"`
 	InputSchema         json.RawMessage    `json:"inputSchema"`
@@ -120,6 +123,16 @@ type ToolDetail struct {
 	Tool    ToolDef          `json:"tool"`
 	Sources []ToolSourceView `json:"sources"`
 	Policy  *ToolPolicyView  `json:"policy,omitempty"`
+}
+
+// ToolDiscovery is the compact, policy-free projection used by Smart-mode
+// discovery. Tool intentionally omits InputSchema: callers only use its
+// identity, text, and disambiguation metadata, while get_tool loads a full
+// authorized definition on demand.
+type ToolDiscovery struct {
+	Tool          ToolDef
+	UpstreamNames []string
+	UpstreamTags  []string
 }
 
 // UpstreamConfig 表示上游 MCP 服务的配置。

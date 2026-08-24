@@ -97,6 +97,7 @@ func (r *Router) importBackup(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
+	r.invalidateToolSetCache()
 
 	restartRequested := false
 	if r.settingsRuntime != nil {

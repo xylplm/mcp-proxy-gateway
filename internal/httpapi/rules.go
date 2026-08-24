@@ -145,6 +145,7 @@ func (r *Router) createAlias(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
+	r.invalidateToolSetCache()
 	r.recordCreate(c, audit.ResourceRule, req.Pattern)
 	respondCreated(c, created)
 }
@@ -183,6 +184,7 @@ func (r *Router) updateAlias(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
+	r.invalidateToolSetCache()
 	r.recordUpdate(c, audit.ResourceRule, c.Param("ruleId"))
 	respondOK(c, updated)
 }
@@ -197,6 +199,7 @@ func (r *Router) deleteAlias(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
+	r.invalidateToolSetCache()
 	r.recordDelete(c, audit.ResourceRule, c.Param("ruleId"))
 	respondNoContent(c)
 }
@@ -262,6 +265,7 @@ func (r *Router) createMCPFilter(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
+	r.invalidateToolSetCache()
 	r.recordCreate(c, audit.ResourceRule, req.Pattern)
 	respondCreated(c, created)
 }
@@ -301,6 +305,7 @@ func (r *Router) updateMCPFilter(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
+	r.invalidateToolSetCache()
 	r.recordUpdate(c, audit.ResourceRule, c.Param("ruleId"))
 	respondOK(c, updated)
 }
@@ -339,6 +344,7 @@ func (r *Router) setMCPFilterEnabled(c *gin.Context, enabled bool) {
 		respondError(c, err)
 		return
 	}
+	r.invalidateToolSetCache()
 	r.recordUpdate(c, audit.ResourceRule, c.Param("ruleId"))
 	respondOK(c, gin.H{"id": c.Param("ruleId"), "enabled": enabled})
 }
@@ -353,6 +359,7 @@ func (r *Router) deleteMCPFilter(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
+	r.invalidateToolSetCache()
 	r.recordDelete(c, audit.ResourceRule, c.Param("ruleId"))
 	respondNoContent(c)
 }
@@ -400,6 +407,7 @@ func (r *Router) createToolPolicy(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
+	r.invalidateToolResultCache()
 	r.recordCreate(c, audit.ResourceRule, req.Pattern)
 	respondCreated(c, created)
 }
@@ -424,6 +432,7 @@ func (r *Router) updateToolPolicy(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
+	r.invalidateToolResultCache()
 	r.recordUpdate(c, audit.ResourceRule, c.Param("ruleId"))
 	respondOK(c, updated)
 }
@@ -445,6 +454,7 @@ func (r *Router) setToolPolicyEnabled(c *gin.Context, enabled bool) {
 		respondError(c, err)
 		return
 	}
+	r.invalidateToolResultCache()
 	r.recordUpdate(c, audit.ResourceRule, c.Param("ruleId"))
 	respondOK(c, gin.H{"id": c.Param("ruleId"), "enabled": enabled})
 }
@@ -458,6 +468,7 @@ func (r *Router) deleteToolPolicy(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
+	r.invalidateToolResultCache()
 	r.recordDelete(c, audit.ResourceRule, c.Param("ruleId"))
 	respondNoContent(c)
 }

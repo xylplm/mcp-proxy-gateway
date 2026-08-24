@@ -174,6 +174,7 @@ func (r *Router) updateAPIKeyUpstreamAccess(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
+	r.invalidateToolSetCache()
 	r.recordUpdate(c, audit.ResourceAPIKey, c.Param("id"))
 	respondOK(c, cfg)
 }
@@ -234,6 +235,7 @@ func (r *Router) updateAPIKeyRiskProfile(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
+	r.invalidateToolSetCache()
 	r.recordUpdate(c, audit.ResourceAPIKey, c.Param("id"))
 	respondOK(c, gin.H{"id": c.Param("id"), "riskProfile": req.RiskProfile})
 }
@@ -383,6 +385,7 @@ func (r *Router) createAPIKeyFilter(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
+	r.invalidateToolSetCache()
 	r.recordCreate(c, audit.ResourceAPIKey, req.Pattern)
 	respondCreated(c, created)
 }
@@ -407,6 +410,7 @@ func (r *Router) setAPIKeyFilterEnabled(c *gin.Context, enabled bool) {
 		respondError(c, err)
 		return
 	}
+	r.invalidateToolSetCache()
 	r.recordUpdate(c, audit.ResourceAPIKey, c.Param("ruleId"))
 	respondOK(c, gin.H{"id": c.Param("ruleId"), "enabled": enabled})
 }
@@ -421,6 +425,7 @@ func (r *Router) deleteAPIKeyFilter(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
+	r.invalidateToolSetCache()
 	r.recordDelete(c, audit.ResourceAPIKey, c.Param("ruleId"))
 	respondNoContent(c)
 }

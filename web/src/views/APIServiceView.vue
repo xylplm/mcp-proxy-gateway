@@ -962,7 +962,7 @@ const errClass = 'mt-1 text-xs text-error-500'
 
         <div v-if="endpointTab === 'smart'" class="mt-3 rounded-lg border border-warning-200 bg-warning-50/80 p-3 dark:border-warning-500/30 dark:bg-warning-500/10">
           <p class="text-xs leading-5 text-warning-700 dark:text-warning-300">
-            智能模式通过 4 个网关工具（list_tools / search_tools / get_tool / call_tool）按需发现和调用真实工具，减少客户端工具噪音和上下文占用。但部分模型可能不支持分步骤获取工具信息的交互模式，导致无法正确使用网关工具。
+            智能模式通过 4 个网关工具（list_tools / search_tools / get_tool / call_tool）按需发现和调用真实工具，减少客户端工具噪音和上下文占用。搜索支持多个关键词、常见缩写和上游来源筛选；无结果时会给出下一步建议。但部分模型可能不支持分步骤获取工具信息的交互模式，导致无法正确使用网关工具。
           </p>
         </div>
 

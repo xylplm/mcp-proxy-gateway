@@ -16,7 +16,7 @@ import (
 //
 // 任务 13.4 的 endpoints_test.go 已覆盖「全量模式」下三种传输（SSE/Streamable-HTTP/WebSocket）
 // 的工具列表与调用；本文件作为互补，覆盖「智能模式」下三种传输的端到端路径：
-//   - 经网关工具 list_tools 发现当前可见聚合工具（工具列表）；
+//   - 经网关工具 list_tools / search_tools / get_tool 发现并获取当前可见聚合工具；
 //   - 经网关工具 call_tool 路由到具体聚合工具并原样回传结果（工具调用）。
 //
 // 这样三种对外传输在两种模式（全量 + 智能）下的「工具列表 + 工具调用」均有端到端用例覆盖，
@@ -71,9 +71,51 @@ func epCallToolViaGateway(t *testing.T, cs *mcp.ClientSession, name string, args
 	return res
 }
 
-// epAssertSmartModeDiscoverAndCall 在智能模式下断言：
-//  1. 经 list_tools 能发现全部可见聚合工具（工具列表）；
-//  2. 经 call_tool 能路由到具体聚合工具且原始参数透传（工具调用）。
+func epSearchToolsViaGateway(t *testing.T, cs *mcp.ClientSession, query string) SearchPage {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name:      GatewayToolSearchTools,
+		Arguments: map[string]any{"query": query},
+	})
+	if err != nil || res.IsError || len(res.Content) == 0 {
+		t.Fatalf("调用网关工具 search_tools 失败：res=%+v err=%v", res, err)
+	}
+	text, ok := res.Content[0].(*mcp.TextContent)
+	if !ok {
+		t.Fatalf("search_tools 返回内容类型应为文本，got=%T", res.Content[0])
+	}
+	var page SearchPage
+	if err := json.Unmarshal([]byte(text.Text), &page); err != nil {
+		t.Fatalf("解析 search_tools 结果失败：%v，raw=%s", err, text.Text)
+	}
+	return page
+}
+
+func epGetToolsViaGateway(t *testing.T, cs *mcp.ClientSession, names []string) ToolBatch {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name:      GatewayToolGetTool,
+		Arguments: map[string]any{"names": names},
+	})
+	if err != nil || res.IsError || len(res.Content) == 0 {
+		t.Fatalf("调用网关工具 get_tool 失败：res=%+v err=%v", res, err)
+	}
+	text, ok := res.Content[0].(*mcp.TextContent)
+	if !ok {
+		t.Fatalf("get_tool 返回内容类型应为文本，got=%T", res.Content[0])
+	}
+	var batch ToolBatch
+	if err := json.Unmarshal([]byte(text.Text), &batch); err != nil {
+		t.Fatalf("解析 get_tool 批量结果失败：%v，raw=%s", err, text.Text)
+	}
+	return batch
+}
+
+// epAssertSmartModeDiscoverAndCall 在智能模式下断言发现、获取与调用在每种传输下均可用。
 func epAssertSmartModeDiscoverAndCall(t *testing.T, cs *mcp.ClientSession, agg *epFakeAggregation) {
 	t.Helper()
 
@@ -88,6 +130,15 @@ func epAssertSmartModeDiscoverAndCall(t *testing.T, cs *mcp.ClientSession, agg *
 	}
 	if !names["fs_read"] || !names["db_query"] {
 		t.Fatalf("list_tools 未返回预期工具，got=%v", names)
+	}
+
+	search := epSearchToolsViaGateway(t, cs, "query")
+	if len(search.Tools) != 1 || search.Tools[0].Name != "db_query" {
+		t.Fatalf("search_tools 未返回预期工具：%+v", search)
+	}
+	batch := epGetToolsViaGateway(t, cs, []string{"db_query", "missing"})
+	if len(batch.Tools) != 1 || batch.Tools[0].Name != "db_query" || len(batch.NotFound) != 1 || batch.NotFound[0] != "missing" {
+		t.Fatalf("get_tool 批量结果不符合预期：%+v", batch)
 	}
 
 	// 工具调用：call_tool 应路由到聚合服务并透传原始参数。

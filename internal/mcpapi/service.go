@@ -1,11 +1,13 @@
 package mcpapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"runtime/debug"
+	"strings"
 	"sync"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -192,24 +194,27 @@ func (s *Service) recoverToolHandler(mode, toolName string, next mcp.ToolHandler
 
 // listToolsArgs 为网关工具 list_tools 的入参。
 type listToolsArgs struct {
-	Cursor string `json:"cursor"`
-	Limit  int    `json:"limit"`
+	Cursor   string `json:"cursor"`
+	Limit    int    `json:"limit"`
+	Upstream string `json:"upstream"`
 }
 
 // searchToolsArgs 为网关工具 search_tools 的入参。
 type searchToolsArgs struct {
-	Query string `json:"query"`
-	Limit int    `json:"limit"`
+	Query  *string `json:"query"`
+	Cursor string  `json:"cursor"`
+	Limit  int     `json:"limit"`
 }
 
 // nameArg 为网关工具 get_tool 的入参（仅目标工具名）。
 type nameArg struct {
-	Name string `json:"name"`
+	Name  *string   `json:"name"`
+	Names *[]string `json:"names"`
 }
 
 // callToolArgs 为网关工具 call_tool 的入参：目标工具名 + 透传给该工具的原始入参。
 type callToolArgs struct {
-	Name      string          `json:"name"`
+	Name      *string         `json:"name"`
 	Arguments json.RawMessage `json:"arguments"`
 }
 
@@ -219,7 +224,7 @@ func (s *Service) handleGatewayListTools(ctx context.Context, apiKeyID string, r
 	if err != nil {
 		return nil, err
 	}
-	page, err := smart.ListTools(ctx, apiKeyID, args.Cursor, args.Limit)
+	page, err := smart.ListTools(ctx, apiKeyID, args.Cursor, args.Upstream, args.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -232,14 +237,16 @@ func (s *Service) handleGatewaySearchTools(ctx context.Context, apiKeyID string,
 	if err != nil {
 		return nil, err
 	}
-	tools, err := smart.SearchTools(ctx, apiKeyID, args.Query, args.Limit)
+	if args.Query == nil {
+		return nil, domain.NewValidationError("网关工具入参非法", map[string]string{
+			"query": "必须提供 query",
+		})
+	}
+	page, err := smart.SearchTools(ctx, apiKeyID, *args.Query, args.Cursor, args.Limit)
 	if err != nil {
 		return nil, err
 	}
-	// 与 list_tools 返回结构对齐：包一层 tools 字段，无匹配时为空数组（Req 11.5）。
-	return jsonResult(struct {
-		Tools []ToolSummary `json:"tools"`
-	}{Tools: tools})
+	return jsonResult(page)
 }
 
 // handleGatewayGetTool 处理 get_tool：解析目标名 → 智能模式查找 → 完整定义 JSON 回传。
@@ -248,7 +255,24 @@ func (s *Service) handleGatewayGetTool(ctx context.Context, apiKeyID string, raw
 	if err != nil {
 		return nil, err
 	}
-	tool, err := smart.GetTool(ctx, apiKeyID, args.Name)
+	if args.Names != nil {
+		if args.Name != nil {
+			return nil, domain.NewValidationError("网关工具入参非法", map[string]string{
+				"name": "name 与 names 不能同时提供",
+			})
+		}
+		batch, err := smart.GetTools(ctx, apiKeyID, *args.Names)
+		if err != nil {
+			return nil, err
+		}
+		return jsonResult(batch)
+	}
+	if args.Name == nil || strings.TrimSpace(*args.Name) == "" {
+		return nil, domain.NewValidationError("网关工具入参非法", map[string]string{
+			"name": "必须提供 name 或非空 names",
+		})
+	}
+	tool, err := smart.GetTool(ctx, apiKeyID, *args.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -264,7 +288,20 @@ func (s *Service) handleGatewayCallTool(ctx context.Context, apiKeyID string, ra
 	if err != nil {
 		return nil, err
 	}
-	return smart.CallTool(ctx, apiKeyID, args.Name, args.Arguments)
+	if args.Name == nil || strings.TrimSpace(*args.Name) == "" {
+		return nil, domain.NewValidationError("网关工具入参非法", map[string]string{
+			"name": "必须提供非空 name",
+		})
+	}
+	if len(args.Arguments) > 0 {
+		var object map[string]json.RawMessage
+		if err := json.Unmarshal(args.Arguments, &object); err != nil || object == nil {
+			return nil, domain.NewValidationError("网关工具入参非法", map[string]string{
+				"arguments": "必须为 JSON 对象",
+			})
+		}
+	}
+	return smart.CallTool(ctx, apiKeyID, *args.Name, args.Arguments)
 }
 
 // decodeGatewayArgs 将网关工具的原始入参字节反序列化为类型化入参 T。
@@ -275,6 +312,12 @@ func decodeGatewayArgs[T any](raw json.RawMessage) (T, error) {
 	var args T
 	if len(raw) == 0 {
 		return args, nil
+	}
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return args, domain.NewValidationError(
+			"网关工具入参非法",
+			map[string]string{"arguments": "必须为合法 JSON 对象"},
+		)
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return args, domain.NewValidationError(
