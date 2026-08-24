@@ -647,8 +647,9 @@ onBeforeUnmount(() => {
                   ]"
                   >{{ riskLevelLabel[item.effectiveLevel] }}</span
                 ><span class="text-xs text-gray-500">{{ riskStatusLabel[item.status] }}</span>
-                <!-- md 以下把 AI/下限、置信度内联在名称行附近，减少垂直高度 -->
-                <span class="hidden text-xs text-gray-400 md:hidden sm:inline-flex gap-1">
+                <!-- lg 以下把 AI/下限、置信度内联在名称行附近，减少垂直高度；
+                     lg 及以上改用右侧独立列展示，两者互补覆盖不留断点缝隙 -->
+                <span class="inline-flex gap-1 text-xs text-gray-400 lg:hidden">
                   <span>{{ item.aiLevel ? riskLevelLabel[item.aiLevel] : '—' }}/{{ riskLevelLabel[item.deterministicFloor] }}</span>
                   <span class="text-gray-300">·</span>
                   <span>{{ item.aiConfidence == null ? '—' : `${Math.round(item.aiConfidence * 100)}%` }}</span>
