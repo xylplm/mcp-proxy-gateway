@@ -56,7 +56,7 @@ export default defineConfig({
     // 开发态把后端路由代理到 Go 网关，避免 Vite SPA fallback 把
     // /api/* 等路径吞成 index.html（导致前端拿到 HTML 而非 JSON）。
     proxy: {
-      '/api': { target: BACKEND_URL, changeOrigin: true },
+      '^/api(?:/|$)': { target: BACKEND_URL, changeOrigin: true },
       '/mcp': { target: BACKEND_URL, changeOrigin: true, ws: true },
       '/healthz': { target: BACKEND_URL, changeOrigin: true },
     },

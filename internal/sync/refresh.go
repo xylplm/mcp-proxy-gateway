@@ -25,6 +25,12 @@ type ToolFetcher interface {
 	FetchTools(ctx context.Context, upstreamID string) ([]domain.ToolDef, error)
 }
 
+// ToolCatalogObserver 在缓存成功替换后接收风险目录对账通知。
+// 实现错误只记录，不影响同步成功结果。
+type ToolCatalogObserver interface {
+	ToolsReplaced(ctx context.Context, upstreamID string, tools []domain.ToolDef) error
+}
+
 // Refresher 实现手动刷新某上游 MCP 工具列表的能力（Req 6.4、6.5）。
 //
 // 它复用与周期同步相同的「拉取 → 整列表替换缓存」逻辑（见 pullAndReplace）：
@@ -32,10 +38,16 @@ type ToolFetcher interface {
 //   - 拉取或写入失败：保留该上游最近一次成功缓存的工具列表，并返回指示刷新失败的
 //     错误（Req 6.5）。
 type Refresher struct {
-	fetcher ToolFetcher
-	cache   domain.Tool_Cache
-	timeout time.Duration
-	logger  *slog.Logger
+	fetcher  ToolFetcher
+	cache    domain.Tool_Cache
+	timeout  time.Duration
+	logger   *slog.Logger
+	observer ToolCatalogObserver
+}
+
+func (r *Refresher) SetObserver(observer ToolCatalogObserver) *Refresher {
+	r.observer = observer
+	return r
 }
 
 // NewRefresher 构造手动刷新器。
@@ -54,7 +66,28 @@ func NewRefresher(fetcher ToolFetcher, cache domain.Tool_Cache, timeout time.Dur
 // 走与周期同步相同的拉取逻辑：成功则立即整列表替换缓存并返回最新列表；失败则保留
 // 旧缓存（绝不写入）并返回刷新失败错误。
 func (r *Refresher) Refresh(ctx context.Context, upstreamID string) ([]domain.ToolDef, error) {
-	return pullAndReplace(ctx, r.fetcher, r.cache, upstreamID, r.timeout, r.logger)
+	tools, err := pullAndReplace(ctx, r.fetcher, r.cache, upstreamID, r.timeout, r.logger)
+	if err == nil {
+		notifyObserver(ctx, r.observer, upstreamID, tools, r.logger)
+	}
+	return tools, err
+}
+
+func notifyObserver(ctx context.Context, observer ToolCatalogObserver, upstreamID string, tools []domain.ToolDef, logger *slog.Logger) {
+	if observer == nil {
+		return
+	}
+	snapshot := append([]domain.ToolDef(nil), tools...)
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				logger.Error("风险目录对账回调 panic 已恢复", "upstreamID", upstreamID, "panic", recovered)
+			}
+		}()
+		if err := observer.ToolsReplaced(context.WithoutCancel(ctx), upstreamID, snapshot); err != nil {
+			logger.Warn("风险目录异步对账失败，不影响工具同步", "upstreamID", upstreamID, "error", err)
+		}
+	}()
 }
 
 // pullAndReplace 是周期同步与手动刷新共用的最小拉取入口：从上游拉取工具列表，

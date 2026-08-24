@@ -67,7 +67,7 @@ func codeToStatus(code domain.ErrorCode) int {
 		return http.StatusConflict
 	case domain.CodeUnauthorized:
 		return http.StatusUnauthorized
-	case domain.CodeForbidden:
+	case domain.CodeForbidden, domain.CodeToolRiskForbidden:
 		return http.StatusForbidden
 	case domain.CodeRateLimited:
 		return http.StatusTooManyRequests
@@ -98,6 +98,8 @@ func codeToBusinessCode(code domain.ErrorCode) int {
 		return 40100
 	case domain.CodeForbidden:
 		return 40300
+	case domain.CodeToolRiskForbidden:
+		return 40301
 	case domain.CodeNotFound:
 		return 40400
 	case domain.CodeToolNotFound:

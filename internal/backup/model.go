@@ -3,6 +3,7 @@ package backup
 import (
 	"github.com/myGithub/mcp-proxy-gateway/internal/config"
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
+	"github.com/myGithub/mcp-proxy-gateway/internal/risk"
 	"github.com/myGithub/mcp-proxy-gateway/internal/store"
 )
 
@@ -37,6 +38,16 @@ type BusinessConfig struct {
 	ToolPolicyRules []domain.ToolPolicyRule `json:"toolPolicyRules,omitempty"`
 	// APIKeys 为全部 API Key 元数据及其从属的屏蔽规则与来源白名单。
 	APIKeys []APIKeyEntry `json:"apiKeys"`
+	// AIProviders 包含加密后的 Provider 密钥，不包含环境主密钥。
+	AIProviders []AIProviderEntry `json:"aiProviders,omitempty"`
+	// ToolRisks 保留风险目录与人工覆盖历史。
+	ToolRisks []risk.Assessment `json:"toolRisks,omitempty"`
+}
+
+type AIProviderEntry struct {
+	Provider      risk.Provider `json:"provider"`
+	KeyCiphertext []byte        `json:"keyCiphertext,omitempty"`
+	KeyNonce      []byte        `json:"keyNonce,omitempty"`
 }
 
 // UpstreamEntry 为单个上游 MCP 的备份条目。
@@ -56,4 +67,6 @@ type APIKeyEntry struct {
 	FilterRules []domain.FilterRule `json:"filterRules"`
 	// ACLCIDRs 为该 API Key 的来源白名单 CIDR 列表。
 	ACLCIDRs []string `json:"aclCidrs"`
+	// UpstreamIDs 为 selected 模式下允许访问的上游标识。
+	UpstreamIDs []string `json:"upstreamIds,omitempty"`
 }

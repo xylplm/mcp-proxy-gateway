@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
+	"github.com/myGithub/mcp-proxy-gateway/internal/risk"
 	"github.com/myGithub/mcp-proxy-gateway/internal/store"
 )
 
@@ -48,6 +49,7 @@ type APIKeyRepository interface {
 	SetEnabled(ctx context.Context, id string, enabled bool) error
 	// Delete 删除一条 API Key；不存在返回 NOT_FOUND。
 	Delete(ctx context.Context, id string) error
+	SetRiskProfile(ctx context.Context, id string, profile risk.Profile) error
 }
 
 // Metadata 为 API Key 的对外元数据视图。
@@ -77,6 +79,10 @@ type Metadata struct {
 	QuotaPerMonth *int `json:"quotaPerMonth,omitempty"`
 	// CreatedAt 为创建时间。
 	CreatedAt time.Time `json:"createdAt"`
+	// RiskProfile 决定该 Key 可发现和调用的工具风险上限。
+	RiskProfile risk.Profile `json:"riskProfile"`
+	// UpstreamAccessMode 表示允许全部上游或仅允许已选上游。
+	UpstreamAccessMode UpstreamAccessMode `json:"upstreamAccessMode"`
 }
 
 // IsExpired 判断该 API Key 在给定时刻 now 是否已超过有效期（Req 12.6）。
@@ -109,6 +115,8 @@ type CreateInput struct {
 	Name string
 	// ExpiresAt 为可选有效期；nil 表示永不过期（Req 12.6）。
 	ExpiresAt *time.Time
+	// RiskProfile 缺省归一化为 standard；legacy 仅用于已有 Key 兼容迁移。
+	RiskProfile risk.Profile
 }
 
 // Manager 是 API Key 管理器（ApiKey_Manager）的实现。
@@ -140,6 +148,15 @@ func (m *Manager) Create(ctx context.Context, in CreateInput) (Created, error) {
 	if err := validateName(in.Name); err != nil {
 		return Created{}, err
 	}
+	profile := in.RiskProfile
+	if profile == "" {
+		profile = risk.ProfileStandard
+	}
+	if !risk.ValidProfile(profile) {
+		return Created{}, domain.NewValidationError("API Key 风险档案校验失败", map[string]string{
+			"riskProfile": "仅支持 readonly、standard、privileged 或 legacy_unrestricted",
+		})
+	}
 
 	plaintext, hash, prefix, err := generateKey()
 	if err != nil {
@@ -147,18 +164,29 @@ func (m *Manager) Create(ctx context.Context, in CreateInput) (Created, error) {
 	}
 
 	row, err := m.repo.Create(ctx, store.APIKey{
-		Name:      in.Name,
-		KeyHash:   hash,
-		KeyPlain:  plaintext,
-		KeyPrefix: prefix,
-		Enabled:   true, // 初始启用（Req 12.1）。
-		ExpiresAt: in.ExpiresAt,
+		Name:        in.Name,
+		KeyHash:     hash,
+		KeyPlain:    plaintext,
+		KeyPrefix:   prefix,
+		Enabled:     true, // 初始启用（Req 12.1）。
+		ExpiresAt:   in.ExpiresAt,
+		RiskProfile: profile,
 	})
 	if err != nil {
 		return Created{}, err
 	}
 
 	return Created{Metadata: toMetadata(row)}, nil
+}
+
+// SetRiskProfile 更新 API Key 的风险授权档案。
+func (m *Manager) SetRiskProfile(ctx context.Context, id string, profile risk.Profile) error {
+	if !risk.ValidProfile(profile) {
+		return domain.NewValidationError("API Key 风险档案校验失败", map[string]string{
+			"riskProfile": "仅支持 readonly、standard、privileged 或 legacy_unrestricted",
+		})
+	}
+	return m.repo.SetRiskProfile(ctx, id, profile)
 }
 
 // Get 按标识返回单个 API Key 的元数据（含明文，供管理台二次查看/复制）；不存在返回 NOT_FOUND（Req 12.7）。
@@ -245,16 +273,18 @@ func generateKey() (plaintext string, hash []byte, prefix string, err error) {
 // 避免哈希外泄。
 func toMetadata(row store.APIKey) Metadata {
 	return Metadata{
-		ID:            row.ID,
-		Name:          row.Name,
-		PlaintextKey:  row.KeyPlain,
-		KeyPrefix:     row.KeyPrefix,
-		Enabled:       row.Enabled,
-		ExpiresAt:     row.ExpiresAt,
-		RateLimit:     row.RateLimit,
-		RateWindowS:   row.RateWindowS,
-		QuotaPerDay:   row.QuotaPerDay,
-		QuotaPerMonth: row.QuotaPerMonth,
-		CreatedAt:     row.CreatedAt,
+		ID:                 row.ID,
+		Name:               row.Name,
+		PlaintextKey:       row.KeyPlain,
+		KeyPrefix:          row.KeyPrefix,
+		Enabled:            row.Enabled,
+		ExpiresAt:          row.ExpiresAt,
+		RateLimit:          row.RateLimit,
+		RateWindowS:        row.RateWindowS,
+		QuotaPerDay:        row.QuotaPerDay,
+		QuotaPerMonth:      row.QuotaPerMonth,
+		RiskProfile:        row.RiskProfile,
+		UpstreamAccessMode: normalizeAccessMode(row.UpstreamAccessMode),
+		CreatedAt:          row.CreatedAt,
 	}
 }

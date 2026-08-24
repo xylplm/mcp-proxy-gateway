@@ -7,6 +7,8 @@
  */
 import { ref, watch } from 'vue'
 import { createAPIKey, type CreatedAPIKey } from '@/api/apikeys'
+import type { RiskProfile } from '@/api/aiRisk'
+import { riskProfileDescription, riskProfileLabel } from '@/utils/riskLevel'
 
 const props = defineProps<{ open: boolean }>()
 
@@ -19,6 +21,8 @@ const emit = defineEmits<{
 const name = ref('')
 /** datetime-local 输入值（本地时区），提交时转换为 RFC3339。 */
 const expiresAtLocal = ref('')
+const riskProfile = ref<RiskProfile>('standard')
+const riskProfiles: RiskProfile[] = ['readonly', 'standard', 'privileged', 'legacy_unrestricted']
 
 /** 提交状态与错误。 */
 const submitting = ref(false)
@@ -31,6 +35,7 @@ watch(
     if (open) {
       name.value = ''
       expiresAtLocal.value = ''
+      riskProfile.value = 'standard'
       errorMessage.value = ''
       submitting.value = false
     }
@@ -50,7 +55,7 @@ async function submit(): Promise<void> {
     // datetime-local 无时区信息，交由 Date 解析为本地时间后转 RFC3339（ISO）。
     const expiresAt =
       expiresAtLocal.value !== '' ? new Date(expiresAtLocal.value).toISOString() : null
-    const created = await createAPIKey({ name: trimmed, expiresAt })
+    const created = await createAPIKey({ name: trimmed, expiresAt, riskProfile: riskProfile.value })
     emit('created', created)
   } catch (err) {
     errorMessage.value = err instanceof Error ? err.message : '创建 API Key 失败'
@@ -69,13 +74,11 @@ async function submit(): Promise<void> {
       <div
         class="w-full max-w-md rounded-2xl border border-gray-200 bg-white p-6 shadow-xl dark:border-gray-800 dark:bg-gray-900"
       >
-        <h3 class="mb-5 text-base font-semibold text-gray-800 dark:text-white/90">
-          新建 API Key
-        </h3>
+        <h3 class="mb-5 text-base font-semibold text-gray-800 dark:text-white/90">新建 API Key</h3>
 
         <p
           v-if="errorMessage !== ''"
-          class="mb-4 rounded-lg bg-error-50 px-4 py-2.5 text-sm text-error-600 dark:bg-error-500/10 dark:text-error-400"
+          class="bg-error-50 text-error-600 dark:bg-error-500/10 dark:text-error-400 mb-4 rounded-lg px-4 py-2.5 text-sm"
         >
           {{ errorMessage }}
         </p>
@@ -89,9 +92,26 @@ async function submit(): Promise<void> {
             type="text"
             maxlength="100"
             placeholder="如：生产环境客户端"
-            class="w-full rounded-lg border border-gray-300 px-3.5 py-2.5 text-sm text-gray-800 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white/90"
+            class="focus:border-brand-400 focus:ring-brand-100 w-full rounded-lg border border-gray-300 px-3.5 py-2.5 text-sm text-gray-800 focus:ring-2 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white/90"
             @keyup.enter="submit"
           />
+        </div>
+
+        <div class="mb-4">
+          <label class="mb-1.5 block text-sm font-medium text-gray-700 dark:text-gray-300">
+            风险档案
+          </label>
+          <select
+            v-model="riskProfile"
+            class="focus:border-brand-400 focus:ring-brand-100 w-full rounded-lg border border-gray-300 px-3.5 py-2.5 text-sm text-gray-800 focus:ring-2 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white/90"
+          >
+            <option v-for="profile in riskProfiles" :key="profile" :value="profile">
+              {{ riskProfileLabel[profile] }}：{{ riskProfileDescription[profile] }}
+            </option>
+          </select>
+          <p v-if="riskProfile === 'legacy_unrestricted'" class="text-warning-600 mt-1 text-xs">
+            兼容档会跳过风险目录，仅建议用于迁移已有客户端。
+          </p>
         </div>
 
         <div class="mb-6">
@@ -101,7 +121,7 @@ async function submit(): Promise<void> {
           <input
             v-model="expiresAtLocal"
             type="datetime-local"
-            class="w-full rounded-lg border border-gray-300 px-3.5 py-2.5 text-sm text-gray-800 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white/90"
+            class="focus:border-brand-400 focus:ring-brand-100 w-full rounded-lg border border-gray-300 px-3.5 py-2.5 text-sm text-gray-800 focus:ring-2 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white/90"
           />
           <p class="mt-1 text-xs text-gray-400">留空表示永不过期。</p>
         </div>
@@ -117,7 +137,7 @@ async function submit(): Promise<void> {
           </button>
           <button
             type="button"
-            class="rounded-lg bg-brand-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-brand-600 disabled:opacity-60"
+            class="bg-brand-500 hover:bg-brand-600 rounded-lg px-4 py-2 text-sm font-medium text-white transition disabled:opacity-60"
             :disabled="submitting"
             @click="submit"
           >

@@ -46,10 +46,16 @@ type PeriodicSyncer struct {
 	// 默认 30s、可配置 5-300s）；<=0 表示不额外限制，语义与 Refresher 一致。
 	timeout time.Duration
 	// logger 用于记录同步成功/跳过/失败事件。
-	logger *slog.Logger
+	logger   *slog.Logger
+	observer ToolCatalogObserver
 
 	// inFlight 为并发去重标志：键为上游标识，存在即表示该上游正在同步（Req 7.8）。
 	inFlight sync.Map
+}
+
+func (s *PeriodicSyncer) SetObserver(observer ToolCatalogObserver) *PeriodicSyncer {
+	s.observer = observer
+	return s
 }
 
 // NewPeriodicSyncer 构造周期同步器。
@@ -101,6 +107,7 @@ func (s *PeriodicSyncer) SyncOne(ctx context.Context, upstreamID string) (ran bo
 	}
 	s.logger.Info("周期同步成功，已整列表替换工具缓存",
 		"upstreamID", upstreamID, "toolCount", len(tools))
+	notifyObserver(ctx, s.observer, upstreamID, tools, s.logger)
 	return true, nil
 }
 

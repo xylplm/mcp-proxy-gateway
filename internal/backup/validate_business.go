@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
+	"github.com/myGithub/mcp-proxy-gateway/internal/risk"
 )
 
 // validateBusiness 校验业务配置的引用完整性与字段级约束（Req 23.5、23.6）。
@@ -72,6 +73,17 @@ func validateBusiness(bc BusinessConfig) error {
 		if strings.TrimSpace(k.Meta.Name) == "" {
 			fields[prefix+".meta.name"] = "API Key 名称不能为空"
 		}
+		if k.Meta.RiskProfile != "" && !risk.ValidProfile(k.Meta.RiskProfile) {
+			fields[prefix+".meta.riskProfile"] = "API Key 风险档案无效"
+		}
+		if k.Meta.UpstreamAccessMode != "" && k.Meta.UpstreamAccessMode != "all" && k.Meta.UpstreamAccessMode != "selected" {
+			fields[prefix+".meta.upstreamAccessMode"] = "上游访问模式只能是 all 或 selected"
+		}
+		for j, id := range k.UpstreamIDs {
+			if _, ok := seenUpstreamID[id]; !ok {
+				fields[fmt.Sprintf("%s.upstreamIds[%d]", prefix, j)] = "引用的上游 MCP 不存在：" + id
+			}
+		}
 		for j, fr := range k.FilterRules {
 			if strings.TrimSpace(fr.Pattern) == "" {
 				fields[fmt.Sprintf("%s.filterRules[%d].pattern", prefix, j)] = "屏蔽规则匹配模式不能为空"
@@ -83,6 +95,40 @@ func validateBusiness(bc BusinessConfig) error {
 				if _, aerr := netip.ParseAddr(cidr); aerr != nil {
 					fields[fmt.Sprintf("%s.aclCidrs[%d]", prefix, j)] = "来源 CIDR 格式非法：" + cidr
 				}
+			}
+		}
+	}
+	seenProviderID := make(map[string]struct{})
+	for i, entry := range bc.AIProviders {
+		prefix := fmt.Sprintf("aiProviders[%d]", i)
+		if entry.Provider.ID == "" {
+			fields[prefix+".provider.id"] = "Provider 标识不能为空"
+		} else if _, exists := seenProviderID[entry.Provider.ID]; exists {
+			fields[prefix+".provider.id"] = "Provider 标识重复"
+		} else {
+			seenProviderID[entry.Provider.ID] = struct{}{}
+		}
+		if err := risk.ValidateProvider(entry.Provider); err != nil {
+			fields[prefix+".provider"] = err.Error()
+		}
+		if len(entry.KeyCiphertext) > 0 && len(entry.KeyNonce) == 0 {
+			fields[prefix+".keyNonce"] = "加密密钥 nonce 不能为空"
+		}
+	}
+	for i, item := range bc.ToolRisks {
+		prefix := fmt.Sprintf("toolRisks[%d]", i)
+		if _, ok := seenUpstreamID[item.UpstreamID]; !ok {
+			fields[prefix+".upstreamId"] = "风险记录引用了不存在的上游"
+		}
+		if item.OriginalName == "" {
+			fields[prefix+".originalName"] = "工具原始名不能为空"
+		}
+		if !risk.ValidLevel(item.Floor) {
+			fields[prefix+".deterministicFloor"] = "确定性风险下限无效"
+		}
+		if item.ProviderID != "" {
+			if _, ok := seenProviderID[item.ProviderID]; !ok {
+				fields[prefix+".providerId"] = "风险记录引用了不存在的 Provider"
 			}
 		}
 	}

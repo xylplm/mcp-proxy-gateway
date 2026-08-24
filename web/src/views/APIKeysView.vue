@@ -29,6 +29,7 @@ import {
   type CreatedAPIKey,
 } from '@/api/apikeys'
 import { apiKeyLimitSummary } from '@/utils/apiKeyLimitSummary'
+import { riskProfileLabel } from '@/utils/riskLevel'
 
 const { pageSize } = useBreakpoint()
 const { copy } = useClipboard()
@@ -69,7 +70,9 @@ const apiKeyCountLabel = computed(() => {
 })
 
 /** 总页数。 */
-const totalPages = computed(() => Math.max(1, Math.ceil(filteredAPIKeys.value.length / pageSize.value)))
+const totalPages = computed(() =>
+  Math.max(1, Math.ceil(filteredAPIKeys.value.length / pageSize.value)),
+)
 
 /** 当前页展示切片。 */
 const pagedKeys = computed(() => {
@@ -101,7 +104,10 @@ function formatTime(value?: string): string {
 }
 
 function apiKeySearchText(key: APIKey): string {
-  const expires = key.expiresAt === undefined ? '永不过期' : `${formatTime(key.expiresAt)} ${isExpired(key) ? '已过期' : '有效'}`
+  const expires =
+    key.expiresAt === undefined
+      ? '永不过期'
+      : `${formatTime(key.expiresAt)} ${isExpired(key) ? '已过期' : '有效'}`
   return [
     key.name,
     key.id,
@@ -143,6 +149,11 @@ onMounted(loadAPIKeys)
 async function onCreated(key: CreatedAPIKey): Promise<void> {
   createOpen.value = false
   created.value = key
+  await loadAPIKeys()
+}
+
+async function onConfigClosed(): Promise<void> {
+  configuring.value = null
   await loadAPIKeys()
 }
 
@@ -238,7 +249,7 @@ async function copyKey(key: APIKey): Promise<void> {
             v-model="searchKeyword"
             type="search"
             placeholder="搜索名称、前缀或密钥"
-            class="h-10 w-full rounded-lg border border-gray-300 bg-white px-3 pr-12 text-sm text-gray-800 shadow-sm transition placeholder:text-gray-400 focus:border-brand-300 focus:ring-3 focus:ring-brand-500/10 focus:outline-none dark:border-gray-700 dark:bg-gray-900 dark:text-white/90"
+            class="focus:border-brand-300 focus:ring-brand-500/10 h-10 w-full rounded-lg border border-gray-300 bg-white px-3 pr-12 text-sm text-gray-800 shadow-sm transition placeholder:text-gray-400 focus:ring-3 focus:outline-none dark:border-gray-700 dark:bg-gray-900 dark:text-white/90"
           />
           <button
             v-if="hasSearchKeyword"
@@ -256,17 +267,28 @@ async function copyKey(key: APIKey): Promise<void> {
           @click="loadAPIKeys"
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-            <path d="M4 4v6h6M20 20v-6h-6M20 9a8 8 0 0 0-15-2M4 15a8 8 0 0 0 15 2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+            <path
+              d="M4 4v6h6M20 20v-6h-6M20 9a8 8 0 0 0-15-2M4 15a8 8 0 0 0 15 2"
+              stroke="currentColor"
+              stroke-width="1.8"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
           </svg>
           刷新列表
         </button>
         <button
           type="button"
-          class="inline-flex items-center gap-1.5 rounded-lg bg-brand-500 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-brand-600"
+          class="bg-brand-500 hover:bg-brand-600 inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-medium text-white transition"
           @click="createOpen = true"
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-            <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+            <path
+              d="M12 5v14M5 12h14"
+              stroke="currentColor"
+              stroke-width="1.8"
+              stroke-linecap="round"
+            />
           </svg>
           新建 API Key
         </button>
@@ -277,7 +299,7 @@ async function copyKey(key: APIKey): Promise<void> {
     <div>
       <p
         v-if="errorMessage !== ''"
-        class="mb-4 rounded-lg bg-error-50 px-4 py-2.5 text-sm text-error-600 dark:bg-error-500/10 dark:text-error-400"
+        class="bg-error-50 text-error-600 dark:bg-error-500/10 dark:text-error-400 mb-4 rounded-lg px-4 py-2.5 text-sm"
       >
         {{ errorMessage }}
       </p>
@@ -334,6 +356,11 @@ async function copyKey(key: APIKey): Promise<void> {
                 >
                   {{ apiKeyLimitSummary(key) }}
                 </span>
+                <span
+                  class="bg-brand-50 text-brand-600 dark:bg-brand-500/10 dark:text-brand-400 inline-flex items-center rounded-full px-2 py-0.5 text-xs"
+                >
+                  {{ riskProfileLabel[key.riskProfile || 'legacy_unrestricted'] }}
+                </span>
               </div>
             </div>
             <button
@@ -353,8 +380,12 @@ async function copyKey(key: APIKey): Promise<void> {
           </div>
 
           <!-- 密钥行：掩码/明文 + 小眼睛 + 复制 -->
-          <div class="mb-3 flex items-center gap-2 rounded-lg bg-gray-50 px-3 py-2 dark:bg-gray-800/50">
-            <code class="min-w-0 flex-1 truncate font-mono text-xs text-gray-700 dark:text-gray-300">
+          <div
+            class="mb-3 flex items-center gap-2 rounded-lg bg-gray-50 px-3 py-2 dark:bg-gray-800/50"
+          >
+            <code
+              class="min-w-0 flex-1 truncate font-mono text-xs text-gray-700 dark:text-gray-300"
+            >
               {{ isRevealed(key.id) ? key.plaintextKey : maskKey(key) }}
             </code>
             <button
@@ -365,12 +396,27 @@ async function copyKey(key: APIKey): Promise<void> {
               @click="toggleReveal(key.id)"
             >
               <!-- 眼睛（显示）/ 斜杠眼睛（隐藏） -->
-              <svg v-if="!isRevealed(key.id)" width="16" height="16" viewBox="0 0 24 24" fill="none">
-                <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" stroke="currentColor" stroke-width="1.6" />
+              <svg
+                v-if="!isRevealed(key.id)"
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+              >
+                <path
+                  d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"
+                  stroke="currentColor"
+                  stroke-width="1.6"
+                />
                 <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.6" />
               </svg>
               <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none">
-                <path d="M3 3l18 18M10.6 10.6a3 3 0 0 0 4.2 4.2M9.9 4.2A9.9 9.9 0 0 1 12 4c6.5 0 10 7 10 7a17.6 17.6 0 0 1-3.3 4M6.1 6.1A17.6 17.6 0 0 0 2 11s3.5 7 10 7a9.8 9.8 0 0 0 3-.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+                <path
+                  d="M3 3l18 18M10.6 10.6a3 3 0 0 0 4.2 4.2M9.9 4.2A9.9 9.9 0 0 1 12 4c6.5 0 10 7 10 7a17.6 17.6 0 0 1-3.3 4M6.1 6.1A17.6 17.6 0 0 0 2 11s3.5 7 10 7a9.8 9.8 0 0 0 3-.5"
+                  stroke="currentColor"
+                  stroke-width="1.6"
+                  stroke-linecap="round"
+                />
               </svg>
             </button>
             <button
@@ -381,8 +427,21 @@ async function copyKey(key: APIKey): Promise<void> {
               @click="copyKey(key)"
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-                <rect x="9" y="9" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.6" />
-                <path d="M5 15V5a2 2 0 0 1 2-2h8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+                <rect
+                  x="9"
+                  y="9"
+                  width="11"
+                  height="11"
+                  rx="2"
+                  stroke="currentColor"
+                  stroke-width="1.6"
+                />
+                <path
+                  d="M5 15V5a2 2 0 0 1 2-2h8"
+                  stroke="currentColor"
+                  stroke-width="1.6"
+                  stroke-linecap="round"
+                />
               </svg>
             </button>
           </div>
@@ -392,10 +451,16 @@ async function copyKey(key: APIKey): Promise<void> {
             <div class="flex items-center justify-between gap-2">
               <dt class="text-gray-400">有效期</dt>
               <dd>
-                <span v-if="key.expiresAt === undefined" class="text-gray-500 dark:text-gray-400">永不过期</span>
+                <span v-if="key.expiresAt === undefined" class="text-gray-500 dark:text-gray-400"
+                  >永不过期</span
+                >
                 <span
                   v-else
-                  :class="isExpired(key) ? 'text-error-600 dark:text-error-400' : 'text-gray-600 dark:text-gray-300'"
+                  :class="
+                    isExpired(key)
+                      ? 'text-error-600 dark:text-error-400'
+                      : 'text-gray-600 dark:text-gray-300'
+                  "
                 >
                   {{ isExpired(key) ? '已过期 · ' : '' }}{{ formatTime(key.expiresAt) }}
                 </span>
@@ -408,17 +473,19 @@ async function copyKey(key: APIKey): Promise<void> {
           </dl>
 
           <!-- 操作 -->
-          <div class="mt-auto flex items-center justify-end gap-1.5 border-t border-gray-100 pt-3 dark:border-gray-800">
+          <div
+            class="mt-auto flex items-center justify-end gap-1.5 border-t border-gray-100 pt-3 dark:border-gray-800"
+          >
             <button
               type="button"
-              class="rounded-lg px-2.5 py-1.5 text-xs font-medium text-brand-600 hover:bg-brand-50 dark:text-brand-400 dark:hover:bg-brand-500/10"
+              class="text-brand-600 hover:bg-brand-50 dark:text-brand-400 dark:hover:bg-brand-500/10 rounded-lg px-2.5 py-1.5 text-xs font-medium"
               @click="configuring = key"
             >
               配置
             </button>
             <button
               type="button"
-              class="rounded-lg px-2.5 py-1.5 text-xs font-medium text-error-600 hover:bg-error-50 dark:text-error-400 dark:hover:bg-error-500/10"
+              class="text-error-600 hover:bg-error-50 dark:text-error-400 dark:hover:bg-error-500/10 rounded-lg px-2.5 py-1.5 text-xs font-medium"
               @click="askDelete(key)"
             >
               删除
@@ -428,10 +495,7 @@ async function copyKey(key: APIKey): Promise<void> {
       </div>
 
       <!-- 分页 -->
-      <div
-        v-if="totalPages > 1"
-        class="mt-4 flex items-center justify-between"
-      >
+      <div v-if="totalPages > 1" class="mt-4 flex items-center justify-between">
         <span class="text-xs text-gray-500 dark:text-gray-400">
           第 {{ currentPage }} / {{ totalPages }} 页
         </span>
@@ -463,8 +527,7 @@ async function copyKey(key: APIKey): Promise<void> {
     <PlaintextKeyModal :created="created" @close="created = null" />
 
     <!-- 配置弹窗（屏蔽规则 / ACL / 限流） -->
-    <APIKeyConfigModal :apiKey="configuring" @close="configuring = null" />
-
+    <APIKeyConfigModal :apiKey="configuring" @close="onConfigClosed" />
   </AdminLayout>
 </template>
 
