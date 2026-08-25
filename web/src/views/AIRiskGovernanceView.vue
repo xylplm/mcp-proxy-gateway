@@ -872,8 +872,8 @@ onBeforeUnmount(() => {
               <input
                 id="provider-api-key"
                 v-model="providerForm.apiKey"
-                type="password"
-                autocomplete="new-password"
+                type="text"
+                autocomplete="off"
                 placeholder="留空表示不发送密钥"
                 :class="providerInputClass"
               />
