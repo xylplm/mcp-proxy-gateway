@@ -121,6 +121,11 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : '操作失败'
 }
 
+/** 与系统设置页保持一致的表单控件样式。 */
+const providerInputClass =
+  'h-11 w-full rounded-lg border border-gray-300 bg-transparent px-4 text-sm text-gray-800 shadow-sm placeholder:text-gray-400 focus:border-brand-300 focus:ring-3 focus:ring-brand-500/10 focus:outline-none dark:border-gray-700 dark:text-white/90 dark:placeholder:text-white/30'
+const providerHintClass = 'mt-1 text-xs text-gray-400 dark:text-gray-500'
+
 function normalizeRiskTool(item: ToolRiskAssessment): ToolRiskAssessment {
   return { ...item, reviewReasons: item.reviewReasons ?? [] }
 }
@@ -803,144 +808,209 @@ onBeforeUnmount(() => {
       class="fixed inset-0 z-[100001] flex items-center justify-center bg-black/40 p-4"
     >
       <form
-        class="max-h-[90dvh] w-full max-w-2xl overflow-y-auto rounded-md bg-white p-5 shadow-xl dark:bg-gray-900"
+        class="flex max-h-[90dvh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl dark:bg-gray-900"
         @submit.prevent="saveProvider"
       >
-        <h3 class="text-base font-semibold dark:text-white">
-          {{ editingProvider ? '编辑 Provider' : '新增 Provider' }}
-        </h3>
-        <div class="mt-4 grid gap-4 sm:grid-cols-2">
-          <label class="text-sm"
-            >名称<input
-              v-model="providerForm.name"
-              required
-              class="mt-1 w-full rounded-md border-gray-300 dark:bg-gray-900" /></label
-          ><label class="text-sm"
-            >模型<input
-              v-model="providerForm.model"
-              required
-              class="mt-1 w-full rounded-md border-gray-300 dark:bg-gray-900" /></label
-          ><label class="text-sm sm:col-span-2"
-            >Base URL<input
-              v-model="providerForm.baseUrl"
-              required
-              placeholder="http://127.0.0.1:11434/v1"
-              class="mt-1 w-full rounded-md border-gray-300 dark:bg-gray-900"
-          /></label>
-          <div>
-            <FieldLabel
-              label="API 接口协议"
-              tooltip="决定请求端点和数据格式：Chat Completions 使用 /chat/completions，Responses 使用 /responses。多数 OpenAI 兼容服务选择 Chat Completions。"
-            />
-            <select
-              v-model="providerForm.apiStyle"
-              class="w-full rounded-md border-gray-300 dark:bg-gray-900"
-            >
-              <option value="chat_completions">Chat Completions</option>
-              <option value="responses">Responses</option>
-            </select>
-          </div>
-          <label class="text-sm"
-            >API Key<input
-              v-model="providerForm.apiKey"
-              type="password"
-              autocomplete="new-password"
-              class="mt-1 w-full rounded-md border-gray-300 dark:bg-gray-900"
-              placeholder="留空保留现有密钥" /></label
-          ><label class="text-sm"
-            >超时（秒）<input
-              v-model.number="providerForm.timeoutS"
-              type="number"
-              min="1"
-              max="300"
-              class="mt-1 w-full rounded-md border-gray-300 dark:bg-gray-900"
-          /></label>
-          <div>
-            <FieldLabel
-              label="单批工具数"
-              tooltip="一次 AI 请求包含的工具数量。批次越大，请求越少，但提示词更长，单批失败影响的工具也更多。"
-            />
-            <input
-              v-model.number="providerForm.batchSize"
-              type="number"
-              min="1"
-              max="50"
-              class="w-full rounded-md border-gray-300 dark:bg-gray-900"
-            />
-          </div>
-          <div>
-            <FieldLabel
-              label="最大并发数"
-              tooltip="允许同时执行的 AI 请求数，范围为 1–3。并发越高通常越快，但更容易触发 Provider 限流或服务繁忙。"
-            />
-            <input
-              v-model.number="providerForm.maxConcurrency"
-              type="number"
-              min="1"
-              max="3"
-              class="w-full rounded-md border-gray-300 dark:bg-gray-900"
-            />
-          </div>
-          <div class="grid gap-2 sm:col-span-2">
-            <div
-              class="flex items-center justify-between gap-4 rounded-lg border border-gray-200 px-3 py-2.5 dark:border-gray-700"
-            >
-              <FieldLabel
-                class="!mb-0"
-                label="启用 Provider"
-                tooltip="关闭后该 Provider 不可被设为活动配置，也不会用于测试、评级或生成 AI 建议。"
-              />
-              <button
-                type="button"
-                role="switch"
-                :aria-checked="providerForm.enabled"
-                class="relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition"
-                :class="providerForm.enabled ? 'bg-brand-500' : 'bg-gray-300 dark:bg-gray-700'"
-                @click="providerForm.enabled = !providerForm.enabled"
-              >
-                <span
-                  class="inline-block h-4 w-4 transform rounded-full bg-white transition"
-                  :class="providerForm.enabled ? 'translate-x-6' : 'translate-x-1'"
-                ></span>
-              </button>
-            </div>
+        <div class="shrink-0 border-b border-gray-200 px-5 py-4 dark:border-gray-800">
+          <h3 class="text-base font-semibold text-gray-900 dark:text-white">
+            {{ editingProvider ? '编辑 Provider' : '新增 Provider' }}
+          </h3>
+          <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+            填写模型服务的连接信息与评级任务参数。
+          </p>
+        </div>
 
-            <div
-              class="flex items-center justify-between gap-4 rounded-lg border border-gray-200 px-3 py-2.5 dark:border-gray-700"
-            >
-              <FieldLabel
-                class="!mb-0"
-                label="同步后自动评级"
-                tooltip="工具目录同步完成后，自动为待评级、已变化和失败的工具创建评级任务；待复核项不会重复评级。"
+        <div class="overflow-y-auto px-5 py-5">
+          <div class="grid gap-x-6 gap-y-5 sm:grid-cols-2">
+            <div>
+              <FieldLabel label="名称" required for-id="provider-name" />
+              <input
+                id="provider-name"
+                v-model="providerForm.name"
+                required
+                placeholder="例如：OpenAI 主服务"
+                :class="providerInputClass"
               />
-              <button
-                type="button"
-                role="switch"
-                :aria-checked="providerForm.autoAssess"
-                class="relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition"
-                :class="providerForm.autoAssess ? 'bg-brand-500' : 'bg-gray-300 dark:bg-gray-700'"
-                @click="providerForm.autoAssess = !providerForm.autoAssess"
+            </div>
+            <div>
+              <FieldLabel label="模型" required for-id="provider-model" />
+              <input
+                id="provider-model"
+                v-model="providerForm.model"
+                required
+                placeholder="例如：gpt-4.1-mini"
+                :class="providerInputClass"
+              />
+            </div>
+            <div class="sm:col-span-2">
+              <FieldLabel label="Base URL" required for-id="provider-base-url" />
+              <input
+                id="provider-base-url"
+                v-model="providerForm.baseUrl"
+                required
+                placeholder="http://127.0.0.1:11434/v1"
+                :class="providerInputClass"
+              />
+              <p :class="providerHintClass">填写服务的 API 根地址，通常包含版本路径。</p>
+            </div>
+            <div>
+              <FieldLabel
+                label="API 接口协议"
+                required
+                for-id="provider-api-style"
+                tooltip="决定请求端点和数据格式：Chat Completions 使用 /chat/completions，Responses 使用 /responses。多数 OpenAI 兼容服务选择 Chat Completions。"
+              />
+              <select
+                id="provider-api-style"
+                v-model="providerForm.apiStyle"
+                :class="providerInputClass"
               >
-                <span
-                  class="inline-block h-4 w-4 transform rounded-full bg-white transition"
-                  :class="providerForm.autoAssess ? 'translate-x-6' : 'translate-x-1'"
-                ></span>
-              </button>
+                <option value="chat_completions">Chat Completions</option>
+                <option value="responses">Responses</option>
+              </select>
+              <p :class="providerHintClass">多数 OpenAI 兼容服务选择 Chat Completions。</p>
+            </div>
+            <div>
+              <FieldLabel label="API Key" for-id="provider-api-key" />
+              <input
+                id="provider-api-key"
+                v-model="providerForm.apiKey"
+                type="password"
+                autocomplete="new-password"
+                placeholder="留空表示不发送密钥"
+                :class="providerInputClass"
+              />
+              <p :class="providerHintClass">编辑时留空会保留现有密钥。</p>
+            </div>
+            <div>
+              <FieldLabel
+                label="超时（秒）"
+                required
+                for-id="provider-timeout"
+                tooltip="AI 请求允许等待的最长时间。"
+              />
+              <input
+                id="provider-timeout"
+                v-model.number="providerForm.timeoutS"
+                type="number"
+                min="1"
+                max="300"
+                :class="providerInputClass"
+              />
+              <p :class="providerHintClass">范围 1–300 秒，默认 60 秒。</p>
+            </div>
+            <div>
+              <FieldLabel
+                label="单批工具数"
+                required
+                for-id="provider-batch-size"
+                tooltip="一次 AI 请求包含的工具数量。批次越大，请求越少，但提示词更长，单批失败影响的工具也更多。"
+              />
+              <input
+                id="provider-batch-size"
+                v-model.number="providerForm.batchSize"
+                type="number"
+                min="1"
+                max="50"
+                :class="providerInputClass"
+              />
+              <p :class="providerHintClass">范围 1–50，默认 10。</p>
+            </div>
+            <div>
+              <FieldLabel
+                label="最大并发数"
+                required
+                for-id="provider-max-concurrency"
+                tooltip="允许同时执行的 AI 请求数，范围为 1–3。并发越高通常越快，但更容易触发 Provider 限流或服务繁忙。"
+              />
+              <input
+                id="provider-max-concurrency"
+                v-model.number="providerForm.maxConcurrency"
+                type="number"
+                min="1"
+                max="3"
+                :class="providerInputClass"
+              />
+              <p :class="providerHintClass">范围 1–3，默认 1。</p>
+            </div>
+            <div class="grid gap-3 sm:col-span-2">
+              <div
+                class="flex items-center justify-between gap-4 rounded-xl border border-gray-100 bg-gray-50 p-4 dark:border-gray-800 dark:bg-white/[0.02]"
+              >
+                <div class="min-w-0">
+                  <FieldLabel
+                    class="!mb-0"
+                    label="启用 Provider"
+                    tooltip="关闭后该 Provider 不可被设为活动配置，也不会用于测试、评级或生成 AI 建议。"
+                  />
+                  <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    停用后不能设为活动配置，也不会参与评级。
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-label="启用 Provider"
+                  :aria-checked="providerForm.enabled"
+                  class="relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition"
+                  :class="providerForm.enabled ? 'bg-brand-500' : 'bg-gray-300 dark:bg-gray-700'"
+                  @click="providerForm.enabled = !providerForm.enabled"
+                >
+                  <span
+                    class="inline-block h-4 w-4 transform rounded-full bg-white transition"
+                    :class="providerForm.enabled ? 'translate-x-6' : 'translate-x-1'"
+                  ></span>
+                </button>
+              </div>
+
+              <div
+                class="flex items-center justify-between gap-4 rounded-xl border border-gray-100 bg-gray-50 p-4 dark:border-gray-800 dark:bg-white/[0.02]"
+              >
+                <div class="min-w-0">
+                  <FieldLabel
+                    class="!mb-0"
+                    label="同步后自动评级"
+                    tooltip="工具目录同步完成后，自动为待评级、已变化和失败的工具创建评级任务；待复核项不会重复评级。"
+                  />
+                  <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    同步后自动为待评级、已变化和失败的工具创建任务。
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-label="同步后自动评级"
+                  :aria-checked="providerForm.autoAssess"
+                  class="relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition"
+                  :class="providerForm.autoAssess ? 'bg-brand-500' : 'bg-gray-300 dark:bg-gray-700'"
+                  @click="providerForm.autoAssess = !providerForm.autoAssess"
+                >
+                  <span
+                    class="inline-block h-4 w-4 transform rounded-full bg-white transition"
+                    :class="providerForm.autoAssess ? 'translate-x-6' : 'translate-x-1'"
+                  ></span>
+                </button>
+              </div>
             </div>
           </div>
         </div>
-        <div class="mt-6 flex justify-end gap-2">
+
+        <div
+          class="flex shrink-0 flex-col-reverse gap-2 border-t border-gray-200 px-5 py-4 sm:flex-row sm:justify-end dark:border-gray-800"
+        >
           <button
             type="button"
-            class="rounded-md border px-4 py-2 text-sm dark:border-gray-700"
+            class="rounded-lg border border-gray-300 px-4 py-2.5 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:opacity-60 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
             @click="providerOpen = false"
           >
-            取消</button
-          ><button
-            class="bg-brand-500 rounded-md px-4 py-2 text-sm font-medium text-white"
+            取消
+          </button>
+          <button
+            type="submit"
+            class="bg-brand-500 hover:bg-brand-600 rounded-lg px-4 py-2.5 text-sm font-medium text-white transition disabled:opacity-60"
             :disabled="busy !== ''"
           >
-            保存
+            {{ busy === 'provider-save' ? '保存中…' : '保存' }}
           </button>
         </div>
       </form>
