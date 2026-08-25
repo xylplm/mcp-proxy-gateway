@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import AppSelect from '@/components/common/AppSelect.vue'
 import {
   createToolPolicy,
   deleteToolPolicy,
@@ -529,14 +530,15 @@ defineExpose({ reload })
                       {{ routingStrategyDescription(form.routingStrategy) }}
                     </span>
                   </span>
-                  <select
+                  <AppSelect
                     v-model="form.routingStrategy"
-                    class="w-full rounded-lg border border-gray-300 bg-white px-3.5 py-2.5 text-sm text-gray-800 focus:border-brand-400 focus:ring-2 focus:ring-brand-100 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white/90"
-                  >
-                    <option value="">跟随全局策略</option>
-                    <option value="smart_balance">智能均衡</option>
-                    <option value="priority_fill">稳定优先</option>
-                  </select>
+                    :options="[
+                      { value: '', label: '跟随全局策略' },
+                      { value: 'smart_balance', label: '智能均衡' },
+                      { value: 'priority_fill', label: '稳定优先' },
+                    ]"
+                    aria-label="路由策略"
+                  />
                 </label>
 
                 <div class="grid gap-2 py-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:gap-4">

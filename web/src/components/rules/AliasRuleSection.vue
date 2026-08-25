@@ -7,6 +7,7 @@
  * 风格：Tailwind 工具类 + TailAdmin（卡片 rounded-2xl border、徽章、按钮、模态框）。
  */
 import { computed, onMounted, ref, watch } from 'vue'
+import AppSelect from '@/components/common/AppSelect.vue'
 import {
   listAliases,
   createAlias,
@@ -61,6 +62,12 @@ const form = ref<AliasRuleRequest>({
 })
 
 const isEdit = computed(() => editing.value !== null)
+const upstreamSelectOptions = computed(() =>
+  props.upstreams.map((upstream) => ({
+    value: upstream.id,
+    label: upstream.config.name,
+  })),
+)
 
 interface AliasPreviewItem {
   key: string
@@ -596,16 +603,16 @@ defineExpose({ reload })
                   指定上游
                 </label>
               </div>
-              <div v-if="form.scopeType === 'upstreams'" class="mt-3 grid max-h-44 grid-cols-1 gap-2 overflow-y-auto rounded-lg border border-gray-200 p-3 dark:border-gray-700 sm:grid-cols-2">
-                <label
-                  v-for="up in upstreams"
-                  :key="up.id"
-                  class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300"
-                >
-                  <input v-model="form.upstreamIds" type="checkbox" :value="up.id" class="h-4 w-4 rounded border-gray-300 text-brand-500 focus:ring-brand-400" />
-                  <span class="min-w-0 truncate">{{ up.config.name }}</span>
-                </label>
-                <p v-if="upstreams.length === 0" class="text-sm text-gray-400">暂无上游 MCP</p>
+              <div v-if="form.scopeType === 'upstreams'" class="mt-3">
+                <AppSelect
+                  v-model="form.upstreamIds"
+                  :options="upstreamSelectOptions"
+                  multiple
+                  searchable
+                  placeholder="选择上游 MCP"
+                  empty-text="暂无上游 MCP"
+                  aria-label="指定作用范围的上游 MCP"
+                />
               </div>
             </div>
             <div>

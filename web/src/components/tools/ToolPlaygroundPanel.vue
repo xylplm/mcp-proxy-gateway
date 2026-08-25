@@ -7,6 +7,7 @@ import {
   type ToolPlaygroundResponse,
 } from '@/api/tools'
 import { useToast } from '@/composables/useToast'
+import AppSelect from '@/components/common/AppSelect.vue'
 import {
   buildPlaygroundSchemaFields,
   initialSchemaFormValues,
@@ -52,6 +53,14 @@ const selectedAPIKeyLabel = computed(() => {
   const key = apiKeys.value.find((item) => item.id === selectedAPIKeyID.value)
   return key?.name || selectedAPIKeyID.value
 })
+const apiKeySelectOptions = computed(() => [
+  { value: '', label: '全局视角' },
+  ...apiKeys.value.map((key) => ({
+    value: key.id,
+    label: key.name,
+    description: key.enabled ? undefined : '已停用',
+  })),
+])
 const callRecordQuery = computed(() => buildPlaygroundCallRecordQuery(props.toolName))
 const schemaFields = computed<PlaygroundSchemaField[]>(() => buildPlaygroundSchemaFields(props.inputSchema))
 const hasSchemaForm = computed(() => schemaFields.value.length > 0)
@@ -193,15 +202,11 @@ function formatLatency(value: number): string {
         <div class="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
           <label class="block">
             <span class="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400">调用视角</span>
-            <select
+            <AppSelect
               v-model="selectedAPIKeyID"
-              class="h-10 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-800 shadow-sm transition focus:border-brand-300 focus:ring-3 focus:ring-brand-500/10 focus:outline-none dark:border-gray-700 dark:bg-gray-900 dark:text-white/90"
-            >
-              <option value="">全局视角</option>
-              <option v-for="key in apiKeys" :key="key.id" :value="key.id">
-                {{ key.name }}
-              </option>
-            </select>
+              :options="apiKeySelectOptions"
+              aria-label="调用视角"
+            />
           </label>
           <button
             type="button"
@@ -258,25 +263,28 @@ function formatLatency(value: number): string {
                   {{ field.kind }}
                 </span>
               </span>
-              <select
+              <AppSelect
                 v-if="field.enumOptions.length > 0"
                 v-model="formValues[field.name]"
-                class="h-10 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-800 shadow-sm transition focus:border-brand-300 focus:ring-3 focus:ring-brand-500/10 focus:outline-none dark:border-gray-700 dark:bg-gray-900 dark:text-white/90"
-              >
-                <option value="">不传此参数</option>
-                <option v-for="option in field.enumOptions" :key="option.key" :value="option.key">
-                  {{ option.label }}
-                </option>
-              </select>
-              <select
+                :options="[
+                  { value: '', label: '不传此参数' },
+                  ...field.enumOptions.map((option) => ({
+                    value: option.key,
+                    label: option.label,
+                  })),
+                ]"
+                aria-label="选择参数值"
+              />
+              <AppSelect
                 v-else-if="field.kind === 'boolean'"
                 v-model="formValues[field.name]"
-                class="h-10 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-800 shadow-sm transition focus:border-brand-300 focus:ring-3 focus:ring-brand-500/10 focus:outline-none dark:border-gray-700 dark:bg-gray-900 dark:text-white/90"
-              >
-                <option value="">不传此参数</option>
-                <option value="true">true</option>
-                <option value="false">false</option>
-              </select>
+                :options="[
+                  { value: '', label: '不传此参数' },
+                  { value: 'true', label: 'true' },
+                  { value: 'false', label: 'false' },
+                ]"
+                aria-label="选择布尔参数"
+              />
               <textarea
                 v-else-if="field.kind === 'json'"
                 v-model="formValues[field.name]"

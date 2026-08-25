@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AdminLayout from '@/components/layout/AdminLayout.vue'
+import AppSelect from '@/components/common/AppSelect.vue'
 import PageBreadcrumb from '@/components/common/PageBreadcrumb.vue'
 import ToolPlaygroundPanel from '@/components/tools/ToolPlaygroundPanel.vue'
 import { listAPIKeys, type APIKey } from '@/api/apikeys'
@@ -110,6 +111,23 @@ const upstreamOptions = computed(() => {
     .map(([id, name]) => ({ id, name }))
     .sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
 })
+
+const apiKeySelectOptions = computed(() => [
+  { value: '', label: '全局视角' },
+  ...apiKeys.value.map((key) => ({
+    value: key.id,
+    label: key.name,
+    description: key.enabled ? undefined : '已停用',
+  })),
+])
+
+const upstreamFilterOptions = computed(() => [
+  { value: '', label: '全部上游' },
+  ...upstreamOptions.value.map((upstream) => ({
+    value: upstream.id,
+    label: upstream.name,
+  })),
+])
 
 const selectedAPIKey = computed(
   () => apiKeys.value.find((item) => item.id === selectedAPIKeyID.value) ?? null,
@@ -855,16 +873,13 @@ onUnmounted(() => {
           <span class="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400"
             >调用视角</span
           >
-          <select
+          <AppSelect
             v-model="selectedAPIKeyID"
-            :class="[controlClass, 'w-full']"
+            :options="apiKeySelectOptions"
+            class="w-full"
+            aria-label="调用视角"
             @change="changePerspective"
-          >
-            <option value="">全局视角</option>
-            <option v-for="key in apiKeys" :key="key.id" :value="key.id">
-              {{ key.name }}{{ key.enabled ? '' : '（已停用）' }}
-            </option>
-          </select>
+          />
         </label>
         <label class="block">
           <span class="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400"
@@ -881,31 +896,41 @@ onUnmounted(() => {
           <span class="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400"
             >来源上游</span
           >
-          <select v-model="selectedUpstream" :class="[controlClass, 'w-full']">
-            <option value="">全部上游</option>
-            <option v-for="upstream in upstreamOptions" :key="upstream.id" :value="upstream.id">
-              {{ upstream.name }}
-            </option>
-          </select>
+          <AppSelect
+            v-model="selectedUpstream"
+            :options="upstreamFilterOptions"
+            class="w-full"
+            aria-label="来源上游"
+          />
         </label>
         <label class="block">
           <span class="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400"
             >工具状态</span
           >
-          <select v-model="conflictFilter" :class="[controlClass, 'w-full']">
-            <option value="all">全部工具</option>
-            <option value="multi">多来源工具</option>
-            <option value="conflict">Schema 不一致</option>
-          </select>
+          <AppSelect
+            v-model="conflictFilter"
+            :options="[
+              { value: 'all', label: '全部工具' },
+              { value: 'multi', label: '多来源工具' },
+              { value: 'conflict', label: 'Schema 不一致' },
+            ]"
+            class="w-full"
+            aria-label="工具状态"
+          />
         </label>
         <label class="block">
           <span class="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400"
             >风险提示</span
           >
-          <select v-model="riskFilter" :class="[controlClass, 'w-full']">
-            <option value="all">全部工具</option>
-            <option value="risk">仅看风险提示</option>
-          </select>
+          <AppSelect
+            v-model="riskFilter"
+            :options="[
+              { value: 'all', label: '全部工具' },
+              { value: 'risk', label: '仅看风险提示' },
+            ]"
+            class="w-full"
+            aria-label="风险提示"
+          />
         </label>
         <button
           type="button"

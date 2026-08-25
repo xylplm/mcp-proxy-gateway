@@ -11,6 +11,7 @@
  */
 import { computed, onMounted, ref } from 'vue'
 import AdminLayout from '@/components/layout/AdminLayout.vue'
+import AppSelect from '@/components/common/AppSelect.vue'
 import PageBreadcrumb from '@/components/common/PageBreadcrumb.vue'
 import { ArchiveIcon } from '@/icons'
 import {
@@ -240,12 +241,15 @@ const pagerBtnClass =
       <div class="mb-5 grid grid-cols-1 gap-3 rounded-xl bg-gray-50 p-3 sm:grid-cols-2 xl:grid-cols-[1fr_1fr_1fr_auto] dark:bg-white/[0.02]">
         <label class="block">
           <span class="mb-1.5 block text-xs font-medium text-gray-500 dark:text-gray-400">事件类型</span>
-          <select v-model="eventType" :class="filterInputClass">
-            <option value="">全部类型</option>
-            <option v-for="[value, label] in eventTypeOptions" :key="value" :value="value">
-              {{ label }}
-            </option>
-          </select>
+          <AppSelect
+            v-model="eventType"
+            :options="[
+              { value: '', label: '全部类型' },
+              ...eventTypeOptions.map(([value, label]) => ({ value, label })),
+            ]"
+            class="w-full"
+            aria-label="事件类型"
+          />
         </label>
         <label class="block">
           <span class="mb-1.5 block text-xs font-medium text-gray-500 dark:text-gray-400">开始时间</span>

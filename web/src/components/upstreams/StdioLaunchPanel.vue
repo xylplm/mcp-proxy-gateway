@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import PathField from '@/components/common/PathField.vue'
+import AppSelect from '@/components/common/AppSelect.vue'
 import type { DirectoryLaunchEntry } from '@/api/runtime'
 import type { ScriptItem } from '@/api/scripts'
 import {
@@ -147,21 +148,30 @@ function selectedScript(scripts: ScriptItem[], id: string): ScriptItem | undefin
         >
       </div>
       <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
-        <select
+        <AppSelect
           id="up-script"
-          :value="scriptId"
-          :class="[inputClass, 'sm:flex-1']"
+          :model-value="scriptId"
+          :options="
+            managedScripts.map((script) => ({
+              value: script.id,
+              label: script.name,
+              description:
+                scriptLanguageLabel(script.language) +
+                ' · ' +
+                script.currentVersion +
+                ' · ' +
+                scriptRiskLabel(script.risk.level) +
+                '风险',
+            }))
+          "
+          :placeholder="scriptsLoading ? '加载脚本中…' : '请选择脚本'"
+          class="sm:flex-1"
+          size="lg"
+          aria-label="受管脚本"
+          :loading="scriptsLoading"
           :disabled="scriptsLoading || scriptBindingLoading"
-          @change="emit('apply-script', ($event.target as HTMLSelectElement).value)"
-        >
-          <option value="">
-            {{ scriptsLoading ? '加载脚本中…' : '请选择脚本' }}
-          </option>
-          <option v-for="script in managedScripts" :key="script.id" :value="script.id">
-            {{ script.name }} · {{ scriptLanguageLabel(script.language) }} ·
-            {{ script.currentVersion }} · {{ scriptRiskLabel(script.risk.level) }}风险
-          </option>
-        </select>
+          @update:model-value="emit('apply-script', $event as string)"
+        />
         <button
           type="button"
           class="h-11 shrink-0 rounded-lg border border-gray-300 px-3 text-sm font-medium text-gray-600 transition hover:bg-gray-50 disabled:opacity-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-white/5"

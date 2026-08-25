@@ -8,6 +8,7 @@
 import { ref, watch } from 'vue'
 import { createAPIKey, type CreatedAPIKey } from '@/api/apikeys'
 import type { RiskProfile } from '@/api/aiRisk'
+import AppSelect from '@/components/common/AppSelect.vue'
 import { riskProfileDescription, riskProfileLabel } from '@/utils/riskLevel'
 
 const props = defineProps<{ open: boolean }>()
@@ -101,14 +102,18 @@ async function submit(): Promise<void> {
           <label class="mb-1.5 block text-sm font-medium text-gray-700 dark:text-gray-300">
             风险档案
           </label>
-          <select
+          <AppSelect
             v-model="riskProfile"
-            class="focus:border-brand-400 focus:ring-brand-100 w-full rounded-lg border border-gray-300 px-3.5 py-2.5 text-sm text-gray-800 focus:ring-2 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white/90"
-          >
-            <option v-for="profile in riskProfiles" :key="profile" :value="profile">
-              {{ riskProfileLabel[profile] }}：{{ riskProfileDescription[profile] }}
-            </option>
-          </select>
+            :options="
+              riskProfiles.map((profile) => ({
+                value: profile,
+                label: riskProfileLabel[profile],
+                description: riskProfileDescription[profile],
+              }))
+            "
+            size="lg"
+            aria-label="风险档案"
+          />
           <p v-if="riskProfile === 'legacy_unrestricted'" class="text-warning-600 mt-1 text-xs">
             兼容档会跳过风险目录，仅建议用于迁移已有客户端。
           </p>

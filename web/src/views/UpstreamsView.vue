@@ -10,6 +10,7 @@
  */
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import AdminLayout from '@/components/layout/AdminLayout.vue'
+import AppSelect from '@/components/common/AppSelect.vue'
 import PageBreadcrumb from '@/components/common/PageBreadcrumb.vue'
 import ConnStateBadge from '@/components/upstreams/ConnStateBadge.vue'
 import UpstreamFormDrawer from '@/components/upstreams/UpstreamFormDrawer.vue'
@@ -124,6 +125,12 @@ const sortDragOverID = ref<string | null>(null)
 const sortSelectedID = ref('')
 const sortTargetPosition = ref('')
 const sortMoveMessage = ref('')
+const sortSelectOptions = computed(() =>
+  sortDraft.value.map((upstream, index) => ({
+    value: upstream.id,
+    label: String(index + 1) + '. ' + upstream.config.name,
+  })),
+)
 
 const toolModalOpen = ref(false)
 const toolModalUpstream = ref<Upstream | null>(null)
@@ -2438,15 +2445,12 @@ function goPage(p: number): void {
                 <span class="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400"
                   >上游</span
                 >
-                <select
+                <AppSelect
                   v-model="sortSelectedID"
-                  class="focus:border-brand-300 focus:ring-brand-500/10 h-10 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-800 shadow-sm focus:ring-3 focus:outline-none dark:border-gray-700 dark:bg-gray-900 dark:text-white/90"
+                  :options="sortSelectOptions"
+                  aria-label="选择排序上游"
                   @change="syncSelectedSortPosition"
-                >
-                  <option v-for="(up, index) in sortDraft" :key="up.id" :value="up.id">
-                    {{ index + 1 }}. {{ up.config.name }}
-                  </option>
-                </select>
+                />
               </label>
               <label class="block">
                 <span class="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400"

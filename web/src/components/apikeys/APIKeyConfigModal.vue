@@ -31,6 +31,7 @@ import {
 } from '@/api/apikeys'
 import type { RiskProfile } from '@/api/aiRisk'
 import { riskProfileDescription, riskProfileLabel } from '@/utils/riskLevel'
+import AppSelect from '@/components/common/AppSelect.vue'
 import { getAggregatedTools, type ToolDetail } from '@/api/tools'
 import { CONN_STATE_LABELS, listUpstreams, type Upstream } from '@/api/upstreams'
 import { getAPIKeyUsageProfile, type APIKeyToolUsage, type APIKeyUsageProfile } from '@/api/stats'
@@ -764,14 +765,19 @@ function buildFilterPreviewSummary(rule: APIKeyFilter): APIKeyFilterPreviewSumma
               <div class="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end">
                 <label class="min-w-0 flex-1 text-sm font-medium text-gray-700 dark:text-gray-300">
                   选择档案
-                  <select
+                  <AppSelect
                     v-model="riskProfile"
-                    class="mt-1.5 w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm dark:border-gray-700 dark:bg-gray-800"
-                  >
-                    <option v-for="item in riskProfiles" :key="item" :value="item">
-                      {{ riskProfileLabel[item] }}：{{ riskProfileDescription[item] }}
-                    </option>
-                  </select>
+                    class="mt-1.5"
+                    :options="
+                      riskProfiles.map((item) => ({
+                        value: item,
+                        label: riskProfileLabel[item],
+                        description: riskProfileDescription[item],
+                      }))
+                    "
+                    size="lg"
+                    aria-label="选择风险档案"
+                  />
                 </label>
                 <button
                   type="button"

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import AdminLayout from '@/components/layout/AdminLayout.vue'
+import AppSelect from '@/components/common/AppSelect.vue'
 import PageBreadcrumb from '@/components/common/PageBreadcrumb.vue'
 import CodeEditor from '@/components/common/CodeEditor.vue'
 import {
@@ -152,7 +153,7 @@ function isPristineTemplate(): boolean {
 /**
  * 切换脚本语言：仅在 create 模式且内容仍是当前语言模板（未手改）时，替换为新语言模板；
  * 否则保留用户内容，仅切换高亮/检测语言。同时同步 runtime。
- * 此 watcher 取代了语言 <select> 上原内联 @change（统一处理 runtime + 模板）。
+ * 此 watcher 取代了语言下拉控件上的原内联 @change（统一处理 runtime + 模板）。
  */
 watch(editingLanguage, (next) => {
   if (editorMode.value === 'create' && isPristineTemplate()) {
@@ -519,24 +520,28 @@ onMounted(load)
           class="focus:border-brand-300 focus:ring-brand-500/10 h-11 rounded-xl border border-gray-300 px-4 text-sm outline-none focus:ring-3 dark:border-gray-700 dark:bg-transparent dark:text-white/90"
           placeholder="搜索名称、描述或标签"
         />
-        <select
+        <AppSelect
           v-model="languageFilter"
-          class="h-11 rounded-xl border border-gray-300 px-3 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white/90"
-        >
-          <option value="">全部语言</option>
-          <option value="python">Python</option>
-          <option value="javascript">JavaScript</option>
-        </select>
-        <select
+          :options="[
+            { value: '', label: '全部语言' },
+            { value: 'python', label: 'Python' },
+            { value: 'javascript', label: 'JavaScript' },
+          ]"
+          size="lg"
+          aria-label="脚本语言"
+        />
+        <AppSelect
           v-model="riskFilter"
-          class="h-11 rounded-xl border border-gray-300 px-3 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white/90"
-        >
-          <option value="">全部风险</option>
-          <option value="low">低风险</option>
-          <option value="medium">中风险</option>
-          <option value="high">高风险</option>
-          <option value="critical">极高风险</option>
-        </select>
+          :options="[
+            { value: '', label: '全部风险' },
+            { value: 'low', label: '低风险' },
+            { value: 'medium', label: '中风险' },
+            { value: 'high', label: '高风险' },
+            { value: 'critical', label: '极高风险' },
+          ]"
+          size="lg"
+          aria-label="脚本风险等级"
+        />
       </div>
     </section>
 
@@ -662,25 +667,28 @@ onMounted(load)
                     class="h-10 rounded-lg border border-gray-300 px-3 text-sm dark:border-gray-700 dark:bg-transparent dark:text-white/90"
                     placeholder="脚本名称"
                   />
-                  <select
+                  <AppSelect
                     v-model="editingLanguage"
                     :disabled="editorMode === 'edit'"
-                    class="h-10 rounded-lg border border-gray-300 px-3 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white/90"
-                  >
-                    <option value="python">Python</option>
-                    <option value="javascript">JavaScript</option>
-                  </select>
-                  <select
+                    :options="[
+                      { value: 'python', label: 'Python' },
+                      { value: 'javascript', label: 'JavaScript' },
+                    ]"
+                    aria-label="脚本语言"
+                  />
+                  <AppSelect
                     v-model="editingRuntime"
                     :disabled="editorMode === 'edit'"
-                    class="h-10 rounded-lg border border-gray-300 px-3 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white/90"
-                  >
-                    <template v-if="editingLanguage === 'python'"
-                      ><option value="python3">python3</option>
-                      <option value="python">python</option></template
-                    >
-                    <option v-else value="node">node</option>
-                  </select>
+                    :options="
+                      editingLanguage === 'python'
+                        ? [
+                            { value: 'python3', label: 'python3' },
+                            { value: 'python', label: 'python' },
+                          ]
+                        : [{ value: 'node', label: 'node' }]
+                    "
+                    aria-label="脚本运行时"
+                  />
                   <input
                     v-model="editingTags"
                     class="h-10 rounded-lg border border-gray-300 px-3 text-sm dark:border-gray-700 dark:bg-transparent dark:text-white/90"
@@ -767,22 +775,18 @@ onMounted(load)
                     v-if="versions.length >= 2"
                     class="mt-3 grid grid-cols-[1fr_auto_1fr] items-center gap-2"
                   >
-                    <select
+                    <AppSelect
                       v-model="diffLeft"
-                      class="h-8 rounded-lg border border-gray-200 px-2 text-xs dark:border-gray-700 dark:bg-gray-900"
-                    >
-                      <option v-for="v in versions" :key="`l-${v.version}`" :value="v.version">
-                        {{ v.version }}
-                      </option></select
-                    ><span class="text-xs text-gray-400">对</span
-                    ><select
+                      :options="versions.map((version) => ({ value: version.version, label: version.version }))"
+                      size="sm"
+                      aria-label="左侧版本"
+                    /><span class="text-xs text-gray-400">对</span
+                    ><AppSelect
                       v-model="diffRight"
-                      class="h-8 rounded-lg border border-gray-200 px-2 text-xs dark:border-gray-700 dark:bg-gray-900"
-                    >
-                      <option v-for="v in versions" :key="`r-${v.version}`" :value="v.version">
-                        {{ v.version }}
-                      </option>
-                    </select>
+                      :options="versions.map((version) => ({ value: version.version, label: version.version }))"
+                      size="sm"
+                      aria-label="右侧版本"
+                    />
                   </div>
                   <div v-if="versionsLoading" class="mt-3 text-xs text-gray-400">加载中…</div>
                   <div v-else class="mt-3 space-y-2">

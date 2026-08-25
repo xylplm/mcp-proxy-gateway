@@ -11,6 +11,7 @@
  */
 import { computed, onMounted, reactive, ref } from 'vue'
 import AdminLayout from '@/components/layout/AdminLayout.vue'
+import AppSelect from '@/components/common/AppSelect.vue'
 import PageBreadcrumb from '@/components/common/PageBreadcrumb.vue'
 import FieldLabel from '@/components/common/FieldLabel.vue'
 import FloatingActionBar from '@/components/common/FloatingActionBar.vue'
@@ -1014,12 +1015,17 @@ const errClass = 'mt-1 text-xs text-error-500'
               required
               tooltip="控制进程日志输出的详细程度。保存后立即生效，无需重启服务。debug 会记录调用链每次工具调用的入口与结果，便于排查问题但日志量较大。"
             />
-            <select v-model="config.server.log_level" :class="inputClass">
-              <option value="debug">debug（详细，含调用链追踪）</option>
-              <option value="info">info（默认，关键事件）</option>
-              <option value="warn">warn（仅警告与错误）</option>
-              <option value="error">error（仅错误）</option>
-            </select>
+            <AppSelect
+              v-model="config.server.log_level"
+              :options="[
+                { value: 'debug', label: 'debug（详细，含调用链追踪）' },
+                { value: 'info', label: 'info（默认，关键事件）' },
+                { value: 'warn', label: 'warn（仅警告与错误）' },
+                { value: 'error', label: 'error（仅错误）' },
+              ]"
+              size="lg"
+              aria-label="日志级别"
+            />
             <p :class="hintClass">调整后立即生效。排查工具调用问题时建议临时切换到 debug。</p>
             <p v-if="fieldErrors['server.log_level']" :class="errClass">
               {{ fieldErrors['server.log_level'] }}
@@ -1390,11 +1396,16 @@ const errClass = 'mt-1 text-xs text-error-500'
                   label="默认本地安全档位"
                   tooltip="stdio 安全档位决定新建/未单独声明安全配置的本地上游默认约束。标准：兼容常见模板；严格：更紧的命令、包与路径限制；完全放行：策略最松，仅建议受信环境使用。可在每个上游单独覆盖。"
                 />
-                <select v-model="config.runtime.default_stdio_security_mode" :class="inputClass">
-                  <option value="standard">标准（兼容模板）</option>
-                  <option value="strict">严格安全</option>
-                  <option value="unrestricted">完全放行（高风险）</option>
-                </select>
+                <AppSelect
+                  v-model="config.runtime.default_stdio_security_mode"
+                  :options="[
+                    { value: 'standard', label: '标准（兼容模板）' },
+                    { value: 'strict', label: '严格安全' },
+                    { value: 'unrestricted', label: '完全放行（高风险）' },
+                  ]"
+                  size="lg"
+                  aria-label="默认本地安全档位"
+                />
                 <p :class="hintClass">
                   三档都是网关策略约束，不是操作系统内核沙箱。即使完全放行，也不允许
                   bash、cmd、powershell 等 shell 直接作为启动命令。
@@ -1408,10 +1419,15 @@ const errClass = 'mt-1 text-xs text-error-500'
                   label="严格档默认网络策略"
                   tooltip="仅在安全档位为「严格」且上游未声明自己的网络策略时生效。允许名单：要求上游声明可访问主机；拒绝出站：策略上默认不允许外连。Linux 严格档 + bubblewrap 时 deny 会网络命名空间断网；主机 allowlist 仍为策略声明。"
                 />
-                <select v-model="config.runtime.strict_network_default" :class="inputClass">
-                  <option value="allowlist">允许名单（启用自装包时需声明主机）</option>
-                  <option value="deny">拒绝出站（Linux 严格档真断网）</option>
-                </select>
+                <AppSelect
+                  v-model="config.runtime.strict_network_default"
+                  :options="[
+                    { value: 'allowlist', label: '允许名单（启用自装包时需声明主机）' },
+                    { value: 'deny', label: '拒绝出站（Linux 严格档真断网）' },
+                  ]"
+                  size="lg"
+                  aria-label="严格档默认网络策略"
+                />
                 <p :class="hintClass">用于引导严格档上游声明网络需求；不是防火墙规则本身。</p>
               </div>
               <div class="sm:col-span-2">

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import PathField from '@/components/common/PathField.vue'
+import AppSelect from '@/components/common/AppSelect.vue'
 import {
   STDIO_SECURITY_MODES,
   securityModeBadgeClass,
@@ -76,6 +77,10 @@ function modeButtonClass(active: boolean, mode: StdioSecurityMode): string {
     return 'border-success-400 bg-success-50 text-success-900 dark:border-success-500/50 dark:bg-success-500/15 dark:text-success-200'
   }
   return 'border-brand-300 text-brand-900 dark:border-brand-500/40 dark:text-brand-100 bg-white shadow-sm dark:bg-gray-900'
+}
+
+function updateNetworkMode(value: unknown): void {
+  emit('update:networkMode', value as NetworkAccessMode)
 }
 </script>
 
@@ -275,19 +280,19 @@ function modeButtonClass(active: boolean, mode: StdioSecurityMode): string {
       <div class="grid gap-3 sm:grid-cols-2">
         <div>
           <label for="up-net-mode" :class="labelClass">网络策略</label>
-          <select
+          <AppSelect
             id="up-net-mode"
-            :value="networkMode"
-            :class="inputClass"
-            @change="
-              emit('update:networkMode', ($event.target as HTMLSelectElement).value as NetworkAccessMode)
-            "
-          >
-            <option value="inherit">跟随档位默认</option>
-            <option value="deny">拒绝出站（Linux 真断网）</option>
-            <option value="allowlist">仅允许声明主机（策略声明）</option>
-            <option value="unrestricted">不限制</option>
-          </select>
+            :model-value="networkMode"
+            :options="[
+              { value: 'inherit', label: '跟随档位默认' },
+              { value: 'deny', label: '拒绝出站（Linux 真断网）' },
+              { value: 'allowlist', label: '仅允许声明主机（策略声明）' },
+              { value: 'unrestricted', label: '不限制' },
+            ]"
+            size="lg"
+            aria-label="网络策略"
+            @update:model-value="updateNetworkMode"
+          />
         </div>
         <div>
           <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-200">

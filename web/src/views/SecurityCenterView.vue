@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import AdminLayout from '@/components/layout/AdminLayout.vue'
+import AppSelect from '@/components/common/AppSelect.vue'
 import PageBreadcrumb from '@/components/common/PageBreadcrumb.vue'
 import { ArchiveIcon, RefreshIcon } from '@/icons'
 import {
@@ -280,7 +281,6 @@ function eventMeta(event: SecurityEvent): string {
 onMounted(load)
 
 const cardClass = 'rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-white/[0.03]'
-const selectClass = 'h-10 rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-700 focus:border-brand-300 focus:ring-3 focus:ring-brand-500/10 focus:outline-none dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300'
 const iconButtonClass = 'inline-flex h-10 w-10 items-center justify-center rounded-lg border border-gray-200 text-gray-600 transition hover:border-brand-300 hover:bg-brand-50 hover:text-brand-600 disabled:opacity-60 dark:border-gray-800 dark:text-gray-400 dark:hover:border-brand-500/40 dark:hover:bg-brand-500/[0.08] dark:hover:text-brand-400'
 </script>
 
@@ -352,9 +352,13 @@ const iconButtonClass = 'inline-flex h-10 w-10 items-center justify-center round
             <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">临时封禁记录，可手动解除当前封禁。</p>
           </div>
           <div class="flex items-center gap-2">
-            <select v-model="blockStatus" :class="selectClass" aria-label="封禁状态" @change="load">
-              <option v-for="item in blockStatusOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
-            </select>
+            <AppSelect
+              v-model="blockStatus"
+              :options="blockStatusOptions"
+              class="w-40"
+              aria-label="封禁状态"
+              @change="load"
+            />
             <button
               v-tooltip:bottom-end="'导出当前封禁记录'"
               type="button"
@@ -418,9 +422,13 @@ const iconButtonClass = 'inline-flex h-10 w-10 items-center justify-center round
             <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">按时间倒序展示最近的异常访问与处置动作。</p>
           </div>
           <div class="flex items-center gap-2">
-            <select v-model="eventType" :class="selectClass" aria-label="安全事件类型" @change="load">
-              <option v-for="item in eventTypes" :key="item.value" :value="item.value">{{ item.label }}</option>
-            </select>
+            <AppSelect
+              v-model="eventType"
+              :options="eventTypes"
+              class="w-40"
+              aria-label="安全事件类型"
+              @change="load"
+            />
             <button
               v-tooltip:bottom-end="'导出当前安全事件'"
               type="button"

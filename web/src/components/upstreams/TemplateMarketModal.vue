@@ -21,6 +21,7 @@ import {
   type PrefillForm,
 } from '@/api/templates'
 import { TRANSPORT_OPTIONS } from '@/api/upstreams'
+import AppSelect from '@/components/common/AppSelect.vue'
 import { useRuntimeCapability } from '@/composables/useRuntimeCapability'
 import { StaredIcon } from '@/icons'
 import {
@@ -309,14 +310,19 @@ onUnmounted(clearSearchTimer)
                 class="h-10 w-full rounded-lg border border-gray-300 bg-transparent px-4 text-sm text-gray-800 placeholder:text-gray-400 focus:border-brand-300 focus:ring-3 focus:ring-brand-500/10 focus:outline-none dark:border-gray-700 dark:text-white/90"
                 @input="onKeywordInput"
               />
-              <select
-                :value="activeCategory ?? ''"
-                class="h-10 rounded-lg border border-gray-300 bg-transparent px-3 text-sm text-gray-800 focus:border-brand-300 focus:outline-none md:hidden dark:border-gray-700 dark:text-white/90"
-                @change="selectCategory(($event.target as HTMLSelectElement).value as TemplateCategory || null)"
-              >
-                <option value="">全部分类</option>
-                <option v-for="cv in categories" :key="cv.category" :value="cv.category">{{ cv.displayName }}</option>
-              </select>
+              <AppSelect
+                :model-value="activeCategory ?? ''"
+                :options="[
+                  { value: '', label: '全部分类' },
+                  ...categories.map((category) => ({
+                    value: category.category,
+                    label: category.displayName,
+                  })),
+                ]"
+                class="w-full sm:w-48 md:hidden"
+                aria-label="模板分类"
+                @update:model-value="selectCategory(($event as TemplateCategory) || null)"
+              />
             </div>
             <div
               class="flex gap-2 overflow-x-auto border-b border-gray-200 px-4 py-3 dark:border-gray-800"

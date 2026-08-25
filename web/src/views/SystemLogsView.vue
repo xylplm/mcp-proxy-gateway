@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import AdminLayout from '@/components/layout/AdminLayout.vue'
+import AppSelect from '@/components/common/AppSelect.vue'
 import PageBreadcrumb from '@/components/common/PageBreadcrumb.vue'
 import {
   clearSystemLogs,
@@ -246,8 +247,6 @@ onUnmounted(() => {
 
 const cardClass =
   'rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-white/[0.03]'
-const controlClass =
-  'h-10 rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-700 focus:border-brand-300 focus:ring-3 focus:ring-brand-500/10 focus:outline-none dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300'
 </script>
 
 <template>
@@ -262,11 +261,12 @@ const controlClass =
         </p>
       </div>
       <div class="flex flex-wrap items-center gap-2">
-        <select v-model="level" :class="controlClass" aria-label="系统日志级别">
-          <option v-for="item in levelOptions" :key="item.value" :value="item.value">
-            {{ item.label }}
-          </option>
-        </select>
+        <AppSelect
+          v-model="level"
+          :options="levelOptions"
+          class="w-32"
+          aria-label="系统日志级别"
+        />
         <label
           class="inline-flex h-10 items-center gap-2 rounded-lg border border-gray-200 px-3 text-sm text-gray-600 dark:border-gray-800 dark:text-gray-400"
         >

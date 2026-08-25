@@ -1,6 +1,7 @@
 ﻿<script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import AdminLayout from '@/components/layout/AdminLayout.vue'
+import AppSelect from '@/components/common/AppSelect.vue'
 import PageBreadcrumb from '@/components/common/PageBreadcrumb.vue'
 import FieldLabel from '@/components/common/FieldLabel.vue'
 import RiskJobCard from '@/components/ai-risk/RiskJobCard.vue'
@@ -574,39 +575,30 @@ onBeforeUnmount(() => {
             placeholder="搜索原始名、对外名或描述"
             @keyup.enter="applyFilters"
           />
-          <select
+          <AppSelect
             v-model="filters.level"
-            class="h-10 rounded-md border-gray-300 text-sm dark:border-gray-700 dark:bg-gray-900"
-          >
-            <option value="">全部等级</option>
-            <option
-              v-for="level in ['low', 'medium', 'high', 'blocked'] as RiskLevel[]"
-              :key="level"
-              :value="level"
-            >
-              {{ riskLevelLabel[level] }}
-            </option>
-          </select>
-          <select
+            :options="[
+              { value: '', label: '全部等级' },
+              ...(['low', 'medium', 'high', 'blocked'] as RiskLevel[]).map((level) => ({
+                value: level,
+                label: riskLevelLabel[level],
+              })),
+            ]"
+            aria-label="风险等级"
+          />
+          <AppSelect
             v-model="filters.status"
-            class="h-10 rounded-md border-gray-300 text-sm dark:border-gray-700 dark:bg-gray-900"
-          >
-            <option value="">全部状态</option>
-            <option
-              v-for="status in [
-                'pending',
-                'rated',
-                'needs_review',
-                'stale',
-                'error',
-                'removed',
-              ] as RiskStatus[]"
-              :key="status"
-              :value="status"
-            >
-              {{ riskStatusLabel[status] }}
-            </option>
-          </select>
+            :options="[
+              { value: '', label: '全部状态' },
+              ...(
+                ['pending', 'rated', 'needs_review', 'stale', 'error', 'removed'] as RiskStatus[]
+              ).map((status) => ({
+                value: status,
+                label: riskStatusLabel[status],
+              })),
+            ]"
+            aria-label="评级状态"
+          />
           <button
             class="h-10 rounded-md border px-4 text-sm dark:border-gray-700"
             @click="applyFilters"
@@ -732,15 +724,18 @@ onBeforeUnmount(() => {
             <span>显示 {{ pageStart }}–{{ pageEnd }}，共 {{ filteredTotal }} 条</span>
             <label class="inline-flex items-center gap-2">
               每页
-              <select
-                v-model.number="pageSize"
-                class="h-9 rounded-md border-gray-300 py-1 pr-8 pl-3 text-sm dark:border-gray-700 dark:bg-gray-900"
+              <AppSelect
+                v-model="pageSize"
+                :options="[
+                  { value: 20, label: '20' },
+                  { value: 50, label: '50' },
+                  { value: 100, label: '100' },
+                ]"
+                class="w-20"
+                size="sm"
+                aria-label="每页条数"
                 @change="changePageSize"
-              >
-                <option :value="20">20</option>
-                <option :value="50">50</option>
-                <option :value="100">100</option>
-              </select>
+              />
               条
             </label>
           </div>
@@ -860,14 +855,16 @@ onBeforeUnmount(() => {
                 for-id="provider-api-style"
                 tooltip="决定请求端点和数据格式：Chat Completions 使用 /chat/completions，Responses 使用 /responses。多数 OpenAI 兼容服务选择 Chat Completions。"
               />
-              <select
+              <AppSelect
                 id="provider-api-style"
                 v-model="providerForm.apiStyle"
-                :class="providerInputClass"
-              >
-                <option value="chat_completions">Chat Completions</option>
-                <option value="responses">Responses</option>
-              </select>
+                :options="[
+                  { value: 'chat_completions', label: 'Chat Completions' },
+                  { value: 'responses', label: 'Responses' },
+                ]"
+                size="lg"
+                aria-label="API 接口协议"
+              />
               <p :class="providerHintClass">多数 OpenAI 兼容服务选择 Chat Completions。</p>
             </div>
             <div>
@@ -1141,18 +1138,17 @@ onBeforeUnmount(() => {
         <h4 class="mt-5 text-sm font-semibold text-gray-900 dark:text-white">人工复核结论</h4>
         <div class="mt-4 space-y-4">
           <label class="block text-sm"
-            >风险等级<select
+            >风险等级<AppSelect
               v-model="overrideForm.level"
-              class="mt-1 w-full rounded-md border-gray-300 dark:bg-gray-900"
-            >
-              <option
-                v-for="level in ['low', 'medium', 'high', 'blocked'] as RiskLevel[]"
-                :key="level"
-                :value="level"
-              >
-                {{ riskLevelLabel[level] }}
-              </option>
-            </select></label
+              :options="
+                (['low', 'medium', 'high', 'blocked'] as RiskLevel[]).map((level) => ({
+                  value: level,
+                  label: riskLevelLabel[level],
+                }))
+              "
+              class="mt-1"
+              aria-label="人工复核风险等级"
+            /></label
           ><label class="block text-sm"
             >标签<input
               v-model="overrideForm.tags"
