@@ -26,6 +26,7 @@ const errorMessage = ref('')
 const autoRefresh = ref(true)
 const level = ref<SystemLogLevel>('')
 const consoleRef = ref<HTMLElement | null>(null)
+const followLatest = ref(true)
 
 let pollTimer: number | undefined
 const pageLimit = 200
@@ -137,7 +138,18 @@ async function scrollToBottom(): Promise<void> {
   const el = consoleRef.value
   if (el !== null) {
     el.scrollTop = el.scrollHeight
+    followLatest.value = true
   }
+}
+
+function isConsoleAtBottom(): boolean {
+  const el = consoleRef.value
+  if (el === null) return true
+  return el.scrollHeight - el.scrollTop - el.clientHeight <= 2
+}
+
+function handleConsoleScroll(): void {
+  followLatest.value = isConsoleAtBottom()
 }
 
 function mergeLatest(nextLogs: SystemLogEntry[]): void {
@@ -145,10 +157,11 @@ function mergeLatest(nextLogs: SystemLogEntry[]): void {
   const exists = new Set(logs.value.map((item) => item.id))
   const fresh = nextLogs.filter((item) => !exists.has(item.id))
   if (fresh.length === 0) return
+  const shouldFollowLatest = followLatest.value
   logs.value = [...logs.value, ...fresh]
     .sort((a, b) => a.id - b.id)
     .slice(-maxLocalLogs)
-  void scrollToBottom()
+  if (shouldFollowLatest) void scrollToBottom()
 }
 
 async function loadInitial(): Promise<void> {
@@ -346,6 +359,7 @@ const cardClass =
       <div
         ref="consoleRef"
         class="custom-scrollbar max-h-[68vh] min-h-[420px] overflow-auto font-mono text-xs leading-5"
+        @scroll.passive="handleConsoleScroll"
       >
         <div v-if="loading" class="py-10 text-center text-gray-500">加载中...</div>
         <div v-else-if="logs.length === 0" class="py-10 text-center text-gray-500">暂无系统日志</div>
