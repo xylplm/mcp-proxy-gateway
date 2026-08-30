@@ -75,6 +75,8 @@ func codeToStatus(code domain.ErrorCode) int {
 		return http.StatusBadGateway
 	case domain.CodeUpstreamTimeout:
 		return http.StatusGatewayTimeout
+	case domain.CodeServiceUnavailable:
+		return http.StatusServiceUnavailable
 	case domain.CodeToolNotFound:
 		return http.StatusNotFound
 	case domain.CodeBackupInvalid:
@@ -116,6 +118,8 @@ func codeToBusinessCode(code domain.ErrorCode) int {
 		return 50200
 	case domain.CodeUpstreamTimeout:
 		return 50400
+	case domain.CodeServiceUnavailable:
+		return 50300
 	default:
 		return 50000
 	}

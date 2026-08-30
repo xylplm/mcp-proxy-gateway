@@ -31,6 +31,7 @@ type CatalogRepository interface {
 
 type JobRepository interface {
 	Create(context.Context, AssessmentJob) (AssessmentJob, error)
+	HasActiveForProvider(context.Context, string) (bool, error)
 	Get(context.Context, string) (AssessmentJob, error)
 	List(context.Context, int) ([]AssessmentJob, error)
 	ListQueued(context.Context) ([]AssessmentJob, error)
@@ -61,8 +62,20 @@ type GovernanceService struct {
 	client          *OpenAIClient
 	jobs            JobRepository
 	running         sync.Map
+	queueMu         sync.Mutex
+	autoTriggerMu   sync.Mutex
+	autoTrigger     *autoAssessmentTrigger
 	onCatalogChange func()
 }
+
+type autoAssessmentTrigger struct {
+	done chan struct{}
+	err  error
+}
+
+const autoAssessmentDebounce = 300 * time.Millisecond
+
+const encryptionUnavailableMessage = "AI Provider 密钥加密功能尚未配置。请在部署环境设置 MPG_SECRET_ENCRYPTION_KEY，并重启网关后重试。"
 
 // GovernanceOption configures an optional integration point without widening
 // the catalog and job repository contracts.
@@ -94,6 +107,7 @@ func (s *GovernanceService) notifyCatalogChange() {
 func (s *GovernanceService) ListProviders(ctx context.Context) ([]Provider, error) {
 	return s.providers.List(ctx)
 }
+func (s *GovernanceService) ProviderEncryptionReady() bool { return s.cipher != nil }
 func (s *GovernanceService) GetProvider(ctx context.Context, id string) (Provider, error) {
 	return s.providers.Get(ctx, id)
 }
@@ -111,7 +125,7 @@ func (s *GovernanceService) CreateProvider(ctx context.Context, in ProviderInput
 	}
 	if strings.TrimSpace(in.APIKey) != "" {
 		if s.cipher == nil {
-			return Provider{}, fmt.Errorf("未配置 MPG_SECRET_ENCRYPTION_KEY，不能保存 Provider API Key")
+			return Provider{}, domain.NewError(domain.CodeServiceUnavailable, encryptionUnavailableMessage)
 		}
 		ciphertext, nonce, err := s.cipher.Encrypt([]byte(in.APIKey))
 		if err != nil {
@@ -136,7 +150,7 @@ func (s *GovernanceService) UpdateProvider(ctx context.Context, id string, in Pr
 		p.APIKeyCiphertext, p.APIKeyNonce = []byte{}, []byte{}
 	} else if strings.TrimSpace(in.APIKey) != "" {
 		if s.cipher == nil {
-			return Provider{}, fmt.Errorf("未配置 MPG_SECRET_ENCRYPTION_KEY，不能更新 Provider API Key")
+			return Provider{}, domain.NewError(domain.CodeServiceUnavailable, encryptionUnavailableMessage)
 		}
 		p.APIKeyCiphertext, p.APIKeyNonce, err = s.cipher.Encrypt([]byte(in.APIKey))
 		if err != nil {
@@ -171,9 +185,19 @@ func (s *GovernanceService) QueueReviewAssessment(ctx context.Context, limit int
 }
 
 func (s *GovernanceService) queueAssessment(ctx context.Context, limit int, scope string) (AssessmentJob, error) {
+	s.queueMu.Lock()
+	defer s.queueMu.Unlock()
+
 	p, _, err := s.activeProviderWithKey(ctx)
 	if err != nil {
 		return AssessmentJob{}, err
+	}
+	active, err := s.jobs.HasActiveForProvider(ctx, p.ID)
+	if err != nil {
+		return AssessmentJob{}, err
+	}
+	if active {
+		return AssessmentJob{}, domain.NewError(domain.CodeConflict, "当前活动 Provider 已有等待中或运行中的评级任务")
 	}
 	var items []Assessment
 	if scope == "needs_review" {
@@ -247,6 +271,32 @@ func (s *GovernanceService) Resume(ctx context.Context) error {
 }
 
 func (s *GovernanceService) TriggerAutoAssessment(ctx context.Context) error {
+	s.autoTriggerMu.Lock()
+	trigger := s.autoTrigger
+	if trigger == nil {
+		trigger = &autoAssessmentTrigger{done: make(chan struct{})}
+		s.autoTrigger = trigger
+		time.AfterFunc(autoAssessmentDebounce, func() {
+			trigger.err = s.triggerAutoAssessmentNow(context.WithoutCancel(ctx))
+			s.autoTriggerMu.Lock()
+			if s.autoTrigger == trigger {
+				s.autoTrigger = nil
+			}
+			close(trigger.done)
+			s.autoTriggerMu.Unlock()
+		})
+	}
+	s.autoTriggerMu.Unlock()
+
+	select {
+	case <-trigger.done:
+		return trigger.err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (s *GovernanceService) triggerAutoAssessmentNow(ctx context.Context) error {
 	p, err := s.providers.Active(ctx)
 	if err != nil {
 		if apiErr, ok := err.(*domain.APIError); ok && apiErr.Code == domain.CodeNotFound {
@@ -257,9 +307,6 @@ func (s *GovernanceService) TriggerAutoAssessment(ctx context.Context) error {
 	if !p.AutoAssess {
 		return nil
 	}
-	// 不在这里做 running.Load 提前检查：LoadOrStore 竞态会导致重复创建 queued job。
-	// 直接调用 QueueAssessment，其内部 launchJob.LoadOrStore 保证同一 provider 只有一个
-	// goroutine 在运行；若已运行则新 job 进入 queued，由当前 job 结束时的 defer 捡起。
 	_, err = s.QueueAssessment(ctx, 500)
 	if err != nil {
 		if apiErr, ok := err.(*domain.APIError); ok && apiErr.Code == domain.CodeConflict {
@@ -593,7 +640,7 @@ func (s *GovernanceService) decryptProviderKey(p Provider) (Provider, string, er
 		return p, "", nil
 	}
 	if s.cipher == nil {
-		return Provider{}, "", fmt.Errorf("缺少 MPG_SECRET_ENCRYPTION_KEY，Provider 当前不可用")
+		return Provider{}, "", domain.NewError(domain.CodeServiceUnavailable, encryptionUnavailableMessage)
 	}
 	plain, err := s.cipher.Decrypt(p.APIKeyCiphertext, p.APIKeyNonce)
 	if err != nil {

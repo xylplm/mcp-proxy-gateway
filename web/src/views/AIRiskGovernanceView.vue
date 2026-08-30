@@ -14,8 +14,8 @@ import {
   clearManualOverride,
   createProvider,
   deleteProvider,
+  getProviderStatus,
   listAssessmentJobs,
-  listProviders,
   listRiskTools,
   queueAssessment,
   reassessRiskTool,
@@ -36,6 +36,7 @@ import { riskBadgeClass, riskLevelLabel, riskStatusLabel } from '@/utils/riskLev
 
 const toast = useToast()
 const providers = ref<AIProvider[]>([])
+const providerEncryptionReady = ref(false)
 const tools = ref<ToolRiskAssessment[]>([])
 const jobs = ref<AssessmentJob[]>([])
 const summary = ref<RiskSummary>({
@@ -74,6 +75,28 @@ let pollTimer: number | undefined
 let loadRequestSeq = 0
 
 const activeProvider = computed(() => providers.value.find((item) => item.active && item.enabled))
+const enabledProviders = computed(() => providers.value.filter((item) => item.enabled))
+const shouldActivateSavedProvider = computed(
+  () => !editingProvider.value && providerForm.value.enabled && !activeProvider.value,
+)
+const providerAPIKeyBlocked = computed(
+  () => !providerEncryptionReady.value && providerForm.value.apiKey?.trim() !== '',
+)
+const providerSaveDisabled = computed(() => busy.value !== '' || providerAPIKeyBlocked.value)
+const providerSubmitText = computed(() => {
+  if (busy.value === 'provider-save') return '保存中…'
+  return shouldActivateSavedProvider.value ? '保存并设为活动' : '保存'
+})
+const assessmentDisabledReason = computed(() => {
+  if (busy.value !== '') return '当前正在执行其他操作，请稍候。'
+  if (activeProvider.value) return ''
+  if (providers.value.length === 0) return '尚未配置 AI Provider，请先新增并启用 Provider。'
+  if (enabledProviders.value.length === 0)
+    return '当前没有已启用的 AI Provider，请先编辑并启用一个 Provider。'
+  if (enabledProviders.value.length === 1)
+    return '当前没有活动 Provider，请先将唯一可用的 Provider 设为活动。'
+  return '当前没有活动 Provider，请从多个可用 Provider 中选择一个设为活动。'
+})
 const totalPages = computed(() => Math.max(1, Math.ceil(filteredTotal.value / pageSize.value)))
 const pageStart = computed(() =>
   filteredTotal.value === 0 ? 0 : (currentPage.value - 1) * pageSize.value + 1,
@@ -146,8 +169,8 @@ async function loadAll(): Promise<void> {
   const requestedPageSize = pageSize.value
   loading.value = true
   try {
-    const [providerRows, page, jobRows] = await Promise.all([
-      listProviders(),
+    const [providerStatus, page, jobRows] = await Promise.all([
+      getProviderStatus(),
       listRiskTools({
         page: requestedPage,
         pageSize: requestedPageSize,
@@ -165,7 +188,8 @@ async function loadAll(): Promise<void> {
       void loadAll()
       return
     }
-    providers.value = providerRows
+    providers.value = providerStatus.providers
+    providerEncryptionReady.value = providerStatus.encryptionReady
     tools.value = (page.items ?? []).map(normalizeRiskTool)
     filteredTotal.value = page.total
     summary.value = page.summary
@@ -220,10 +244,27 @@ function openProvider(provider?: AIProvider): void {
 async function saveProvider(): Promise<void> {
   busy.value = 'provider-save'
   try {
-    if (editingProvider.value) await updateProvider(editingProvider.value.id, providerForm.value)
-    else await createProvider(providerForm.value)
+    if (editingProvider.value) {
+      await updateProvider(editingProvider.value.id, providerForm.value)
+      toast.success('Provider 配置已保存')
+    } else {
+      const activateAfterCreate = shouldActivateSavedProvider.value
+      const created = await createProvider(providerForm.value)
+      if (activateAfterCreate) {
+        try {
+          await activateProvider(created.id)
+          toast.success('Provider 已保存并设为活动')
+        } catch (error) {
+          providerOpen.value = false
+          toast.error(`Provider 已保存，但未能设为活动：${errorText(error)}`)
+          await loadAll()
+          return
+        }
+      } else {
+        toast.success('Provider 配置已保存')
+      }
+    }
     providerOpen.value = false
-    toast.success('Provider 配置已保存')
     await loadAll()
   } catch (error) {
     toast.error(errorText(error))
@@ -393,7 +434,7 @@ onBeforeUnmount(() => {
   <AdminLayout>
     <PageBreadcrumb page-title="AI 风险治理" />
 
-    <div class="space-y-6">
+    <div class="space-y-6 text-gray-800 dark:text-gray-200">
       <section class="border-y border-gray-200 bg-white py-5 dark:border-gray-800 dark:bg-gray-900">
         <div class="flex flex-wrap items-center justify-between gap-3 px-4 sm:px-6">
           <div>
@@ -404,27 +445,58 @@ onBeforeUnmount(() => {
               }}
             </p>
           </div>
-          <div class="flex flex-wrap gap-2">
-            <button
-              v-tooltip:bottom="
-                '根据当前已缓存的工具列表同步风险记录；不会主动连接上游刷新工具列表。'
-              "
-              class="inline-flex h-10 items-center gap-2 rounded-md border border-gray-300 px-3 text-sm font-medium dark:border-gray-700"
-              :disabled="busy !== ''"
-              @click="reconcile"
+          <div class="flex flex-col items-start gap-2 sm:items-end">
+            <div class="flex flex-wrap gap-2">
+              <button
+                v-tooltip:bottom="
+                  '根据当前已缓存的工具列表同步风险记录；不会主动连接上游刷新工具列表。'
+                "
+                class="inline-flex h-10 items-center gap-2 rounded-md border border-gray-300 px-3 text-sm font-medium dark:border-gray-700"
+                :disabled="busy !== ''"
+                @click="reconcile"
+              >
+                <RefreshIcon class="h-4 w-4" />同步风险目录
+              </button>
+              <AppTooltip
+                :content="
+                  assessmentDisabledReason ||
+                  '只处理待评级、已变化和失败项；待复核项保留现有 AI 结果，等待人工确认。'
+                "
+                placement="bottom"
+              >
+                <button
+                  class="bg-brand-500 inline-flex h-10 items-center gap-2 rounded-md px-3 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+                  :disabled="!activeProvider || busy !== ''"
+                  aria-label="开始评级"
+                  @click="assess"
+                >
+                  <CheckIcon class="h-4 w-4" />开始评级
+                </button>
+              </AppTooltip>
+            </div>
+            <div
+              v-if="!activeProvider"
+              class="flex max-w-md flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-500 dark:text-gray-400"
             >
-              <RefreshIcon class="h-4 w-4" />同步风险目录
-            </button>
-            <button
-              v-tooltip:bottom="
-                '只处理待评级、已变化和失败项；待复核项保留现有 AI 结果，等待人工确认。'
-              "
-              class="bg-brand-500 inline-flex h-10 items-center gap-2 rounded-md px-3 text-sm font-medium text-white disabled:opacity-50"
-              :disabled="!activeProvider || busy !== ''"
-              @click="assess"
-            >
-              <CheckIcon class="h-4 w-4" />开始评级
-            </button>
+              <span>{{ assessmentDisabledReason }}</span>
+              <button
+                v-if="providers.length === 0"
+                type="button"
+                class="text-brand-600 dark:text-brand-400 font-medium"
+                @click="openProvider()"
+              >
+                新增 Provider
+              </button>
+              <button
+                v-else-if="enabledProviders.length === 1"
+                type="button"
+                class="text-brand-600 dark:text-brand-400 font-medium"
+                :disabled="busy !== ''"
+                @click="providerAction('activate', enabledProviders[0]!)"
+              >
+                立即设为活动
+              </button>
+            </div>
           </div>
         </div>
         <div
@@ -465,7 +537,10 @@ onBeforeUnmount(() => {
             ]"
             :key="item.label"
             v-tooltip:top="item.tooltip"
-            :class="['cursor-help bg-white px-4 py-3 dark:bg-gray-900', idx === 4 ? 'col-span-3 sm:col-span-1' : '']"
+            :class="[
+              'cursor-help bg-white px-4 py-3 dark:bg-gray-900',
+              idx === 4 ? 'col-span-3 sm:col-span-1' : '',
+            ]"
           >
             <div class="text-xs text-gray-500">{{ item.label }}</div>
             <div class="mt-1 text-xl font-semibold text-gray-900 dark:text-white">
@@ -504,7 +579,7 @@ onBeforeUnmount(() => {
                 <span class="font-medium text-gray-900 dark:text-white">{{ provider.name }}</span
                 ><span
                   v-if="provider.active && provider.enabled"
-                  class="bg-success-50 text-success-700 rounded px-2 py-0.5 text-xs"
+                  class="bg-success-50 text-success-700 dark:bg-success-500/15 dark:text-success-400 rounded px-2 py-0.5 text-xs"
                   >活动</span
                 ><span v-if="!provider.enabled" class="text-xs text-gray-400">已停用</span>
               </div>
@@ -568,7 +643,7 @@ onBeforeUnmount(() => {
       <section
         class="border-y border-gray-200 bg-white px-4 py-5 sm:px-6 dark:border-gray-800 dark:bg-gray-900"
       >
-        <div class="grid gap-2 grid-cols-2 md:grid-cols-[minmax(0,1fr)_180px_180px_auto]">
+        <div class="grid grid-cols-2 gap-2 md:grid-cols-[minmax(0,1fr)_180px_180px_auto]">
           <input
             v-model="filters.keyword"
             class="col-span-2 h-10 rounded-md border-gray-300 text-sm md:col-span-1 dark:border-gray-700 dark:bg-gray-900"
@@ -647,9 +722,15 @@ onBeforeUnmount(() => {
                 <!-- lg 以下把 AI/下限、置信度内联在名称行附近，减少垂直高度；
                      lg 及以上改用右侧独立列展示，两者互补覆盖不留断点缝隙 -->
                 <span class="inline-flex gap-1 text-xs text-gray-400 lg:hidden">
-                  <span>{{ item.aiLevel ? riskLevelLabel[item.aiLevel] : '—' }}/{{ riskLevelLabel[item.deterministicFloor] }}</span>
+                  <span
+                    >{{ item.aiLevel ? riskLevelLabel[item.aiLevel] : '—' }}/{{
+                      riskLevelLabel[item.deterministicFloor]
+                    }}</span
+                  >
                   <span class="text-gray-300">·</span>
-                  <span>{{ item.aiConfidence == null ? '—' : `${Math.round(item.aiConfidence * 100)}%` }}</span>
+                  <span>{{
+                    item.aiConfidence == null ? '—' : `${Math.round(item.aiConfidence * 100)}%`
+                  }}</span>
                 </span>
               </div>
               <p
@@ -769,7 +850,7 @@ onBeforeUnmount(() => {
       class="fixed inset-0 z-[100001] flex items-center justify-center bg-black/40 p-4"
     >
       <div
-        class="flex max-h-[85dvh] w-full max-w-3xl flex-col rounded-md bg-white shadow-xl dark:bg-gray-900"
+        class="flex max-h-[85dvh] w-full max-w-3xl flex-col rounded-md bg-white text-gray-800 shadow-xl dark:bg-gray-900 dark:text-gray-200"
       >
         <div
           class="flex items-center justify-between border-b border-gray-200 px-5 py-4 dark:border-gray-800"
@@ -803,7 +884,7 @@ onBeforeUnmount(() => {
       class="fixed inset-0 z-[100001] flex items-center justify-center bg-black/40 p-4"
     >
       <form
-        class="flex max-h-[90dvh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl dark:bg-gray-900"
+        class="flex max-h-[90dvh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white text-gray-800 shadow-xl dark:bg-gray-900 dark:text-gray-200"
         @submit.prevent="saveProvider"
       >
         <div class="shrink-0 border-b border-gray-200 px-5 py-4 dark:border-gray-800">
@@ -877,7 +958,14 @@ onBeforeUnmount(() => {
                 placeholder="留空表示不发送密钥"
                 :class="providerInputClass"
               />
-              <p :class="providerHintClass">编辑时留空会保留现有密钥。</p>
+              <p
+                v-if="providerAPIKeyBlocked"
+                class="text-warning-700 dark:text-warning-300 mt-1 text-xs leading-5"
+              >
+                AI Provider 密钥加密功能尚未配置。请在部署环境设置
+                MPG_SECRET_ENCRYPTION_KEY，并重启网关后重试。
+              </p>
+              <p v-else :class="providerHintClass">编辑时留空会保留现有密钥。</p>
             </div>
             <div>
               <FieldLabel
@@ -1005,9 +1093,9 @@ onBeforeUnmount(() => {
           <button
             type="submit"
             class="bg-brand-500 hover:bg-brand-600 rounded-lg px-4 py-2.5 text-sm font-medium text-white transition disabled:opacity-60"
-            :disabled="busy !== ''"
+            :disabled="providerSaveDisabled"
           >
-            {{ busy === 'provider-save' ? '保存中…' : '保存' }}
+            {{ providerSubmitText }}
           </button>
         </div>
       </form>
@@ -1018,7 +1106,7 @@ onBeforeUnmount(() => {
       class="fixed inset-0 z-[100001] flex items-center justify-center bg-black/40 p-4"
     >
       <form
-        class="max-h-[90dvh] w-full max-w-3xl overflow-y-auto rounded-md bg-white p-5 shadow-xl dark:bg-gray-900"
+        class="max-h-[90dvh] w-full max-w-3xl overflow-y-auto rounded-md bg-white p-5 text-gray-800 shadow-xl dark:bg-gray-900 dark:text-gray-200"
         @submit.prevent="saveOverride"
       >
         <h3 class="text-base font-semibold dark:text-white">
@@ -1045,18 +1133,39 @@ onBeforeUnmount(() => {
                 这条历史记录还没有中文功能说明，可点击右侧按钮生成。
               </p>
             </div>
-            <button
-              type="button"
-              class="border-brand-200 text-brand-600 dark:border-brand-800 dark:text-brand-400 shrink-0 rounded-md border px-3 py-1.5 text-sm disabled:opacity-50"
-              :disabled="busy !== ''"
-              @click="refreshAISuggestion"
+            <AppTooltip
+              content="此操作会调用当前活动 Provider，重新生成该工具的中文功能说明、风险等级、标签和判断理由。"
+              placement="bottom-end"
             >
-              {{ busy === 'reassess-tool' ? '正在生成…' : '生成/刷新 AI 建议' }}
-            </button>
+              <button
+                type="button"
+                class="border-brand-200 text-brand-600 dark:border-brand-800 dark:text-brand-400 shrink-0 rounded-md border px-3 py-1.5 text-sm disabled:opacity-50"
+                :disabled="busy !== ''"
+                @click="refreshAISuggestion"
+              >
+                {{ busy === 'reassess-tool' ? '正在生成…' : '生成/刷新 AI 建议' }}
+              </button>
+            </AppTooltip>
           </div>
-          <p class="text-xs leading-5 text-gray-500">
-            此操作会调用当前活动 Provider，重新生成该工具的中文功能说明、风险等级、标签和判断理由。
-          </p>
+
+          <div class="grid gap-3 sm:grid-cols-2">
+            <div>
+              <div class="text-xs font-medium tracking-wide text-gray-500 dark:text-gray-400">
+                来源上游 MCP
+              </div>
+              <p class="mt-1 text-sm break-words text-gray-900 dark:text-gray-100">
+                {{ overrideTarget.upstreamName || overrideTarget.upstreamId }}
+              </p>
+            </div>
+            <div>
+              <div class="text-xs font-medium tracking-wide text-gray-500 dark:text-gray-400">
+                工具原始名称
+              </div>
+              <p class="mt-1 text-sm break-words text-gray-900 dark:text-gray-100">
+                {{ overrideTarget.originalName }}
+              </p>
+            </div>
+          </div>
 
           <div>
             <div class="text-xs font-medium tracking-wide text-gray-500">工具原始描述</div>
@@ -1137,7 +1246,7 @@ onBeforeUnmount(() => {
         </div>
         <h4 class="mt-5 text-sm font-semibold text-gray-900 dark:text-white">人工复核结论</h4>
         <div class="mt-4 space-y-4">
-          <label class="block text-sm"
+          <label class="block text-sm text-gray-700 dark:text-gray-300"
             >风险等级<AppSelect
               v-model="overrideForm.level"
               :options="
@@ -1147,18 +1256,17 @@ onBeforeUnmount(() => {
                 }))
               "
               class="mt-1"
-              aria-label="人工复核风险等级"
-            /></label
-          ><label class="block text-sm"
+              aria-label="人工复核风险等级" /></label
+          ><label class="block text-sm text-gray-700 dark:text-gray-300"
             >标签<input
               v-model="overrideForm.tags"
-              class="mt-1 w-full rounded-md border-gray-300 dark:bg-gray-900"
+              class="mt-1 w-full rounded-md border-gray-300 text-gray-800 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200"
               placeholder="write, external_network" /></label
-          ><label class="block text-sm"
+          ><label class="block text-sm text-gray-700 dark:text-gray-300"
             >复核理由<textarea
               v-model="overrideForm.reason"
               rows="3"
-              class="mt-1 w-full rounded-md border-gray-300 dark:bg-gray-900"
+              class="mt-1 w-full rounded-md border-gray-300 text-gray-800 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200"
             ></textarea></label
           ><label
             v-if="overrideBelowFloor"

@@ -53,6 +53,7 @@ const (
 type Assessment struct {
 	ID              string          `json:"id"`
 	UpstreamID      string          `json:"upstreamId"`
+	UpstreamName    string          `json:"upstreamName,omitempty"`
 	OriginalName    string          `json:"originalName"`
 	ExposedName     string          `json:"exposedName"`
 	Description     string          `json:"description"`

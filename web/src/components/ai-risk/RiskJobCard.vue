@@ -57,14 +57,14 @@ function jobSetting(job: AssessmentJob, key: string): number | undefined {
 }
 function statusClass(status: string): string {
   return status === 'completed'
-    ? 'text-success-600'
+    ? 'text-success-600 dark:text-success-400'
     : status === 'failed'
-      ? 'text-error-600'
+      ? 'text-error-600 dark:text-error-400'
       : status === 'partial'
-        ? 'text-warning-600'
+        ? 'text-warning-600 dark:text-warning-400'
         : status === 'running'
-          ? 'text-brand-600'
-          : 'text-gray-500'
+          ? 'text-brand-600 dark:text-brand-400'
+          : 'text-gray-500 dark:text-gray-400'
 }
 function progressClass(status: AssessmentJob['status']): string {
   if (status === 'failed') return 'bg-error-500'
@@ -79,7 +79,7 @@ function formatTime(value: string): string {
 </script>
 
 <template>
-  <div>
+  <div class="text-gray-800 dark:text-gray-200">
     <div class="flex flex-wrap items-center justify-between gap-2 text-sm">
       <span :class="statusClass(job.status)">
         {{ job.scope === 'needs_review' ? '待复核重评' : '常规评级' }} ·

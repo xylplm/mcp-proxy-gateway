@@ -72,7 +72,7 @@ func (r *Router) listAIProviders(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
-	respondOK(c, gin.H{"providers": items})
+	respondOK(c, gin.H{"providers": items, "encryptionReady": r.aiRisk.ProviderEncryptionReady()})
 }
 func (r *Router) getAIProvider(c *gin.Context) {
 	if !r.requireAIRisk(c) {
@@ -174,8 +174,27 @@ func (r *Router) listRiskTools(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
+	r.attachRiskUpstreamNames(c.Request.Context(), result.Items)
 	respondOK(c, result)
 }
+
+func (r *Router) attachRiskUpstreamNames(ctx context.Context, items []risk.Assessment) {
+	if r.upstream == nil || len(items) == 0 {
+		return
+	}
+	upstreams, err := r.upstream.List(ctx)
+	if err != nil {
+		return
+	}
+	names := make(map[string]string, len(upstreams))
+	for _, upstream := range upstreams {
+		names[upstream.ID] = upstream.Config.Name
+	}
+	for i := range items {
+		items[i].UpstreamName = names[items[i].UpstreamID]
+	}
+}
+
 func (r *Router) getRiskTool(c *gin.Context) {
 	if !r.requireAIRisk(c) {
 		return
@@ -185,6 +204,9 @@ func (r *Router) getRiskTool(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
+	items := []risk.Assessment{item}
+	r.attachRiskUpstreamNames(c.Request.Context(), items)
+	item = items[0]
 	respondOK(c, item)
 }
 func (r *Router) reassessRiskTool(c *gin.Context) {
@@ -196,6 +218,9 @@ func (r *Router) reassessRiskTool(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
+	items := []risk.Assessment{item}
+	r.attachRiskUpstreamNames(c.Request.Context(), items)
+	item = items[0]
 	r.recordUpdate(c, audit.ResourceSetting, item.ID)
 	respondOK(c, item)
 }

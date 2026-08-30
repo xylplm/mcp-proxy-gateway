@@ -47,6 +47,7 @@ export interface ProviderInput {
 export interface ToolRiskAssessment {
   id: string
   upstreamId: string
+  upstreamName?: string
   originalName: string
   exposedName: string
   description: string
@@ -109,9 +110,18 @@ export interface AssessmentJob {
   finishedAt?: string
 }
 
-export const listProviders = async () =>
-  (await requestData<{ providers: AIProvider[] | null }>({ url: '/ai-risk/providers' }))
-    .providers ?? []
+export interface ProviderStatus {
+  providers: AIProvider[]
+  encryptionReady: boolean
+}
+
+export const getProviderStatus = async (): Promise<ProviderStatus> => {
+  const status = await requestData<{
+    providers: AIProvider[] | null
+    encryptionReady: boolean
+  }>({ url: '/ai-risk/providers' })
+  return { providers: status.providers ?? [], encryptionReady: status.encryptionReady }
+}
 export const createProvider = (data: ProviderInput) =>
   requestData<AIProvider>({ url: '/ai-risk/providers', method: 'POST', data })
 export const updateProvider = (id: string, data: ProviderInput) =>

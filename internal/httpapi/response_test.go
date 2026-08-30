@@ -60,6 +60,7 @@ func TestCodeToStatusMappingComplete(t *testing.T) {
 		{domain.CodeRateLimited, http.StatusTooManyRequests, 42900},
 		{domain.CodeUpstreamUnavailable, http.StatusBadGateway, 50200},
 		{domain.CodeUpstreamTimeout, http.StatusGatewayTimeout, 50400},
+		{domain.CodeServiceUnavailable, http.StatusServiceUnavailable, 50300},
 		{domain.CodeToolNotFound, http.StatusNotFound, 40401},
 		{domain.CodeBackupInvalid, http.StatusBadRequest, 42200},
 	}
