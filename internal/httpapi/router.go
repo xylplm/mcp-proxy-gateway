@@ -177,6 +177,7 @@ type APIKeyUpstreamAccessService interface {
 
 type AIRiskService interface {
 	ListProviders(context.Context) ([]risk.Provider, error)
+	ProviderEncryptionReady() bool
 	GetProvider(context.Context, string) (risk.Provider, error)
 	CreateProvider(context.Context, risk.ProviderInput) (risk.Provider, error)
 	UpdateProvider(context.Context, string, risk.ProviderInput) (risk.Provider, error)

@@ -22,6 +22,8 @@ const (
 	CodeUpstreamUnavailable ErrorCode = "UPSTREAM_UNAVAILABLE"
 	// CodeUpstreamTimeout 表示上游 MCP 调用超时。
 	CodeUpstreamTimeout ErrorCode = "UPSTREAM_TIMEOUT"
+	// CodeServiceUnavailable 表示服务依赖的运行环境配置尚未就绪。
+	CodeServiceUnavailable ErrorCode = "SERVICE_UNAVAILABLE"
 	// CodeToolNotFound 表示目标工具不存在于可见聚合工具集合中。
 	CodeToolNotFound ErrorCode = "TOOL_NOT_FOUND"
 	// CodeToolRiskForbidden 表示来源工具被当前 API Key 风险档案拒绝。

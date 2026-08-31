@@ -31,6 +31,14 @@ func (r *RiskJobRepo) Create(ctx context.Context, job risk.AssessmentJob) (risk.
 	return modelToRiskJob(model), nil
 }
 
+func (r *RiskJobRepo) HasActiveForProvider(ctx context.Context, providerID string) (bool, error) {
+	var count int64
+	err := r.db.WithContext(ctx).Model(&riskAssessmentJobModel{}).
+		Where("provider_id = ? AND status IN ?", providerID, []risk.JobStatus{risk.JobQueued, risk.JobRunning}).
+		Count(&count).Error
+	return count > 0, err
+}
+
 func (r *RiskJobRepo) Get(ctx context.Context, id string) (risk.AssessmentJob, error) {
 	uid, err := parseUUID(id)
 	if err != nil {

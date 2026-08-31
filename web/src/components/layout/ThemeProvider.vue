@@ -3,58 +3,71 @@
 </template>
 
 <script setup lang="ts">
-import { ref, provide, onMounted, watch, computed } from 'vue'
+import { computed, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue'
+import { parseThemeMode, resolveTheme, THEME_STORAGE_KEY, type ThemeMode } from '@/utils/theme'
 
-type Theme = 'light' | 'dark'
+const systemQuery = window.matchMedia('(prefers-color-scheme: dark)')
+const themeMode = ref<ThemeMode>(readStoredTheme())
+const systemPrefersDark = ref(systemQuery.matches)
+const resolvedTheme = computed(() => resolveTheme(themeMode.value, systemPrefersDark.value))
+const isDarkMode = computed(() => resolvedTheme.value === 'dark')
 
-const theme = ref<Theme>('light')
-const isInitialized = ref(false)
-
-const isDarkMode = computed(() => theme.value === 'dark')
-
-const toggleTheme = () => {
-  theme.value = theme.value === 'light' ? 'dark' : 'light'
+function readStoredTheme(): ThemeMode {
+  try {
+    return parseThemeMode(localStorage.getItem(THEME_STORAGE_KEY))
+  } catch {
+    return 'system'
+  }
 }
 
-onMounted(() => {
-  const savedTheme = localStorage.getItem('theme') as Theme | null
-  const initialTheme = savedTheme || 'light' // Default to light theme
+function setThemeMode(mode: ThemeMode): void {
+  themeMode.value = mode
+}
 
-  theme.value = initialTheme
-  isInitialized.value = true
-})
+function toggleTheme(): void {
+  setThemeMode(resolvedTheme.value === 'dark' ? 'light' : 'dark')
+}
 
-watch([theme, isInitialized], ([newTheme, newIsInitialized]) => {
-  if (newIsInitialized) {
-    localStorage.setItem('theme', newTheme)
-    if (newTheme === 'dark') {
-      document.documentElement.classList.add('dark')
-    } else {
-      document.documentElement.classList.remove('dark')
+function handleSystemThemeChange(event: MediaQueryListEvent): void {
+  systemPrefersDark.value = event.matches
+}
+
+watch(
+  [themeMode, resolvedTheme],
+  ([mode, theme]) => {
+    document.documentElement.classList.toggle('dark', theme === 'dark')
+    document.documentElement.dataset.theme = mode
+    try {
+      localStorage.setItem(THEME_STORAGE_KEY, mode)
+    } catch {
+      // 浏览器禁用本地存储时仍保留当前会话内的主题选择。
     }
-  }
-})
+  },
+  { immediate: true },
+)
 
-provide('theme', {
-  isDarkMode,
-  toggleTheme,
-})
+onMounted(() => systemQuery.addEventListener('change', handleSystemThemeChange))
+onBeforeUnmount(() => systemQuery.removeEventListener('change', handleSystemThemeChange))
+
+provide('theme', { themeMode, resolvedTheme, isDarkMode, setThemeMode, toggleTheme })
 </script>
 
 <script lang="ts">
 import { inject } from 'vue'
-import type { ComputedRef } from 'vue'
+import type { ComputedRef, Ref } from 'vue'
+import type { ResolvedTheme, ThemeMode as ThemeModeValue } from '@/utils/theme'
 
 interface ThemeContext {
+  themeMode: Ref<ThemeModeValue>
+  resolvedTheme: ComputedRef<ResolvedTheme>
   isDarkMode: ComputedRef<boolean>
+  setThemeMode: (mode: ThemeModeValue) => void
   toggleTheme: () => void
 }
 
 export function useTheme(): ThemeContext {
   const theme = inject<ThemeContext>('theme')
-  if (!theme) {
-    throw new Error('useTheme must be used within a ThemeProvider')
-  }
+  if (!theme) throw new Error('useTheme must be used within a ThemeProvider')
   return theme
 }
 </script>
