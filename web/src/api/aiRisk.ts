@@ -18,8 +18,7 @@ export interface AIProvider {
   baseUrl: string
   apiStyle: APIStyle
   model: string
-  hasApiKey: boolean
-  apiKeyMasked?: string
+  apiKey: string
   enabled: boolean
   active: boolean
   timeoutS: number
@@ -35,8 +34,7 @@ export interface ProviderInput {
   baseUrl: string
   apiStyle: APIStyle
   model: string
-  apiKey?: string
-  clearApiKey?: boolean
+  apiKey: string
   enabled: boolean
   timeoutS: number
   batchSize: number
@@ -110,17 +108,9 @@ export interface AssessmentJob {
   finishedAt?: string
 }
 
-export interface ProviderStatus {
-  providers: AIProvider[]
-  encryptionReady: boolean
-}
-
-export const getProviderStatus = async (): Promise<ProviderStatus> => {
-  const status = await requestData<{
-    providers: AIProvider[] | null
-    encryptionReady: boolean
-  }>({ url: '/ai-risk/providers' })
-  return { providers: status.providers ?? [], encryptionReady: status.encryptionReady }
+export const listProviders = async (): Promise<AIProvider[]> => {
+  const data = await requestData<{ providers: AIProvider[] | null }>({ url: '/ai-risk/providers' })
+  return data.providers ?? []
 }
 export const createProvider = (data: ProviderInput) =>
   requestData<AIProvider>({ url: '/ai-risk/providers', method: 'POST', data })

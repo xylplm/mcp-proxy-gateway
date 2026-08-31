@@ -32,16 +32,12 @@ func (r *AIProviderRepo) Update(ctx context.Context, p risk.Provider) (risk.Prov
 	}
 	updates := map[string]any{
 		"name": p.Name, "base_url": p.BaseURL, "api_style": p.APIStyle, "model": p.Model,
-		"enabled":   p.Enabled,
+		"api_key": p.APIKey, "enabled": p.Enabled,
 		"timeout_s": p.TimeoutS, "batch_size": p.BatchSize, "max_concurrency": p.MaxConcurrency,
 		"auto_assess": p.AutoAssess, "updated_at": time.Now().UTC(),
 	}
 	if !p.Enabled {
 		updates["active"] = false
-	}
-	if p.APIKeyCiphertext != nil {
-		updates["api_key_ciphertext"] = p.APIKeyCiphertext
-		updates["api_key_nonce"] = p.APIKeyNonce
 	}
 	res := r.db.WithContext(ctx).Model(&aiProviderModel{}).Where("id = ?", uid).Updates(updates)
 	if res.Error != nil {
@@ -122,20 +118,14 @@ func (r *AIProviderRepo) Delete(ctx context.Context, id string) error {
 
 func providerToModel(p risk.Provider) aiProviderModel {
 	return aiProviderModel{ID: p.ID, Name: p.Name, BaseURL: p.BaseURL, APIStyle: string(p.APIStyle), Model: p.Model,
-		APIKeyCiphertext: p.APIKeyCiphertext, APIKeyNonce: p.APIKeyNonce, Enabled: p.Enabled, Active: p.Active,
+		APIKey: p.APIKey, Enabled: p.Enabled, Active: p.Active,
 		TimeoutS: p.TimeoutS, BatchSize: p.BatchSize,
 		MaxConcurrency: p.MaxConcurrency, AutoAssess: p.AutoAssess, CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt}
 }
 
 func modelToProvider(m aiProviderModel) risk.Provider {
-	hasKey := len(m.APIKeyCiphertext) > 0 && len(m.APIKeyNonce) > 0
-	masked := ""
-	if hasKey {
-		masked = "********"
-	}
 	return risk.Provider{ID: m.ID, Name: m.Name, BaseURL: m.BaseURL, APIStyle: risk.APIStyle(m.APIStyle), Model: m.Model,
-		APIKeyCiphertext: append([]byte(nil), m.APIKeyCiphertext...), APIKeyNonce: append([]byte(nil), m.APIKeyNonce...),
-		HasAPIKey: hasKey, APIKeyMasked: masked, Enabled: m.Enabled, Active: m.Active,
+		APIKey: m.APIKey, Enabled: m.Enabled, Active: m.Active,
 		TimeoutS: m.TimeoutS, BatchSize: m.BatchSize,
 		MaxConcurrency: m.MaxConcurrency, AutoAssess: m.AutoAssess, CreatedAt: m.CreatedAt, UpdatedAt: m.UpdatedAt}
 }

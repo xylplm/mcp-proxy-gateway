@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"os"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -166,19 +165,10 @@ func (a *App) build(envCfg config.EnvConfig) error {
 	}
 	a.auditSvc = auditSvc
 	a.auditRecorder = audit.NewRecorder(repos.Audit, audit.WithLogger(a.logger))
-	var riskCipher *risk.Cipher
-	if encodedKey := os.Getenv("MPG_SECRET_ENCRYPTION_KEY"); encodedKey != "" {
-		var err error
-		riskCipher, err = risk.NewCipher(encodedKey)
-		if err != nil {
-			return err
-		}
-	}
 	riskGovernance := risk.NewGovernanceService(
 		repos.AIProvider,
 		repos.ToolRisk,
 		repos.RiskJob,
-		riskCipher,
 		risk.WithCatalogChangeObserver(agg.InvalidateToolSetCache),
 	)
 	if err := riskGovernance.Resume(context.Background()); err != nil {

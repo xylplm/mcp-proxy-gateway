@@ -72,7 +72,7 @@ func (r *Router) listAIProviders(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
-	respondOK(c, gin.H{"providers": items, "encryptionReady": r.aiRisk.ProviderEncryptionReady()})
+	respondOK(c, gin.H{"providers": items})
 }
 func (r *Router) getAIProvider(c *gin.Context) {
 	if !r.requireAIRisk(c) {

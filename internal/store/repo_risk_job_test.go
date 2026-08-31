@@ -28,3 +28,21 @@ func TestRiskJobUpdateProgressDoesNotOverwriteCancelledJob(t *testing.T) {
 		t.Fatalf("sql expectations: %v", err)
 	}
 }
+
+func TestRiskJobActiveStatusesForProvider(t *testing.T) {
+	repos, mock := newMockRepositories(t)
+	mock.ExpectQuery(`SELECT "status" FROM "risk_assessment_job" WHERE provider_id = \$1 AND status IN \(\$2,\$3\) GROUP BY "status"`).
+		WithArgs("provider-1", risk.JobQueued, risk.JobRunning).
+		WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow(risk.JobRunning).AddRow(risk.JobQueued))
+
+	statuses, err := repos.RiskJob.ActiveStatusesForProvider(context.Background(), "provider-1")
+	if err != nil {
+		t.Fatalf("ActiveStatusesForProvider returned error: %v", err)
+	}
+	if len(statuses) != 2 || statuses[0] != risk.JobRunning || statuses[1] != risk.JobQueued {
+		t.Fatalf("active statuses = %v, want [running queued]", statuses)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}

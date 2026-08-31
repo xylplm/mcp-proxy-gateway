@@ -152,7 +152,6 @@ func TestReassessToolNotifiesCatalogObserverAfterSuccessfulPersist(t *testing.T)
 		providers,
 		catalog,
 		nil,
-		nil,
 		WithCatalogChangeObserver(func() { notifications.Add(1) }),
 	)
 

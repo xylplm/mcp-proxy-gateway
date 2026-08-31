@@ -8,7 +8,7 @@ import (
 )
 
 // FormatVersion 为备份文件的格式版本号；导入时据此识别不兼容的备份格式（Req 23.6）。
-const FormatVersion = "mpg-backup/v1"
+const FormatVersion = "mpg-backup/v2"
 
 // Backup 是一份完整的可导入配置备份（Req 23.4）。
 //
@@ -38,16 +38,10 @@ type BusinessConfig struct {
 	ToolPolicyRules []domain.ToolPolicyRule `json:"toolPolicyRules,omitempty"`
 	// APIKeys 为全部 API Key 元数据及其从属的屏蔽规则与来源白名单。
 	APIKeys []APIKeyEntry `json:"apiKeys"`
-	// AIProviders 包含加密后的 Provider 密钥，不包含环境主密钥。
-	AIProviders []AIProviderEntry `json:"aiProviders,omitempty"`
+	// AIProviders 包含 Provider 的完整配置与明文 API Key；备份文件应按敏感凭据保护。
+	AIProviders []risk.Provider `json:"aiProviders,omitempty"`
 	// ToolRisks 保留风险目录与人工覆盖历史。
 	ToolRisks []risk.Assessment `json:"toolRisks,omitempty"`
-}
-
-type AIProviderEntry struct {
-	Provider      risk.Provider `json:"provider"`
-	KeyCiphertext []byte        `json:"keyCiphertext,omitempty"`
-	KeyNonce      []byte        `json:"keyNonce,omitempty"`
 }
 
 // UpstreamEntry 为单个上游 MCP 的备份条目。

@@ -150,6 +150,10 @@ func AutoMigrate(ctx context.Context, db *gorm.DB, logger *slog.Logger) error {
 func ensureSchemaExtras(ctx context.Context, db *gorm.DB) error {
 	steps := []string{
 		createCallStatDailyTableSQL,
+		// Provider 密钥改为明文后，不迁移旧密文；按当前产品策略直接丢弃历史加密字段。
+		`ALTER TABLE ai_provider ADD COLUMN IF NOT EXISTS api_key text NOT NULL DEFAULT ''`,
+		`ALTER TABLE ai_provider DROP COLUMN IF EXISTS api_key_ciphertext`,
+		`ALTER TABLE ai_provider DROP COLUMN IF EXISTS api_key_nonce`,
 		`UPDATE ai_provider SET active = false WHERE enabled = false AND active = true`,
 		`CREATE INDEX IF NOT EXISTS idx_call_stat_daily_date ON call_stat_daily (stat_date)`,
 		`CREATE INDEX IF NOT EXISTS idx_call_stat_daily_upstream_date ON call_stat_daily (upstream_id, stat_date)`,
@@ -182,6 +186,7 @@ func ensureSchemaExtras(ctx context.Context, db *gorm.DB) error {
 		  AND status IN ('rated','needs_review')
 		  AND (manual_level IS NOT NULL OR ai_level IS NOT NULL)`,
 		`CREATE INDEX IF NOT EXISTS idx_risk_job_status ON risk_assessment_job (status, created_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_risk_job_provider_status ON risk_assessment_job (provider_id, status)`,
 		`CREATE INDEX IF NOT EXISTS idx_audit_log_occurred_at ON audit_log (occurred_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_security_event_created_at ON security_event (created_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_security_block_created_at ON security_block (created_at DESC)`,

@@ -211,7 +211,7 @@ func toStringMap(raw any) map[string]string {
 	}
 }
 
-// resolveCredentialPlaceholders 把连接参数中的 ${credential} 占位替换为加密存储后解密到内存的凭证明文。
+// resolveCredentialPlaceholders 把连接参数中的 ${credential} 占位替换为已保存的凭证明文。
 func resolveCredentialPlaceholders(value string, credential string) string {
 	if credential == "" {
 		return value

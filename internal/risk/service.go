@@ -31,7 +31,7 @@ type CatalogRepository interface {
 
 type JobRepository interface {
 	Create(context.Context, AssessmentJob) (AssessmentJob, error)
-	HasActiveForProvider(context.Context, string) (bool, error)
+	ActiveStatusesForProvider(context.Context, string) ([]JobStatus, error)
 	Get(context.Context, string) (AssessmentJob, error)
 	List(context.Context, int) ([]AssessmentJob, error)
 	ListQueued(context.Context) ([]AssessmentJob, error)
@@ -47,7 +47,6 @@ type ProviderInput struct {
 	APIStyle       APIStyle `json:"apiStyle"`
 	Model          string   `json:"model"`
 	APIKey         string   `json:"apiKey"`
-	ClearAPIKey    bool     `json:"clearApiKey"`
 	Enabled        bool     `json:"enabled"`
 	TimeoutS       int      `json:"timeoutS"`
 	BatchSize      int      `json:"batchSize"`
@@ -58,7 +57,6 @@ type ProviderInput struct {
 type GovernanceService struct {
 	providers       ProviderRepository
 	catalog         CatalogRepository
-	cipher          *Cipher
 	client          *OpenAIClient
 	jobs            JobRepository
 	running         sync.Map
@@ -75,8 +73,6 @@ type autoAssessmentTrigger struct {
 
 const autoAssessmentDebounce = 300 * time.Millisecond
 
-const encryptionUnavailableMessage = "AI Provider 密钥加密功能尚未配置。请在部署环境设置 MPG_SECRET_ENCRYPTION_KEY，并重启网关后重试。"
-
 // GovernanceOption configures an optional integration point without widening
 // the catalog and job repository contracts.
 type GovernanceOption func(*GovernanceService)
@@ -90,8 +86,8 @@ func WithCatalogChangeObserver(observer func()) GovernanceOption {
 	}
 }
 
-func NewGovernanceService(providers ProviderRepository, catalog CatalogRepository, jobs JobRepository, cipher *Cipher, options ...GovernanceOption) *GovernanceService {
-	service := &GovernanceService{providers: providers, catalog: catalog, jobs: jobs, cipher: cipher, client: NewOpenAIClient()}
+func NewGovernanceService(providers ProviderRepository, catalog CatalogRepository, jobs JobRepository, options ...GovernanceOption) *GovernanceService {
+	service := &GovernanceService{providers: providers, catalog: catalog, jobs: jobs, client: NewOpenAIClient()}
 	for _, option := range options {
 		option(service)
 	}
@@ -107,7 +103,6 @@ func (s *GovernanceService) notifyCatalogChange() {
 func (s *GovernanceService) ListProviders(ctx context.Context) ([]Provider, error) {
 	return s.providers.List(ctx)
 }
-func (s *GovernanceService) ProviderEncryptionReady() bool { return s.cipher != nil }
 func (s *GovernanceService) GetProvider(ctx context.Context, id string) (Provider, error) {
 	return s.providers.Get(ctx, id)
 }
@@ -123,16 +118,6 @@ func (s *GovernanceService) CreateProvider(ctx context.Context, in ProviderInput
 	if err := ValidateProvider(p); err != nil {
 		return Provider{}, fmt.Errorf("Provider 配置无效: %w", err)
 	}
-	if strings.TrimSpace(in.APIKey) != "" {
-		if s.cipher == nil {
-			return Provider{}, domain.NewError(domain.CodeServiceUnavailable, encryptionUnavailableMessage)
-		}
-		ciphertext, nonce, err := s.cipher.Encrypt([]byte(in.APIKey))
-		if err != nil {
-			return Provider{}, err
-		}
-		p.APIKeyCiphertext, p.APIKeyNonce = ciphertext, nonce
-	}
 	return s.providers.Create(ctx, p)
 }
 
@@ -145,17 +130,6 @@ func (s *GovernanceService) UpdateProvider(ctx context.Context, id string, in Pr
 	p.ID, p.Active = id, current.Active
 	if err := ValidateProvider(p); err != nil {
 		return Provider{}, fmt.Errorf("Provider 配置无效: %w", err)
-	}
-	if in.ClearAPIKey {
-		p.APIKeyCiphertext, p.APIKeyNonce = []byte{}, []byte{}
-	} else if strings.TrimSpace(in.APIKey) != "" {
-		if s.cipher == nil {
-			return Provider{}, domain.NewError(domain.CodeServiceUnavailable, encryptionUnavailableMessage)
-		}
-		p.APIKeyCiphertext, p.APIKeyNonce, err = s.cipher.Encrypt([]byte(in.APIKey))
-		if err != nil {
-			return Provider{}, err
-		}
 	}
 	return s.providers.Update(ctx, p)
 }
@@ -177,26 +151,36 @@ type AssessSummary struct {
 }
 
 func (s *GovernanceService) QueueAssessment(ctx context.Context, limit int) (AssessmentJob, error) {
-	return s.queueAssessment(ctx, limit, "pending")
+	return s.queueAssessment(ctx, limit, "pending", false)
 }
 
 func (s *GovernanceService) QueueReviewAssessment(ctx context.Context, limit int) (AssessmentJob, error) {
-	return s.queueAssessment(ctx, limit, "needs_review")
+	return s.queueAssessment(ctx, limit, "needs_review", false)
 }
 
-func (s *GovernanceService) queueAssessment(ctx context.Context, limit int, scope string) (AssessmentJob, error) {
+func (s *GovernanceService) queueAssessment(ctx context.Context, limit int, scope string, allowAutoFollowUp bool) (AssessmentJob, error) {
 	s.queueMu.Lock()
 	defer s.queueMu.Unlock()
 
-	p, _, err := s.activeProviderWithKey(ctx)
+	p, err := s.providers.Active(ctx)
 	if err != nil {
 		return AssessmentJob{}, err
 	}
-	active, err := s.jobs.HasActiveForProvider(ctx, p.ID)
+	if allowAutoFollowUp && !p.AutoAssess {
+		return AssessmentJob{}, domain.NewError(domain.CodeConflict, "当前活动 Provider 未开启自动评级")
+	}
+	activeStatuses, err := s.jobs.ActiveStatusesForProvider(ctx, p.ID)
 	if err != nil {
 		return AssessmentJob{}, err
 	}
-	if active {
+	hasQueued, hasRunning := false, false
+	for _, status := range activeStatuses {
+		hasQueued = hasQueued || status == JobQueued
+		hasRunning = hasRunning || status == JobRunning
+	}
+	// 管理员手动发起时始终保持单任务。自动同步只在已有运行任务且尚无等待任务时
+	// 保留一个跟进任务，确保任务执行期间新同步进来的工具不会被漏掉，也不会堆积队列。
+	if hasQueued || (hasRunning && (!allowAutoFollowUp || scope != "pending")) {
 		return AssessmentJob{}, domain.NewError(domain.CodeConflict, "当前活动 Provider 已有等待中或运行中的评级任务")
 	}
 	var items []Assessment
@@ -277,13 +261,16 @@ func (s *GovernanceService) TriggerAutoAssessment(ctx context.Context) error {
 		trigger = &autoAssessmentTrigger{done: make(chan struct{})}
 		s.autoTrigger = trigger
 		time.AfterFunc(autoAssessmentDebounce, func() {
-			trigger.err = s.triggerAutoAssessmentNow(context.WithoutCancel(ctx))
 			s.autoTriggerMu.Lock()
 			if s.autoTrigger == trigger {
 				s.autoTrigger = nil
 			}
-			close(trigger.done)
 			s.autoTriggerMu.Unlock()
+
+			// 定时器开始执行后来的同步事件应进入下一轮，而不是和正在创建的任务共用
+			// 同一结果；这样运行期新增工具会得到一个受控的跟进任务。
+			trigger.err = s.triggerAutoAssessmentNow(context.WithoutCancel(ctx))
+			close(trigger.done)
 		})
 	}
 	s.autoTriggerMu.Unlock()
@@ -297,20 +284,11 @@ func (s *GovernanceService) TriggerAutoAssessment(ctx context.Context) error {
 }
 
 func (s *GovernanceService) triggerAutoAssessmentNow(ctx context.Context) error {
-	p, err := s.providers.Active(ctx)
+	_, err := s.queueAssessment(ctx, 500, "pending", true)
 	if err != nil {
-		if apiErr, ok := err.(*domain.APIError); ok && apiErr.Code == domain.CodeNotFound {
-			return nil
-		}
-		return err
-	}
-	if !p.AutoAssess {
-		return nil
-	}
-	_, err = s.QueueAssessment(ctx, 500)
-	if err != nil {
-		if apiErr, ok := err.(*domain.APIError); ok && apiErr.Code == domain.CodeConflict {
-			// 没有待评级工具，不是错误。
+		if apiErr, ok := err.(*domain.APIError); ok && (apiErr.Code == domain.CodeConflict || apiErr.Code == domain.CodeNotFound) {
+			// 没有活动 Provider、未开启自动评级、没有待评级工具或已有受控跟进任务时，
+			// 自动触发无需向同步流程报告错误。
 			return nil
 		}
 	}
@@ -341,6 +319,12 @@ func (s *GovernanceService) launchJob(ctx context.Context, job AssessmentJob) {
 
 func (s *GovernanceService) runJob(ctx context.Context, job AssessmentJob) error {
 	if err := s.jobs.SetRunning(ctx, job.ID); err != nil {
+		var apiErr *domain.APIError
+		if errors.As(err, &apiErr) && apiErr.Code == domain.CodeConflict {
+			// 任务可能已被另一实例认领或被管理员取消。此时不能再写入失败状态，
+			// 否则会覆盖实际仍在执行的任务状态。
+			return err
+		}
 		// SetRunning 失败（DB 短暂不可用）时，将 job 标记为失败，避免永久卡在 queued 状态。
 		job.Status, job.LastError = JobFailed, err.Error()
 		_ = s.jobs.UpdateProgress(ctx, job)
@@ -358,6 +342,13 @@ func (s *GovernanceService) runJob(ctx context.Context, job AssessmentJob) error
 		job.Status, job.LastError = JobFailed, err.Error()
 		_ = s.jobs.UpdateProgress(ctx, job)
 		return err
+	}
+	if !p.Enabled {
+		// Provider 被停用后，已排队的任务不能继续消耗该 Provider；正在执行中的
+		// 任务会持有启动时的快照并自行完成，这里只阻止尚未开始的新任务。
+		job.Status, job.LastError = JobCancelled, "Provider 已停用，已取消评级任务"
+		_ = s.jobs.UpdateProgress(ctx, job)
+		return nil
 	}
 	var items []Assessment
 	if job.Scope == "needs_review" {
@@ -626,27 +617,14 @@ func (s *GovernanceService) providerWithKey(ctx context.Context, id string) (Pro
 	if err != nil {
 		return Provider{}, "", err
 	}
-	return s.decryptProviderKey(p)
+	return p, p.APIKey, nil
 }
 func (s *GovernanceService) activeProviderWithKey(ctx context.Context) (Provider, string, error) {
 	p, err := s.providers.Active(ctx)
 	if err != nil {
 		return Provider{}, "", err
 	}
-	return s.decryptProviderKey(p)
-}
-func (s *GovernanceService) decryptProviderKey(p Provider) (Provider, string, error) {
-	if len(p.APIKeyCiphertext) == 0 {
-		return p, "", nil
-	}
-	if s.cipher == nil {
-		return Provider{}, "", domain.NewError(domain.CodeServiceUnavailable, encryptionUnavailableMessage)
-	}
-	plain, err := s.cipher.Decrypt(p.APIKeyCiphertext, p.APIKeyNonce)
-	if err != nil {
-		return Provider{}, "", err
-	}
-	return p, string(plain), nil
+	return p, p.APIKey, nil
 }
 
 func providerFromInput(in ProviderInput) Provider {
@@ -667,6 +645,6 @@ func providerFromInput(in ProviderInput) Provider {
 		concurrency = 1
 	}
 	return Provider{Name: strings.TrimSpace(in.Name), BaseURL: strings.TrimRight(strings.TrimSpace(in.BaseURL), "/"), APIStyle: style,
-		Model: strings.TrimSpace(in.Model), Enabled: in.Enabled,
+		Model: strings.TrimSpace(in.Model), APIKey: in.APIKey, Enabled: in.Enabled,
 		TimeoutS: timeout, BatchSize: batch, MaxConcurrency: concurrency, AutoAssess: in.AutoAssess}
 }

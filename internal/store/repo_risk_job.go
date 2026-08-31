@@ -31,12 +31,19 @@ func (r *RiskJobRepo) Create(ctx context.Context, job risk.AssessmentJob) (risk.
 	return modelToRiskJob(model), nil
 }
 
-func (r *RiskJobRepo) HasActiveForProvider(ctx context.Context, providerID string) (bool, error) {
-	var count int64
-	err := r.db.WithContext(ctx).Model(&riskAssessmentJobModel{}).
+func (r *RiskJobRepo) ActiveStatusesForProvider(ctx context.Context, providerID string) ([]risk.JobStatus, error) {
+	var statuses []string
+	if err := r.db.WithContext(ctx).Model(&riskAssessmentJobModel{}).
 		Where("provider_id = ? AND status IN ?", providerID, []risk.JobStatus{risk.JobQueued, risk.JobRunning}).
-		Count(&count).Error
-	return count > 0, err
+		Group("status").
+		Pluck("status", &statuses).Error; err != nil {
+		return nil, err
+	}
+	result := make([]risk.JobStatus, 0, len(statuses))
+	for _, status := range statuses {
+		result = append(result, risk.JobStatus(status))
+	}
+	return result, nil
 }
 
 func (r *RiskJobRepo) Get(ctx context.Context, id string) (risk.AssessmentJob, error) {

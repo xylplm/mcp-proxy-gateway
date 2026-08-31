@@ -50,15 +50,9 @@ Smart 与 Full 模式均复用聚合服务，因此工具发现和真实调用�
 
 ## Provider 密钥与网络
 
-Provider API Key 使用 AES-256-GCM 加密，主密钥来自：
+Provider API Key 以明文保存到数据库，管理 API 和管理页面会返回完整 `apiKey`，便于随时查看、复制和修改。创建或更新时，`apiKey` 是完整值；更新为空字符串会清除已保存密钥，空密钥的 Provider 不会发送 Authorization 请求头。
 
-```text
-MPG_SECRET_ENCRYPTION_KEY=<32-byte base64 key>
-```
-
-数据库只保存 ciphertext 和 nonce，管理 API 仅返回 `hasApiKey` 与掩码。更新时空 Key 保留旧值，`clearApiKey=true` 才清除。未配置主密钥时网关其他能力仍可启动，但不能保存新密钥或使用已有加密 Provider。
-
-备份包含加密后的 Provider 配置但不包含环境变量主密钥。恢复环境必须单独恢复同一主密钥；缺少或错误主密钥时 Provider 不可用，但不能影响 legacy Key 和已有 MCP 工具同步。
+备份同样包含明文 Provider API Key。数据库、备份文件和管理账号都应按敏感凭据保护；不要将导出的备份文件提交到版本库或发送到不受控位置。
 
 Base URL 只接受无 userinfo 的 HTTP/HTTPS URL。客户端限制总超时、响应体大小和跨主机重定向，并支持访问公网、本机或局域网中的 OpenAI-compatible 服务。
 

@@ -6,6 +6,7 @@ import PageBreadcrumb from '@/components/common/PageBreadcrumb.vue'
 import FieldLabel from '@/components/common/FieldLabel.vue'
 import RiskJobCard from '@/components/ai-risk/RiskJobCard.vue'
 import { RefreshIcon, PlusIcon, CheckIcon, TrashIcon } from '@/icons'
+import { useConfirm } from '@/composables/useConfirm'
 import { useToast } from '@/composables/useToast'
 import {
   activateProvider,
@@ -14,8 +15,8 @@ import {
   clearManualOverride,
   createProvider,
   deleteProvider,
-  getProviderStatus,
   listAssessmentJobs,
+  listProviders,
   listRiskTools,
   queueAssessment,
   reassessRiskTool,
@@ -35,8 +36,8 @@ import {
 import { riskBadgeClass, riskLevelLabel, riskStatusLabel } from '@/utils/riskLevel'
 
 const toast = useToast()
+const { confirm } = useConfirm()
 const providers = ref<AIProvider[]>([])
-const providerEncryptionReady = ref(false)
 const tools = ref<ToolRiskAssessment[]>([])
 const jobs = ref<AssessmentJob[]>([])
 const summary = ref<RiskSummary>({
@@ -76,27 +77,63 @@ let loadRequestSeq = 0
 
 const activeProvider = computed(() => providers.value.find((item) => item.active && item.enabled))
 const enabledProviders = computed(() => providers.value.filter((item) => item.enabled))
+const activeProviderJobs = computed(() => {
+  const provider = activeProvider.value
+  if (!provider) return []
+  return jobs.value.filter(
+    (job) =>
+      job.providerId === provider.id && (job.status === 'queued' || job.status === 'running'),
+  )
+})
+const activeProviderJob = computed(
+  () =>
+    activeProviderJobs.value.find((job) => job.status === 'running') ??
+    activeProviderJobs.value[0] ??
+    null,
+)
+// 自动同步可能在运行任务后保留一个等待中的跟进任务。优先展示真实运行中的任务，
+// 让用户无需打开历史记录也能持续看到进度；无运行任务时再回退到最新等待/历史任务。
+const primaryJob = computed(
+  () =>
+    jobs.value.find((job) => job.status === 'running') ??
+    jobs.value.find((job) => job.status === 'queued') ??
+    jobs.value[0] ??
+    null,
+)
+const jobHistory = computed(() =>
+  primaryJob.value ? jobs.value.filter((job) => job.id !== primaryJob.value?.id) : [],
+)
 const shouldActivateSavedProvider = computed(
   () => !editingProvider.value && providerForm.value.enabled && !activeProvider.value,
 )
-const providerAPIKeyBlocked = computed(
-  () => !providerEncryptionReady.value && providerForm.value.apiKey?.trim() !== '',
-)
-const providerSaveDisabled = computed(() => busy.value !== '' || providerAPIKeyBlocked.value)
+const providerSaveDisabled = computed(() => busy.value !== '')
 const providerSubmitText = computed(() => {
   if (busy.value === 'provider-save') return '保存中…'
   return shouldActivateSavedProvider.value ? '保存并设为活动' : '保存'
 })
+const assessmentHint = computed(() => {
+  if (!activeProvider.value) {
+    if (providers.value.length === 0) return '尚未配置 AI Provider，请先新增并启用 Provider。'
+    if (enabledProviders.value.length === 0)
+      return '当前没有已启用的 AI Provider，请先编辑并启用一个 Provider。'
+    if (enabledProviders.value.length === 1)
+      return '当前没有活动 Provider，请先将唯一可用的 Provider 设为活动。'
+    return '当前没有活动 Provider，请从多个可用 Provider 中选择一个设为活动。'
+  }
+  if (activeProviderJob.value?.status === 'running') {
+    if (activeProviderJobs.value.some((job) => job.status === 'queued'))
+      return '活动 Provider 正在执行评级，且已有一个等待中的任务，请等待完成或取消后再开始。'
+    return '活动 Provider 已有进行中的评级任务，请等待完成或取消后再开始。'
+  }
+  if (activeProviderJob.value)
+    return `活动 Provider 已有${activeProviderJob.value.status === 'queued' ? '等待中' : '进行中'}的评级任务，请等待完成或取消后再开始。`
+  return ''
+})
 const assessmentDisabledReason = computed(() => {
   if (busy.value !== '') return '当前正在执行其他操作，请稍候。'
-  if (activeProvider.value) return ''
-  if (providers.value.length === 0) return '尚未配置 AI Provider，请先新增并启用 Provider。'
-  if (enabledProviders.value.length === 0)
-    return '当前没有已启用的 AI Provider，请先编辑并启用一个 Provider。'
-  if (enabledProviders.value.length === 1)
-    return '当前没有活动 Provider，请先将唯一可用的 Provider 设为活动。'
-  return '当前没有活动 Provider，请从多个可用 Provider 中选择一个设为活动。'
+  return assessmentHint.value
 })
+const assessmentDisabled = computed(() => assessmentDisabledReason.value !== '')
 const totalPages = computed(() => Math.max(1, Math.ceil(filteredTotal.value / pageSize.value)))
 const pageStart = computed(() =>
   filteredTotal.value === 0 ? 0 : (currentPage.value - 1) * pageSize.value + 1,
@@ -169,8 +206,8 @@ async function loadAll(): Promise<void> {
   const requestedPageSize = pageSize.value
   loading.value = true
   try {
-    const [providerStatus, page, jobRows] = await Promise.all([
-      getProviderStatus(),
+    const [providerRows, page, jobRows] = await Promise.all([
+      listProviders(),
       listRiskTools({
         page: requestedPage,
         pageSize: requestedPageSize,
@@ -188,8 +225,7 @@ async function loadAll(): Promise<void> {
       void loadAll()
       return
     }
-    providers.value = providerStatus.providers
-    providerEncryptionReady.value = providerStatus.encryptionReady
+    providers.value = providerRows
     tools.value = (page.items ?? []).map(normalizeRiskTool)
     filteredTotal.value = page.total
     summary.value = page.summary
@@ -223,6 +259,7 @@ function changePageSize(): void {
 }
 
 function openProvider(provider?: AIProvider): void {
+  if (busy.value !== '') return
   editingProvider.value = provider ?? null
   providerForm.value = provider
     ? {
@@ -230,7 +267,7 @@ function openProvider(provider?: AIProvider): void {
         baseUrl: provider.baseUrl,
         apiStyle: provider.apiStyle,
         model: provider.model,
-        apiKey: '',
+        apiKey: provider.apiKey,
         enabled: provider.enabled,
         timeoutS: provider.timeoutS,
         batchSize: provider.batchSize,
@@ -242,6 +279,7 @@ function openProvider(provider?: AIProvider): void {
 }
 
 async function saveProvider(): Promise<void> {
+  if (busy.value !== '') return
   busy.value = 'provider-save'
   try {
     if (editingProvider.value) {
@@ -277,6 +315,16 @@ async function providerAction(
   action: 'activate' | 'test' | 'delete',
   provider: AIProvider,
 ): Promise<void> {
+  if (busy.value !== '') return
+  if (action === 'delete') {
+    const accepted = await confirm({
+      title: '确认删除 Provider',
+      message: `确定删除 AI Provider「${provider.name}」吗？其评级任务会一并移除；已生成的工具评级历史会保留。该操作不可恢复。`,
+      confirmText: '删除',
+      tone: 'danger',
+    })
+    if (!accepted || busy.value !== '') return
+  }
   busy.value = `${action}:${provider.id}`
   try {
     if (action === 'activate') {
@@ -300,6 +348,7 @@ async function providerAction(
 }
 
 async function reconcile(): Promise<void> {
+  if (busy.value !== '') return
   busy.value = 'reconcile'
   try {
     const result = await reconcileRiskCatalog()
@@ -314,6 +363,7 @@ async function reconcile(): Promise<void> {
   }
 }
 async function assess(): Promise<void> {
+  if (busy.value !== '') return
   busy.value = 'assess'
   try {
     await queueAssessment()
@@ -466,7 +516,7 @@ onBeforeUnmount(() => {
               >
                 <button
                   class="bg-brand-500 inline-flex h-10 items-center gap-2 rounded-md px-3 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
-                  :disabled="!activeProvider || busy !== ''"
+                  :disabled="assessmentDisabled"
                   aria-label="开始评级"
                   @click="assess"
                 >
@@ -475,20 +525,21 @@ onBeforeUnmount(() => {
               </AppTooltip>
             </div>
             <div
-              v-if="!activeProvider"
+              v-if="assessmentHint"
               class="flex max-w-md flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-500 dark:text-gray-400"
             >
-              <span>{{ assessmentDisabledReason }}</span>
+              <span>{{ assessmentHint }}</span>
               <button
-                v-if="providers.length === 0"
+                v-if="!activeProvider && providers.length === 0"
                 type="button"
-                class="text-brand-600 dark:text-brand-400 font-medium"
+                class="text-brand-600 dark:text-brand-400 font-medium disabled:cursor-not-allowed disabled:opacity-50"
+                :disabled="busy !== ''"
                 @click="openProvider()"
               >
                 新增 Provider
               </button>
               <button
-                v-else-if="enabledProviders.length === 1"
+                v-else-if="!activeProvider && enabledProviders.length === 1"
                 type="button"
                 class="text-brand-600 dark:text-brand-400 font-medium"
                 :disabled="busy !== ''"
@@ -500,7 +551,7 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <div
-          class="mt-5 grid grid-cols-3 gap-px border-y border-gray-200 bg-gray-200 sm:grid-cols-5 dark:border-gray-800 dark:bg-gray-800"
+          class="mt-5 grid grid-cols-2 gap-px border-y border-gray-200 bg-gray-200 sm:grid-cols-5 dark:border-gray-800 dark:bg-gray-800"
         >
           <div
             v-for="(item, idx) in [
@@ -539,7 +590,7 @@ onBeforeUnmount(() => {
             v-tooltip:top="item.tooltip"
             :class="[
               'cursor-help bg-white px-4 py-3 dark:bg-gray-900',
-              idx === 4 ? 'col-span-3 sm:col-span-1' : '',
+              idx === 4 ? 'col-span-2 sm:col-span-1' : '',
             ]"
           >
             <div class="text-xs text-gray-500">{{ item.label }}</div>
@@ -556,10 +607,11 @@ onBeforeUnmount(() => {
         <div class="flex items-center justify-between gap-3">
           <div>
             <h3 class="text-base font-semibold text-gray-900 dark:text-white">AI Provider</h3>
-            <p class="mt-1 text-sm text-gray-500">API Key 加密保存，编辑时留空表示保留。</p>
+            <p class="mt-1 text-sm text-gray-500">API Key 可直接查看和编辑；留空会清除当前密钥。</p>
           </div>
           <button
-            class="bg-brand-500 inline-flex h-9 items-center gap-2 rounded-md px-3 text-sm font-medium text-white"
+            class="bg-brand-500 inline-flex h-9 items-center gap-2 rounded-md px-3 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+            :disabled="busy !== ''"
             @click="openProvider()"
           >
             <PlusIcon class="h-4 w-4" />新增
@@ -585,29 +637,33 @@ onBeforeUnmount(() => {
               </div>
               <p class="mt-1 truncate text-sm text-gray-500">
                 {{ provider.model }} · {{ provider.baseUrl }} ·
-                {{ provider.apiKeyMasked || '无密钥' }}
+                {{ provider.apiKey || '无密钥' }}
               </p>
             </div>
             <div class="flex flex-wrap gap-2 text-sm">
               <button
-                class="rounded-md border px-3 py-1.5 dark:border-gray-700"
+                class="rounded-md border px-3 py-1.5 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-700"
+                :disabled="busy !== ''"
                 @click="openProvider(provider)"
               >
                 编辑</button
               ><button
-                class="rounded-md border px-3 py-1.5 dark:border-gray-700"
+                class="rounded-md border px-3 py-1.5 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-700"
+                :disabled="busy !== ''"
                 @click="providerAction('test', provider)"
               >
                 测试</button
               ><button
                 v-if="provider.enabled && !provider.active"
-                class="rounded-md border px-3 py-1.5 dark:border-gray-700"
+                class="rounded-md border px-3 py-1.5 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-700"
+                :disabled="busy !== ''"
                 @click="providerAction('activate', provider)"
               >
                 设为活动</button
               ><button
-                class="border-error-200 text-error-600 inline-flex items-center rounded-md border p-2"
+                class="border-error-200 text-error-600 inline-flex items-center rounded-md border p-2 disabled:cursor-not-allowed disabled:opacity-50"
                 aria-label="删除 Provider"
+                :disabled="busy !== ''"
                 @click="providerAction('delete', provider)"
               >
                 <TrashIcon class="h-4 w-4" />
@@ -628,16 +684,16 @@ onBeforeUnmount(() => {
         class="border-y border-gray-200 bg-white px-4 py-5 sm:px-6 dark:border-gray-800 dark:bg-gray-900"
       >
         <div class="flex items-center justify-between gap-3">
-          <h3 class="text-base font-semibold text-gray-900 dark:text-white">最近评级任务</h3>
+          <h3 class="text-base font-semibold text-gray-900 dark:text-white">评级任务</h3>
           <button
-            v-if="jobs.length > 1"
+            v-if="jobHistory.length"
             class="text-brand-600 dark:text-brand-400 text-sm font-medium"
             @click="jobHistoryOpen = true"
           >
-            查看历史（{{ jobs.length - 1 }}）
+            查看历史（{{ jobHistory.length }}）
           </button>
         </div>
-        <RiskJobCard class="mt-4" :job="jobs[0]!" @cancel="cancelJob" />
+        <RiskJobCard class="mt-4" :job="primaryJob!" @cancel="cancelJob" />
       </section>
 
       <section
@@ -675,7 +731,7 @@ onBeforeUnmount(() => {
             aria-label="评级状态"
           />
           <button
-            class="h-10 rounded-md border px-4 text-sm dark:border-gray-700"
+            class="col-span-2 h-10 rounded-md border px-4 text-sm md:col-span-1 dark:border-gray-700"
             @click="applyFilters"
           >
             筛选
@@ -745,7 +801,7 @@ onBeforeUnmount(() => {
                 {{ item.description || '无描述' }}
               </p>
               <p class="mt-1 truncate text-xs text-gray-400">
-                {{ item.upstreamId }} · {{ item.exposedName }}
+                {{ item.upstreamName || item.upstreamId }} · {{ item.exposedName }}
               </p>
             </div>
             <!-- md 以下操作按钮在主区域右侧，lg 时恢复独立列 -->
@@ -857,7 +913,7 @@ onBeforeUnmount(() => {
         >
           <div>
             <h3 class="text-base font-semibold text-gray-900 dark:text-white">评级任务历史</h3>
-            <p class="mt-1 text-xs text-gray-500">共 {{ jobs.length - 1 }} 条较早记录</p>
+            <p class="mt-1 text-xs text-gray-500">共 {{ jobHistory.length }} 条较早记录</p>
           </div>
           <button
             type="button"
@@ -869,7 +925,7 @@ onBeforeUnmount(() => {
         </div>
         <div class="overflow-y-auto px-5">
           <RiskJobCard
-            v-for="job in jobs.slice(1)"
+            v-for="job in jobHistory"
             :key="job.id"
             :job="job"
             class="border-b border-gray-100 py-5 last:border-b-0 dark:border-gray-800"
@@ -955,17 +1011,12 @@ onBeforeUnmount(() => {
                 v-model="providerForm.apiKey"
                 type="text"
                 autocomplete="off"
-                placeholder="留空表示不发送密钥"
+                autocapitalize="off"
+                spellcheck="false"
+                placeholder="留空会清除当前密钥"
                 :class="providerInputClass"
               />
-              <p
-                v-if="providerAPIKeyBlocked"
-                class="text-warning-700 dark:text-warning-300 mt-1 text-xs leading-5"
-              >
-                AI Provider 密钥加密功能尚未配置。请在部署环境设置
-                MPG_SECRET_ENCRYPTION_KEY，并重启网关后重试。
-              </p>
-              <p v-else :class="providerHintClass">编辑时留空会保留现有密钥。</p>
+              <p :class="providerHintClass">密钥直接显示与保存；留空会清除当前密钥。</p>
             </div>
             <div>
               <FieldLabel

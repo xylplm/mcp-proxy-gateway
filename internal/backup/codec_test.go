@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/config"
+	"github.com/myGithub/mcp-proxy-gateway/internal/risk"
 )
 
 // TestMarshalUnmarshalRoundTrip 验证 Marshal 后 Unmarshal 得到等价的备份对象。
@@ -49,6 +50,37 @@ func TestValidateAcceptsValidBackup(t *testing.T) {
 	b := Backup{Version: FormatVersion, YAML: config.DefaultYAMLConfig(), Business: sampleBusiness()}
 	if err := Validate(b); err != nil {
 		t.Fatalf("合法备份应通过校验，却返回错误：%v", err)
+	}
+}
+
+func TestPlaintextProviderKeyRoundTrip(t *testing.T) {
+	provider := risk.Provider{
+		ID: "33333333-3333-4333-8333-333333333333", Name: "demo-provider",
+		BaseURL: "https://api.example.com/v1", APIStyle: risk.APIStyleChatCompletions,
+		Model: "demo-model", APIKey: "provider-plain-secret", Enabled: true,
+		TimeoutS: 60, BatchSize: 10, MaxConcurrency: 1,
+	}
+	backup := Backup{
+		Version: FormatVersion,
+		YAML:    config.DefaultYAMLConfig(),
+		Business: BusinessConfig{
+			AIProviders: []risk.Provider{provider},
+		},
+	}
+
+	data, err := Marshal(backup)
+	if err != nil {
+		t.Fatalf("编码备份失败：%v", err)
+	}
+	got, err := Unmarshal(data)
+	if err != nil {
+		t.Fatalf("解析备份失败：%v", err)
+	}
+	if len(got.Business.AIProviders) != 1 || got.Business.AIProviders[0].APIKey != provider.APIKey {
+		t.Fatalf("明文 Provider API Key 未完整往返：%+v", got.Business.AIProviders)
+	}
+	if err := Validate(got); err != nil {
+		t.Fatalf("含明文 Provider API Key 的备份应通过校验：%v", err)
 	}
 }
 

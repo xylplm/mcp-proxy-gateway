@@ -99,20 +99,17 @@ func validateBusiness(bc BusinessConfig) error {
 		}
 	}
 	seenProviderID := make(map[string]struct{})
-	for i, entry := range bc.AIProviders {
+	for i, provider := range bc.AIProviders {
 		prefix := fmt.Sprintf("aiProviders[%d]", i)
-		if entry.Provider.ID == "" {
-			fields[prefix+".provider.id"] = "Provider 标识不能为空"
-		} else if _, exists := seenProviderID[entry.Provider.ID]; exists {
-			fields[prefix+".provider.id"] = "Provider 标识重复"
+		if provider.ID == "" {
+			fields[prefix+".id"] = "Provider 标识不能为空"
+		} else if _, exists := seenProviderID[provider.ID]; exists {
+			fields[prefix+".id"] = "Provider 标识重复"
 		} else {
-			seenProviderID[entry.Provider.ID] = struct{}{}
+			seenProviderID[provider.ID] = struct{}{}
 		}
-		if err := risk.ValidateProvider(entry.Provider); err != nil {
-			fields[prefix+".provider"] = err.Error()
-		}
-		if len(entry.KeyCiphertext) > 0 && len(entry.KeyNonce) == 0 {
-			fields[prefix+".keyNonce"] = "加密密钥 nonce 不能为空"
+		if err := risk.ValidateProvider(provider); err != nil {
+			fields[prefix] = err.Error()
 		}
 	}
 	for i, item := range bc.ToolRisks {

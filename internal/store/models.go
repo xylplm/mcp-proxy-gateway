@@ -175,21 +175,20 @@ type toolCacheModel struct {
 func (toolCacheModel) TableName() string { return "tool_cache" }
 
 type aiProviderModel struct {
-	ID               string    `gorm:"column:id;type:uuid;primaryKey"`
-	Name             string    `gorm:"column:name;type:varchar(100);not null;unique"`
-	BaseURL          string    `gorm:"column:base_url;type:text;not null"`
-	APIStyle         string    `gorm:"column:api_style;type:varchar(32);not null;default:'chat_completions'"`
-	Model            string    `gorm:"column:model;type:varchar(200);not null"`
-	APIKeyCiphertext []byte    `gorm:"column:api_key_ciphertext;type:bytea"`
-	APIKeyNonce      []byte    `gorm:"column:api_key_nonce;type:bytea"`
-	Enabled          bool      `gorm:"column:enabled;type:boolean;not null;default:true"`
-	Active           bool      `gorm:"column:active;type:boolean;not null;default:false"`
-	TimeoutS         int       `gorm:"column:timeout_s;type:integer;not null;default:60"`
-	BatchSize        int       `gorm:"column:batch_size;type:integer;not null;default:10"`
-	MaxConcurrency   int       `gorm:"column:max_concurrency;type:integer;not null;default:1"`
-	AutoAssess       bool      `gorm:"column:auto_assess;type:boolean;not null;default:false"`
-	CreatedAt        time.Time `gorm:"column:created_at;type:timestamptz;not null;default:now();autoCreateTime:false"`
-	UpdatedAt        time.Time `gorm:"column:updated_at;type:timestamptz;not null;default:now();autoUpdateTime:false"`
+	ID             string    `gorm:"column:id;type:uuid;primaryKey"`
+	Name           string    `gorm:"column:name;type:varchar(100);not null;unique"`
+	BaseURL        string    `gorm:"column:base_url;type:text;not null"`
+	APIStyle       string    `gorm:"column:api_style;type:varchar(32);not null;default:'chat_completions'"`
+	Model          string    `gorm:"column:model;type:varchar(200);not null"`
+	APIKey         string    `gorm:"column:api_key;type:text;not null;default:''"`
+	Enabled        bool      `gorm:"column:enabled;type:boolean;not null;default:true"`
+	Active         bool      `gorm:"column:active;type:boolean;not null;default:false"`
+	TimeoutS       int       `gorm:"column:timeout_s;type:integer;not null;default:60"`
+	BatchSize      int       `gorm:"column:batch_size;type:integer;not null;default:10"`
+	MaxConcurrency int       `gorm:"column:max_concurrency;type:integer;not null;default:1"`
+	AutoAssess     bool      `gorm:"column:auto_assess;type:boolean;not null;default:false"`
+	CreatedAt      time.Time `gorm:"column:created_at;type:timestamptz;not null;default:now();autoCreateTime:false"`
+	UpdatedAt      time.Time `gorm:"column:updated_at;type:timestamptz;not null;default:now();autoUpdateTime:false"`
 }
 
 func (aiProviderModel) TableName() string { return "ai_provider" }

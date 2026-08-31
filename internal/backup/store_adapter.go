@@ -93,10 +93,7 @@ func (a *StoreAdapter) ExportBusiness(ctx context.Context) (BusinessConfig, erro
 	if err != nil {
 		return BusinessConfig{}, err
 	}
-	bc.AIProviders = make([]AIProviderEntry, 0, len(providers))
-	for _, provider := range providers {
-		bc.AIProviders = append(bc.AIProviders, AIProviderEntry{Provider: provider, KeyCiphertext: provider.APIKeyCiphertext, KeyNonce: provider.APIKeyNonce})
-	}
+	bc.AIProviders = providers
 	bc.ToolRisks, err = a.repos.ToolRisk.ListAll(ctx)
 	if err != nil {
 		return BusinessConfig{}, err
@@ -183,12 +180,9 @@ func (a *StoreAdapter) importBusiness(ctx context.Context, bc BusinessConfig) er
 		upstreamIDMap[ue.ID] = created.ID
 	}
 	providerIDMap := make(map[string]string, len(bc.AIProviders))
-	for _, entry := range bc.AIProviders {
-		provider := entry.Provider
+	for _, provider := range bc.AIProviders {
 		oldID := provider.ID
 		provider.ID = ""
-		provider.APIKeyCiphertext = append([]byte(nil), entry.KeyCiphertext...)
-		provider.APIKeyNonce = append([]byte(nil), entry.KeyNonce...)
 		created, err := a.repos.AIProvider.Create(ctx, provider)
 		if err != nil {
 			return err
