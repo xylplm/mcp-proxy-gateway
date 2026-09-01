@@ -182,7 +182,7 @@ type AIRiskService interface {
 	UpdateProvider(context.Context, string, risk.ProviderInput) (risk.Provider, error)
 	DeleteProvider(context.Context, string) error
 	ActivateProvider(context.Context, string) error
-	TestProvider(context.Context, string) (int64, error)
+	TestProvider(context.Context, string) (risk.ProviderTestResult, error)
 	QueueAssessment(context.Context, int) (risk.AssessmentJob, error)
 	QueueReviewAssessment(context.Context, int) (risk.AssessmentJob, error)
 	ListJobs(context.Context, int) ([]risk.AssessmentJob, error)

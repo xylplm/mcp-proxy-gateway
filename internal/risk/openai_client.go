@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"path"
@@ -22,9 +24,13 @@ type ProviderRequestError struct {
 	StatusCode int
 	Retryable  bool
 	RetryAfter time.Duration
+	TimedOut   bool
 }
 
 func (e *ProviderRequestError) Error() string {
+	if e.TimedOut {
+		return "AI Provider 请求超时"
+	}
 	if e.StatusCode != 0 {
 		return fmt.Sprintf("AI Provider 返回 HTTP %d", e.StatusCode)
 	}
@@ -34,12 +40,17 @@ func (e *ProviderRequestError) Error() string {
 func NewOpenAIClient() *OpenAIClient { return &OpenAIClient{} }
 
 func (c *OpenAIClient) Assess(ctx context.Context, provider Provider, apiKey string, inputs []AssessmentInput) ([]AIResult, error) {
+	results, _, err := c.assessWithUsage(ctx, provider, apiKey, inputs)
+	return results, err
+}
+
+func (c *OpenAIClient) assessWithUsage(ctx context.Context, provider Provider, apiKey string, inputs []AssessmentInput) ([]AIResult, ProviderTestResult, error) {
 	if err := ValidateProvider(provider); err != nil {
-		return nil, err
+		return nil, ProviderTestResult{}, err
 	}
 	prompt, err := BuildPrompt(inputs)
 	if err != nil {
-		return nil, err
+		return nil, ProviderTestResult{}, err
 	}
 	expected := make([]string, 0, len(inputs))
 	for _, input := range inputs {
@@ -48,23 +59,71 @@ func (c *OpenAIClient) Assess(ctx context.Context, provider Provider, apiKey str
 
 	endpoint, body, err := providerRequest(provider, prompt)
 	if err != nil {
-		return nil, err
+		return nil, ProviderTestResult{}, err
 	}
 	raw, err := c.do(ctx, provider, apiKey, endpoint, body)
 	if err != nil {
-		return nil, err
+		return nil, ProviderTestResult{}, err
 	}
 	content, err := extractProviderContent(provider.APIStyle, raw)
 	if err != nil {
-		return nil, err
+		return nil, ProviderTestResult{}, err
 	}
-	return ParseAssessmentResponse(content, expected)
+	results, err := ParseAssessmentResponse(content, expected)
+	if err != nil {
+		return nil, ProviderTestResult{}, err
+	}
+	return results, extractProviderTokenUsage(raw), nil
 }
 
-func (c *OpenAIClient) TestConnection(ctx context.Context, provider Provider, apiKey string) (time.Duration, error) {
+func (c *OpenAIClient) TestConnection(ctx context.Context, provider Provider, apiKey string) (ProviderTestResult, error) {
 	started := time.Now()
-	_, err := c.Assess(ctx, provider, apiKey, []AssessmentInput{{ToolID: "connection-test", OriginalName: "health_check", Description: "只读连接测试"}})
-	return time.Since(started), err
+	_, result, err := c.assessWithUsage(ctx, provider, apiKey, []AssessmentInput{{ToolID: "connection-test", OriginalName: "health_check", Description: "只读连接测试"}})
+	result.LatencyMS = time.Since(started).Milliseconds()
+	return result, err
+}
+
+// extractProviderTokenUsage accepts both OpenAI API response shapes. Chat
+// Completions returns prompt/completion tokens while Responses returns
+// input/output tokens; compatible services often mix the two conventions.
+func extractProviderTokenUsage(raw []byte) ProviderTestResult {
+	var body struct {
+		Usage struct {
+			InputTokens      *int64 `json:"input_tokens"`
+			OutputTokens     *int64 `json:"output_tokens"`
+			PromptTokens     *int64 `json:"prompt_tokens"`
+			CompletionTokens *int64 `json:"completion_tokens"`
+			TotalTokens      *int64 `json:"total_tokens"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal(raw, &body); err != nil {
+		return ProviderTestResult{}
+	}
+	result := ProviderTestResult{
+		InputTokens:  firstTokenCount(body.Usage.InputTokens, body.Usage.PromptTokens),
+		OutputTokens: firstTokenCount(body.Usage.OutputTokens, body.Usage.CompletionTokens),
+		TotalTokens:  body.Usage.TotalTokens,
+	}
+	if result.TotalTokens == nil && (result.InputTokens != nil || result.OutputTokens != nil) {
+		total := int64(0)
+		if result.InputTokens != nil {
+			total += *result.InputTokens
+		}
+		if result.OutputTokens != nil {
+			total += *result.OutputTokens
+		}
+		result.TotalTokens = &total
+	}
+	return result
+}
+
+func firstTokenCount(counts ...*int64) *int64 {
+	for _, count := range counts {
+		if count != nil {
+			return count
+		}
+	}
+	return nil
 }
 
 func (c *OpenAIClient) do(ctx context.Context, provider Provider, apiKey, endpoint string, body []byte) ([]byte, error) {
@@ -87,12 +146,18 @@ func (c *OpenAIClient) do(ctx context.Context, provider Provider, apiKey, endpoi
 	}
 	resp, err := client.Do(req)
 	if err != nil {
+		if classified := classifyProviderTransportError(ctx, err); classified != nil {
+			return nil, classified
+		}
 		return nil, &ProviderRequestError{Retryable: true}
 	}
 	defer resp.Body.Close()
 	limited := io.LimitReader(resp.Body, maxProviderResponseBytes+1)
 	raw, err := io.ReadAll(limited)
 	if err != nil {
+		if classified := classifyProviderTransportError(ctx, err); classified != nil {
+			return nil, classified
+		}
 		return nil, fmt.Errorf("读取 AI Provider 响应失败")
 	}
 	if len(raw) > maxProviderResponseBytes {
@@ -102,6 +167,27 @@ func (c *OpenAIClient) do(ctx context.Context, provider Provider, apiKey, endpoi
 		return nil, &ProviderRequestError{StatusCode: resp.StatusCode, Retryable: resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500, RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After"))}
 	}
 	return raw, nil
+}
+
+// classifyProviderTransportError keeps request cancellation distinct from an
+// upstream timeout. A canceled browser request must stop immediately, while a
+// Provider timeout remains retryable for background assessment jobs and is
+// presented clearly in the connection-test dialog.
+func classifyProviderTransportError(ctx context.Context, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return &ProviderRequestError{Retryable: true, TimedOut: true}
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return &ProviderRequestError{Retryable: true, TimedOut: true}
+	}
+	return nil
 }
 
 func parseRetryAfter(value string) time.Duration {

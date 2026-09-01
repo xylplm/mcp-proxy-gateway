@@ -26,7 +26,8 @@ Draft PR：[xylplm/mcp-proxy-gateway#2](https://github.com/xylplm/mcp-proxy-gate
 - 支持 Chat Completions 与 Responses 两种 API 协议。
 - 支持模型、请求超时、单批工具数、最大并发数和同步后自动评级配置。
 - 单批工具数限制为 1～50，最大并发数限制为 1～3。
-- Provider API Key 明文保存，管理 API 与管理页面均可直接查看、复制和编辑完整值。
+- Provider API Key 明文保存；列表接口不返回密钥，管理员仅在读取 Provider 详情或编辑配置时查看和修改完整值。
+- 连通性测试会返回端到端延迟，以及 Provider 支持时返回的输入、输出和总 Token 用量。
 - Base URL 仅允许无 userinfo 的 HTTP/HTTPS URL，并限制响应体、总超时和跨主机重定向。
 
 ### 工具风险目录与评级
@@ -122,7 +123,7 @@ Draft PR：[xylplm/mcp-proxy-gateway#2](https://github.com/xylplm/mcp-proxy-gate
 
 ## 5. Provider 密钥与备份
 
-- Provider API Key 以明文保存，管理台可直接查看、复制和编辑；更新时留空会清除当前密钥。
+- Provider API Key 以明文保存；管理台仅在编辑 Provider 时显示并支持修改，更新时留空会清除当前密钥。
 - 备份文件包含明文 Provider API Key，数据库、备份文件和管理账号都应按敏感凭据保护。
 - 备份格式已升级为 `mpg-backup/v2`，旧版加密备份不再支持导入。
 
@@ -163,7 +164,7 @@ Draft PR：[xylplm/mcp-proxy-gateway#2](https://github.com/xylplm/mcp-proxy-gate
 - 工具发现阶段先过滤来源，真实调用选定来源后、配额预占和上游调用前再次授权。
 - `legacy_unrestricted` 仅用于升级兼容，仍然受全局过滤、API Key 屏蔽规则、上游来源权限、ACL、配额和限流约束。
 - 上游来源权限只能缩小 API Key 可见和可调用范围，不能提高风险档案允许的等级。
-- Provider API Key 通过管理 API 明文返回，访问管理端、数据库和备份文件的权限都应受控。
+- Provider API Key 仅通过受控的 Provider 详情、创建和更新管理 API 明文返回；访问管理端、数据库和备份文件的权限都应受控。
 - Provider 允许访问本机和局域网地址，这是为了支持家庭网络服务；管理员应只配置可信 Base URL，并通过网络隔离控制其访问范围。
 
 ## 8. 已知问题

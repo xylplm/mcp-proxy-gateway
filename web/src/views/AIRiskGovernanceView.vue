@@ -5,6 +5,7 @@ import AppSelect from '@/components/common/AppSelect.vue'
 import PageBreadcrumb from '@/components/common/PageBreadcrumb.vue'
 import FieldLabel from '@/components/common/FieldLabel.vue'
 import RiskJobCard from '@/components/ai-risk/RiskJobCard.vue'
+import ProviderTestModal from '@/components/ai-risk/ProviderTestModal.vue'
 import { RefreshIcon, PlusIcon, CheckIcon, TrashIcon } from '@/icons'
 import { useConfirm } from '@/composables/useConfirm'
 import { useToast } from '@/composables/useToast'
@@ -15,6 +16,7 @@ import {
   clearManualOverride,
   createProvider,
   deleteProvider,
+  getProvider,
   listAssessmentJobs,
   listProviders,
   listRiskTools,
@@ -25,7 +27,9 @@ import {
   testProvider,
   updateProvider,
   type AIProvider,
+  type AIProviderDetail,
   type AssessmentJob,
+  type ProviderTestResult,
   type ProviderInput,
   type ReviewReason,
   type RiskLevel,
@@ -51,7 +55,13 @@ const summary = ref<RiskSummary>({
 const loading = ref(false)
 const busy = ref('')
 const providerOpen = ref(false)
-const editingProvider = ref<AIProvider | null>(null)
+const editingProvider = ref<AIProviderDetail | null>(null)
+const providerTestOpen = ref(false)
+const providerUnderTest = ref<AIProvider | null>(null)
+const providerTestState = ref<'testing' | 'success' | 'error'>('testing')
+const providerTestResult = ref<ProviderTestResult | null>(null)
+const providerTestError = ref('')
+const providerTestElapsedMs = ref(0)
 const overrideTarget = ref<ToolRiskAssessment | null>(null)
 const bulkOverrideOpen = ref(false)
 const jobHistoryOpen = ref(false)
@@ -73,7 +83,11 @@ const overrideForm = ref<{ level: RiskLevel; reason: string; tags: string; force
   force: false,
 })
 let pollTimer: number | undefined
+let providerTestTimer: number | undefined
+let providerTestAbortController: AbortController | undefined
+let providerTestStartedAt = 0
 let loadRequestSeq = 0
+let providerTestRequestSeq = 0
 
 const activeProvider = computed(() => providers.value.find((item) => item.active && item.enabled))
 const enabledProviders = computed(() => providers.value.filter((item) => item.enabled))
@@ -258,24 +272,39 @@ function changePageSize(): void {
   void loadAll()
 }
 
-function openProvider(provider?: AIProvider): void {
+function applyProviderDetail(provider: AIProviderDetail): void {
+  editingProvider.value = provider
+  providerForm.value = {
+    name: provider.name,
+    baseUrl: provider.baseUrl,
+    apiStyle: provider.apiStyle,
+    model: provider.model,
+    apiKey: provider.apiKey,
+    enabled: provider.enabled,
+    timeoutS: provider.timeoutS,
+    batchSize: provider.batchSize,
+    maxConcurrency: provider.maxConcurrency,
+    autoAssess: provider.autoAssess,
+  }
+}
+
+async function openProvider(provider?: AIProvider): Promise<void> {
   if (busy.value !== '') return
-  editingProvider.value = provider ?? null
-  providerForm.value = provider
-    ? {
-        name: provider.name,
-        baseUrl: provider.baseUrl,
-        apiStyle: provider.apiStyle,
-        model: provider.model,
-        apiKey: provider.apiKey,
-        enabled: provider.enabled,
-        timeoutS: provider.timeoutS,
-        batchSize: provider.batchSize,
-        maxConcurrency: provider.maxConcurrency,
-        autoAssess: provider.autoAssess,
-      }
-    : emptyProvider()
-  providerOpen.value = true
+  if (!provider) {
+    editingProvider.value = null
+    providerForm.value = emptyProvider()
+    providerOpen.value = true
+    return
+  }
+  busy.value = `provider-load:${provider.id}`
+  try {
+    applyProviderDetail(await getProvider(provider.id))
+    providerOpen.value = true
+  } catch (error) {
+    toast.error(errorText(error))
+  } finally {
+    busy.value = ''
+  }
 }
 
 async function saveProvider(): Promise<void> {
@@ -311,10 +340,7 @@ async function saveProvider(): Promise<void> {
   }
 }
 
-async function providerAction(
-  action: 'activate' | 'test' | 'delete',
-  provider: AIProvider,
-): Promise<void> {
+async function providerAction(action: 'activate' | 'delete', provider: AIProvider): Promise<void> {
   if (busy.value !== '') return
   if (action === 'delete') {
     const accepted = await confirm({
@@ -331,10 +357,6 @@ async function providerAction(
       await activateProvider(provider.id)
       toast.success('已切换活动 Provider')
     }
-    if (action === 'test') {
-      const result = await testProvider(provider.id)
-      toast.success(`连接成功，耗时 ${result.latencyMs} ms`)
-    }
     if (action === 'delete') {
       await deleteProvider(provider.id)
       toast.success('Provider 已删除')
@@ -345,6 +367,74 @@ async function providerAction(
   } finally {
     busy.value = ''
   }
+}
+
+function stopProviderTestTimer(): void {
+  if (providerTestTimer !== undefined) {
+    window.clearInterval(providerTestTimer)
+    providerTestTimer = undefined
+  }
+}
+
+function startProviderTestTimer(): void {
+  stopProviderTestTimer()
+  providerTestStartedAt = Date.now()
+  providerTestElapsedMs.value = 0
+  providerTestTimer = window.setInterval(() => {
+    providerTestElapsedMs.value = Date.now() - providerTestStartedAt
+  }, 250)
+}
+
+function openProviderTest(provider: AIProvider): void {
+  if (busy.value !== '') return
+  providerTestOpen.value = true
+  void runProviderTest(provider)
+}
+
+async function runProviderTest(provider: AIProvider): Promise<void> {
+  if (busy.value !== '') return
+  const requestSeq = ++providerTestRequestSeq
+  const abortController = new AbortController()
+  providerTestAbortController = abortController
+  providerUnderTest.value = provider
+  providerTestState.value = 'testing'
+  providerTestResult.value = null
+  providerTestError.value = ''
+  busy.value = `test:${provider.id}`
+  startProviderTestTimer()
+  try {
+    const result = await testProvider(provider.id, abortController.signal)
+    if (requestSeq !== providerTestRequestSeq) return
+    providerTestElapsedMs.value = Math.max(providerTestElapsedMs.value, result.latencyMs)
+    providerTestResult.value = result
+    providerTestState.value = 'success'
+  } catch (error) {
+    if (requestSeq !== providerTestRequestSeq) return
+    providerTestError.value = errorText(error)
+    providerTestState.value = 'error'
+  } finally {
+    if (requestSeq === providerTestRequestSeq) {
+      stopProviderTestTimer()
+      providerTestAbortController = undefined
+      busy.value = ''
+    }
+  }
+}
+
+function retryProviderTest(): void {
+  if (providerUnderTest.value === null || busy.value !== '') return
+  void runProviderTest(providerUnderTest.value)
+}
+
+function closeProviderTest(): void {
+  if (providerTestState.value === 'testing') {
+    providerTestRequestSeq++
+    providerTestAbortController?.abort()
+    providerTestAbortController = undefined
+    stopProviderTestTimer()
+    busy.value = ''
+  }
+  providerTestOpen.value = false
 }
 
 async function reconcile(): Promise<void> {
@@ -474,9 +564,13 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   if (pollTimer) window.clearInterval(pollTimer)
+  stopProviderTestTimer()
+  providerTestAbortController?.abort()
+  providerTestAbortController = undefined
   // 递增序号使所有飞行中的 loadAll Promise 在写入响应式状态前被丢弃，
   // 避免组件卸载后仍触发 Vue 的 "component is already unmounted" 警告。
   loadRequestSeq++
+  providerTestRequestSeq++
 })
 </script>
 
@@ -607,7 +701,9 @@ onBeforeUnmount(() => {
         <div class="flex items-center justify-between gap-3">
           <div>
             <h3 class="text-base font-semibold text-gray-900 dark:text-white">AI Provider</h3>
-            <p class="mt-1 text-sm text-gray-500">API Key 可直接查看和编辑；留空会清除当前密钥。</p>
+            <p class="mt-1 text-sm text-gray-500">
+              列表仅展示连接摘要；API Key 仅在编辑配置时显示。
+            </p>
           </div>
           <button
             class="bg-brand-500 inline-flex h-9 items-center gap-2 rounded-md px-3 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
@@ -617,14 +713,16 @@ onBeforeUnmount(() => {
             <PlusIcon class="h-4 w-4" />新增
           </button>
         </div>
-        <div
-          v-if="providers.length"
-          class="mt-4 divide-y divide-gray-100 border-y border-gray-100 dark:divide-gray-800 dark:border-gray-800"
-        >
+        <div v-if="providers.length" class="mt-4 grid gap-3">
           <div
             v-for="provider in providers"
             :key="provider.id"
-            class="flex flex-col gap-3 py-4 lg:flex-row lg:items-center lg:justify-between"
+            :class="[
+              'group flex flex-col gap-4 rounded-2xl border px-4 py-4 transition duration-200 sm:px-5 lg:flex-row lg:items-center lg:justify-between',
+              provider.active && provider.enabled
+                ? 'border-brand-200 bg-brand-50/40 dark:border-brand-500/25 dark:bg-brand-500/[0.06] shadow-sm'
+                : 'hover:border-brand-200 dark:hover:border-brand-500/25 border-gray-100 bg-gray-50/70 hover:bg-white hover:shadow-sm dark:border-gray-800 dark:bg-white/[0.02] dark:hover:bg-white/[0.04]',
+            ]"
           >
             <div class="min-w-0">
               <div class="flex items-center gap-2">
@@ -635,33 +733,48 @@ onBeforeUnmount(() => {
                   >活动</span
                 ><span v-if="!provider.enabled" class="text-xs text-gray-400">已停用</span>
               </div>
-              <p class="mt-1 truncate text-sm text-gray-500">
-                {{ provider.model }} · {{ provider.baseUrl }} ·
-                {{ provider.apiKey || '无密钥' }}
+              <p class="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm text-gray-500">
+                <span>{{ provider.model }}</span>
+                <span aria-hidden="true">·</span>
+                <span>{{
+                  provider.apiStyle === 'responses' ? 'Responses' : 'Chat Completions'
+                }}</span>
+              </p>
+              <p
+                v-tooltip:top="provider.baseUrl"
+                class="mt-1 truncate text-xs text-gray-400 dark:text-gray-500"
+              >
+                {{ provider.baseUrl }}
               </p>
             </div>
             <div class="flex flex-wrap gap-2 text-sm">
               <button
-                class="rounded-md border px-3 py-1.5 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-700"
+                class="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-gray-300 px-3 font-medium text-gray-700 transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-white/[0.06]"
                 :disabled="busy !== ''"
+                :aria-busy="busy === `provider-load:${provider.id}`"
                 @click="openProvider(provider)"
               >
-                编辑</button
+                <RefreshIcon
+                  v-if="busy === `provider-load:${provider.id}`"
+                  class="h-4 w-4 animate-spin motion-reduce:animate-none"
+                  aria-hidden="true"
+                />
+                {{ busy === `provider-load:${provider.id}` ? '加载中…' : '编辑' }}</button
               ><button
-                class="rounded-md border px-3 py-1.5 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-700"
+                class="inline-flex h-9 items-center justify-center rounded-lg border border-gray-300 px-3 font-medium text-gray-700 transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-white/[0.06]"
                 :disabled="busy !== ''"
-                @click="providerAction('test', provider)"
+                @click="openProviderTest(provider)"
               >
-                测试</button
+                测试连接</button
               ><button
                 v-if="provider.enabled && !provider.active"
-                class="rounded-md border px-3 py-1.5 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-700"
+                class="border-brand-200 text-brand-700 dark:border-brand-500/30 dark:text-brand-300 hover:bg-brand-50 dark:hover:bg-brand-500/10 inline-flex h-9 items-center justify-center rounded-lg border px-3 font-medium transition disabled:cursor-not-allowed disabled:opacity-50"
                 :disabled="busy !== ''"
                 @click="providerAction('activate', provider)"
               >
                 设为活动</button
               ><button
-                class="border-error-200 text-error-600 inline-flex items-center rounded-md border p-2 disabled:cursor-not-allowed disabled:opacity-50"
+                class="border-error-200 text-error-600 dark:border-error-500/25 dark:text-error-400 hover:bg-error-50 dark:hover:bg-error-500/10 inline-flex h-9 w-9 items-center justify-center rounded-lg border transition disabled:cursor-not-allowed disabled:opacity-50"
                 aria-label="删除 Provider"
                 :disabled="busy !== ''"
                 @click="providerAction('delete', provider)"
@@ -900,6 +1013,17 @@ onBeforeUnmount(() => {
         </div>
       </section>
     </div>
+
+    <ProviderTestModal
+      :open="providerTestOpen"
+      :provider="providerUnderTest"
+      :state="providerTestState"
+      :result="providerTestResult"
+      :error-message="providerTestError"
+      :elapsed-ms="providerTestElapsedMs"
+      @close="closeProviderTest"
+      @retry="retryProviderTest"
+    />
 
     <div
       v-if="jobHistoryOpen"

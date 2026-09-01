@@ -32,6 +32,36 @@ type bulkOverrideRequest struct {
 	Force  bool       `json:"force"`
 }
 
+// aiProviderListItem is deliberately separate from risk.Provider so the list
+// endpoint never sends API credentials. The full configuration remains
+// available from GET /providers/:id when an administrator opens the editor.
+type aiProviderListItem struct {
+	ID       string        `json:"id"`
+	Name     string        `json:"name"`
+	BaseURL  string        `json:"baseUrl"`
+	APIStyle risk.APIStyle `json:"apiStyle"`
+	Model    string        `json:"model"`
+	Enabled  bool          `json:"enabled"`
+	Active   bool          `json:"active"`
+	TimeoutS int           `json:"timeoutS"`
+}
+
+func newAIProviderListItem(provider risk.Provider) aiProviderListItem {
+	return aiProviderListItem{
+		ID: provider.ID, Name: provider.Name, BaseURL: provider.BaseURL, APIStyle: provider.APIStyle,
+		Model: provider.Model, Enabled: provider.Enabled, Active: provider.Active,
+		TimeoutS: provider.TimeoutS,
+	}
+}
+
+type providerTestResponse struct {
+	OK           bool   `json:"ok"`
+	LatencyMS    int64  `json:"latencyMs"`
+	InputTokens  *int64 `json:"inputTokens,omitempty"`
+	OutputTokens *int64 `json:"outputTokens,omitempty"`
+	TotalTokens  *int64 `json:"totalTokens,omitempty"`
+}
+
 func (r *Router) registerAIRiskRoutes(g *gin.RouterGroup) {
 	group := g.Group("/ai-risk")
 	group.GET("/providers", r.listAIProviders)
@@ -72,7 +102,11 @@ func (r *Router) listAIProviders(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
-	respondOK(c, gin.H{"providers": items})
+	result := make([]aiProviderListItem, 0, len(items))
+	for _, item := range items {
+		result = append(result, newAIProviderListItem(item))
+	}
+	respondOK(c, gin.H{"providers": result})
 }
 func (r *Router) getAIProvider(c *gin.Context) {
 	if !r.requireAIRisk(c) {
@@ -143,12 +177,15 @@ func (r *Router) testAIProvider(c *gin.Context) {
 	if !r.requireAIRisk(c) {
 		return
 	}
-	latency, err := r.aiRisk.TestProvider(c.Request.Context(), c.Param("id"))
+	result, err := r.aiRisk.TestProvider(c.Request.Context(), c.Param("id"))
 	if err != nil {
 		respondError(c, err)
 		return
 	}
-	respondOK(c, gin.H{"ok": true, "latencyMs": latency})
+	respondOK(c, providerTestResponse{
+		OK: true, LatencyMS: result.LatencyMS,
+		InputTokens: result.InputTokens, OutputTokens: result.OutputTokens, TotalTokens: result.TotalTokens,
+	})
 }
 
 func (r *Router) listRiskTools(c *gin.Context) {

@@ -134,13 +134,12 @@ func (s *GovernanceService) UpdateProvider(ctx context.Context, id string, in Pr
 	return s.providers.Update(ctx, p)
 }
 
-func (s *GovernanceService) TestProvider(ctx context.Context, id string) (int64, error) {
+func (s *GovernanceService) TestProvider(ctx context.Context, id string) (ProviderTestResult, error) {
 	p, key, err := s.providerWithKey(ctx, id)
 	if err != nil {
-		return 0, err
+		return ProviderTestResult{}, err
 	}
-	duration, err := s.client.TestConnection(ctx, p, key)
-	return duration.Milliseconds(), err
+	return s.client.TestConnection(ctx, p, key)
 }
 
 type AssessSummary struct {

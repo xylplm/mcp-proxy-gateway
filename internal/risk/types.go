@@ -114,6 +114,16 @@ type Provider struct {
 	UpdatedAt      time.Time `json:"updatedAt"`
 }
 
+// ProviderTestResult is the observable result of one real request to an AI
+// Provider. Token fields are nil when the upstream does not return usage
+// statistics (some OpenAI-compatible services omit them).
+type ProviderTestResult struct {
+	LatencyMS    int64  `json:"latencyMs"`
+	InputTokens  *int64 `json:"inputTokens,omitempty"`
+	OutputTokens *int64 `json:"outputTokens,omitempty"`
+	TotalTokens  *int64 `json:"totalTokens,omitempty"`
+}
+
 type JobStatus string
 
 const (

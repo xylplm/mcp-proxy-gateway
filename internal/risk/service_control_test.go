@@ -154,13 +154,13 @@ func TestUpdateProviderReplacesAndClearsPlaintextAPIKey(t *testing.T) {
 	}
 }
 
-func TestProviderWithPlaintextAPIKeyReturnsKeyForRequests(t *testing.T) {
+func TestProviderServiceListKeepsPlaintextAPIKeyForInternalConsumers(t *testing.T) {
 	providers := &observerTestProviders{provider: Provider{ID: "provider-1", APIKey: "plain-secret"}}
 	service := NewGovernanceService(providers, controlTestCatalog{}, nil)
 
 	items, err := service.ListProviders(context.Background())
 	if err != nil || len(items) != 1 || items[0].APIKey != "plain-secret" {
-		t.Fatalf("管理端应返回完整密钥：items=%+v err=%v", items, err)
+		t.Fatalf("服务层应保留完整密钥供受控内部调用使用：items=%+v err=%v", items, err)
 	}
 	_, key, err := service.providerWithKey(context.Background(), "provider-1")
 	if err != nil || key != "plain-secret" {

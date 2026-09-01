@@ -18,15 +18,27 @@ export interface AIProvider {
   baseUrl: string
   apiStyle: APIStyle
   model: string
-  apiKey: string
   enabled: boolean
   active: boolean
   timeoutS: number
+}
+
+/** 完整配置只在新增、更新或打开编辑器时返回，避免列表接口携带 API Key。 */
+export interface AIProviderDetail extends AIProvider {
+  apiKey: string
   batchSize: number
   maxConcurrency: number
   autoAssess: boolean
   createdAt: string
   updatedAt: string
+}
+
+export interface ProviderTestResult {
+  ok: boolean
+  latencyMs: number
+  inputTokens?: number
+  outputTokens?: number
+  totalTokens?: number
 }
 
 export interface ProviderInput {
@@ -112,10 +124,12 @@ export const listProviders = async (): Promise<AIProvider[]> => {
   const data = await requestData<{ providers: AIProvider[] | null }>({ url: '/ai-risk/providers' })
   return data.providers ?? []
 }
+export const getProvider = (id: string) =>
+  requestData<AIProviderDetail>({ url: `/ai-risk/providers/${encodeURIComponent(id)}` })
 export const createProvider = (data: ProviderInput) =>
-  requestData<AIProvider>({ url: '/ai-risk/providers', method: 'POST', data })
+  requestData<AIProviderDetail>({ url: '/ai-risk/providers', method: 'POST', data })
 export const updateProvider = (id: string, data: ProviderInput) =>
-  requestData<AIProvider>({
+  requestData<AIProviderDetail>({
     url: `/ai-risk/providers/${encodeURIComponent(id)}`,
     method: 'PUT',
     data,
@@ -127,10 +141,13 @@ export const activateProvider = (id: string) =>
     url: `/ai-risk/providers/${encodeURIComponent(id)}/activate`,
     method: 'POST',
   })
-export const testProvider = (id: string) =>
-  requestData<{ ok: boolean; latencyMs: number }>({
+export const testProvider = (id: string, signal?: AbortSignal) =>
+  requestData<ProviderTestResult>({
     url: `/ai-risk/providers/${encodeURIComponent(id)}/test`,
     method: 'POST',
+    // 测试请求由服务端按 Provider.timeoutS（1–300 秒）限制，不能被通用 15 秒超时提前中断。
+    timeout: 0,
+    signal,
   })
 
 export function listRiskTools(params: Record<string, string | number | boolean | undefined>) {
