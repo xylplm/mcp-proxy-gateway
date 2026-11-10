@@ -271,7 +271,7 @@ func extractProviderContent(style APIStyle, raw []byte) ([]byte, error) {
 				}
 			}
 		}
-		return nil, fmt.Errorf("Responses 响应缺少文本结果")
+		return nil, fmt.Errorf("调用 Responses 接口未返回文本结果")
 	}
 	var body struct {
 		Choices []struct {
@@ -284,7 +284,7 @@ func extractProviderContent(style APIStyle, raw []byte) ([]byte, error) {
 		return nil, fmt.Errorf("解析 Chat Completions 响应失败")
 	}
 	if len(body.Choices) == 0 || body.Choices[0].Message.Content == "" {
-		return nil, fmt.Errorf("Chat Completions 响应缺少结果")
+		return nil, fmt.Errorf("调用 Chat Completions 接口未返回结果")
 	}
 	return []byte(body.Choices[0].Message.Content), nil
 }

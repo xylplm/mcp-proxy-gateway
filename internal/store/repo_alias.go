@@ -186,10 +186,6 @@ func (r *AliasRepo) listBindings(ctx context.Context, ruleID string) ([]string, 
 	return ids, nil
 }
 
-func (r *AliasRepo) replaceBindings(ctx context.Context, ruleID, scopeType string, upstreamIDs []string) error {
-	return replaceAliasBindings(ctx, r.db, ruleID, scopeType, upstreamIDs)
-}
-
 func replaceAliasBindings(ctx context.Context, db *gorm.DB, ruleID, scopeType string, upstreamIDs []string) error {
 	ruleUID, err := parseUUID(ruleID)
 	if err != nil {

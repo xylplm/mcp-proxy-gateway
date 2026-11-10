@@ -76,7 +76,7 @@ func (r *ACLRepo) ListByAPIKey(ctx context.Context, apiKeyID string) ([]ACLEntry
 	}
 	result := make([]ACLEntry, 0, len(rows))
 	for _, row := range rows {
-		result = append(result, ACLEntry{ID: row.ID, APIKeyID: row.APIKeyID, CIDR: row.CIDR})
+		result = append(result, ACLEntry(row))
 	}
 	return result, nil
 }

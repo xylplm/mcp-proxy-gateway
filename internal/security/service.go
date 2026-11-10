@@ -366,11 +366,8 @@ func (g *Guard) block(c *gin.Context, subjectType, subject, clientIP, apiKeyID, 
 		BlockedUntil:   &until,
 	}
 	if g.repo != nil {
-		created, err := g.repo.CreateBlock(c.Request.Context(), block)
-		if err != nil {
+		if _, err := g.repo.CreateBlock(c.Request.Context(), block); err != nil {
 			g.logger.Warn("创建安全封禁记录失败", "subjectType", subjectType, "subject", subject, "error", err)
-		} else {
-			block = created
 		}
 	}
 	g.insertEvent(c.Request.Context(), withRequest(c, store.SecurityEvent{

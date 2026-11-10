@@ -33,6 +33,8 @@ func main() {
 	console := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: levelVar, AddSource: true})
 	logger := slog.New(syslog.NewHandler(console, systemLogs))
 	slog.SetDefault(logger)
+	// 版本由 CI 通过 -ldflags 注入；启动即输出，便于在容器日志中确认当前运行的版本。
+	logger.Info("gateway 启动", "version", version)
 
 	// 监听 SIGINT/SIGTERM，触发上下文取消以驱动优雅停机。
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

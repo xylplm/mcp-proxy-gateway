@@ -154,17 +154,6 @@ func (c *Connection) fail(reason string, threshold int) bool {
 	return suspended
 }
 
-func (c *Connection) resetForManual() {
-	c.mu.Lock()
-	c.failures = 0
-	c.lastErr = ""
-	c.nextRetryAt = nil
-	c.lastDemandAt = time.Time{}
-	c.state = domain.ConnConnecting
-	c.publishLocked()
-	c.mu.Unlock()
-}
-
 // snapshot 保持既有内部测试所需的三元组语义。
 func (c *Connection) snapshot() (domain.ConnState, string, int) {
 	c.mu.Lock()
@@ -182,12 +171,6 @@ func (c *Connection) waitSnapshot() (domain.ConnState, string, bool, <-chan stru
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.state, c.lastErr, c.cfg.Enabled, c.stateCh
-}
-
-func (c *Connection) isRunning() bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.running
 }
 
 func (c *Connection) signalWake() {

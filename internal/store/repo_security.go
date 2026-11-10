@@ -275,39 +275,11 @@ func clampSecurityLimit(limit int) int {
 }
 
 func modelToSecurityEvent(model securityEventModel) SecurityEvent {
-	return SecurityEvent{
-		ID:             model.ID,
-		EventType:      model.EventType,
-		SubjectType:    model.SubjectType,
-		Subject:        model.Subject,
-		ClientIP:       model.ClientIP,
-		APIKeyID:       model.APIKeyID,
-		APIKeyPrefix:   model.APIKeyPrefix,
-		KeyFingerprint: model.KeyFingerprint,
-		Method:         model.Method,
-		Path:           model.Path,
-		UserAgent:      model.UserAgent,
-		Reason:         model.Reason,
-		Count:          model.Count,
-		CreatedAt:      model.CreatedAt,
-	}
+	// 两结构体字段完全一致，直接类型转换；字段增删时编译器会强制同步。
+	return SecurityEvent(model)
 }
 
 func modelToSecurityBlock(model securityBlockModel) SecurityBlock {
-	return SecurityBlock{
-		ID:             model.ID,
-		SubjectType:    model.SubjectType,
-		Subject:        model.Subject,
-		ClientIP:       model.ClientIP,
-		APIKeyID:       model.APIKeyID,
-		APIKeyPrefix:   model.APIKeyPrefix,
-		KeyFingerprint: model.KeyFingerprint,
-		Reason:         model.Reason,
-		FailureCount:   model.FailureCount,
-		Status:         model.Status,
-		BlockedUntil:   model.BlockedUntil,
-		ReleasedAt:     model.ReleasedAt,
-		CreatedAt:      model.CreatedAt,
-		UpdatedAt:      model.UpdatedAt,
-	}
+	// 两结构体字段完全一致，直接类型转换；字段增删时编译器会强制同步。
+	return SecurityBlock(model)
 }

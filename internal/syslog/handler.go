@@ -160,12 +160,14 @@ func attrValue(value slog.Value) any {
 			return nil
 		case error:
 			return v.Error()
+		case time.Time:
+			// time.Time 实现了 fmt.Stringer，必须放在 Stringer 之前，
+			// 否则永远走不到该分支，时间会变成 Go 默认格式而非 RFC3339Nano。
+			return v.Format(time.RFC3339Nano)
 		case fmt.Stringer:
 			return v.String()
 		case string, bool, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64:
 			return v
-		case time.Time:
-			return v.Format(time.RFC3339Nano)
 		default:
 			return fmt.Sprint(v)
 		}

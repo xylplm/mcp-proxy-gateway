@@ -72,15 +72,6 @@ func genOptionalTime(t *rapid.T, label string) *time.Time {
 	return &v
 }
 
-// genOptionalInt 生成 nil 或正整数指针。
-func genOptionalInt(t *rapid.T, label string) *int {
-	if !rapid.Bool().Draw(t, label+"_present") {
-		return nil
-	}
-	v := rapid.IntRange(1, 1000).Draw(t, label)
-	return &v
-}
-
 // validTransports 为合法的上游传输类型集合。
 var validTransports = []domain.TransportType{
 	domain.TransportStdio, domain.TransportSSE,

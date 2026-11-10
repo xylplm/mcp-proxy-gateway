@@ -43,7 +43,7 @@ func (t *windowsCommandTransport) Connect(context.Context) (mcp.Connection, erro
 	if err := runtime.AttachProcessHardening(t.cmd); err != nil {
 		_ = t.cmd.Process.Kill()
 		_ = t.cmd.Wait()
-		return nil, fmt.Errorf("Windows 进程加固失败：%w", err)
+		return nil, fmt.Errorf("应用 Windows 进程加固失败：%w", err)
 	}
 	inner, err := (&mcp.IOTransport{Reader: stdout, Writer: stdin}).Connect(context.Background())
 	if err != nil {

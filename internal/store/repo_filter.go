@@ -204,10 +204,6 @@ func (r *FilterMCPRepo) listBindings(ctx context.Context, ruleID string) ([]stri
 	return ids, nil
 }
 
-func (r *FilterMCPRepo) replaceBindings(ctx context.Context, ruleID, scopeType string, upstreamIDs []string) error {
-	return replaceFilterMCPBindings(ctx, r.db, ruleID, scopeType, upstreamIDs)
-}
-
 func replaceFilterMCPBindings(ctx context.Context, db *gorm.DB, ruleID, scopeType string, upstreamIDs []string) error {
 	ruleUID, err := parseUUID(ruleID)
 	if err != nil {

@@ -10,7 +10,6 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/myGithub/mcp-proxy-gateway/internal/audit"
-	"github.com/myGithub/mcp-proxy-gateway/internal/auth"
 	"github.com/myGithub/mcp-proxy-gateway/internal/domain"
 )
 
@@ -106,14 +105,6 @@ func newTestEngineWithRecorder(d Deps, claimInjector gin.HandlerFunc) *gin.Engin
 	e := gin.New()
 	NewRouter(d).Register(e, claimInjector)
 	return e
-}
-
-// passThroughClaims 注入指定用户名的 claims，模拟已通过 RequireAdmin 鉴权。
-func passThroughClaims(username string) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.Set("auth.claims", auth.Claims{Username: username})
-		c.Next()
-	}
 }
 
 // TestLoginSuccess_RecordsLoginAudit 验证登录成功提交 success=true 审计（Req 22.1）。

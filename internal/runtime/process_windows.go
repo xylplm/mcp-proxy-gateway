@@ -25,7 +25,7 @@ var windowsProcessJobs sync.Map // map[int]windows.Handle
 // can establish a long-lived session.
 func AttachProcessHardening(cmd *exec.Cmd) error {
 	if cmd == nil || cmd.Process == nil || cmd.Process.Pid <= 0 {
-		return fmt.Errorf("Windows 进程尚未启动")
+		return fmt.Errorf("尚未启动 Windows 进程，无法加固")
 	}
 	job, err := windows.CreateJobObject(nil, nil)
 	if err != nil {
