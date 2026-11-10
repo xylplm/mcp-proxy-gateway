@@ -25,12 +25,12 @@ FROM python:3.12-slim
 ARG TARGETARCH
 
 # Node 官方 tarball 固定版本 + 校验和。这里是 Node 版本的唯一来源。
-ARG NODE_VERSION=24.19.0
-ARG NODE_SHA256_AMD64=f625d97cd707df4ff96254916fbc5ff014f09c09effe5a1e0ca8f6d41a8789d4
-ARG NODE_SHA256_ARM64=d28c8a5bf0a808f0ed434a1dce8c54ae98f0371c0bd86ac58abc613f73e6643f
+ARG NODE_VERSION=24.22.2
+ARG NODE_SHA256_AMD64=361718c444e49af2ca5a110c83ba6a8901143f23ab285ebbef0341f391f482a9
+ARG NODE_SHA256_ARM64=95c264150aceb7f3437a29fd6984924f5f8d1511ea3cbd6c508b83f6c555dae2
 
 # uv/uvx 取自官方 distroless 镜像：多架构自动匹配，无需下载与校验和维护。
-COPY --from=ghcr.io/astral-sh/uv:0.6.14 /uv /uvx /usr/local/bin/
+COPY --from=ghcr.io/astral-sh/uv:0.13.7 /uv /uvx /usr/local/bin/
 
 # PATH 必须在安装 Node 的 RUN 之前声明。
 # npm / npx 是以 #!/usr/bin/env node 为 shebang 的脚本，解析自己的解释器要靠 PATH；
