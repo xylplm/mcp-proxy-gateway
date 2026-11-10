@@ -155,9 +155,11 @@ func (s *RedisRecentRecordStore) ClearRecordsBefore(ctx context.Context, cutoff 
 	if cutoff.IsZero() {
 		members, err = s.rdb.ZRange(ctx, recentRecordsZSetKey, 0, -1).Result()
 	} else {
-		members, err = s.rdb.ZRangeByScore(ctx, recentRecordsZSetKey, &redis.ZRangeBy{
-			Min: "-inf",
-			Max: strconv.FormatInt(cutoff.UTC().UnixMilli(), 10),
+		members, err = s.rdb.ZRangeArgs(ctx, redis.ZRangeArgs{
+			Key:     recentRecordsZSetKey,
+			ByScore: true,
+			Start:   "-inf",
+			Stop:    strconv.FormatInt(cutoff.UTC().UnixMilli(), 10),
 		}).Result()
 	}
 	if err != nil {
@@ -174,9 +176,11 @@ func (s *RedisRecentRecordStore) ClearRecordsBefore(ctx context.Context, cutoff 
 
 func (s *RedisRecentRecordStore) trim(ctx context.Context, now time.Time) error {
 	cutoff := now.Add(-s.ttl).UTC().UnixMilli()
-	old, err := s.rdb.ZRangeByScore(ctx, recentRecordsZSetKey, &redis.ZRangeBy{
-		Min: "-inf",
-		Max: strconv.FormatInt(cutoff, 10),
+	old, err := s.rdb.ZRangeArgs(ctx, redis.ZRangeArgs{
+		Key:     recentRecordsZSetKey,
+		ByScore: true,
+		Start:   "-inf",
+		Stop:    strconv.FormatInt(cutoff, 10),
 	}).Result()
 	if err != nil {
 		return err

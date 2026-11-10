@@ -28,24 +28,23 @@ export default defineConfig({
     },
   },
   build: {
-    // 图表库与代码编辑器体积大，单独分包并通过懒加载，避免拖大首包。
-    rollupOptions: {
+    // 图表库与代码编辑器体积大，单独分组分包并由业务组件懒加载，避免拖大首包。
+    // vite 8 已切换 rolldown 内核：rollupOptions 与 manualChunks 均已弃用，
+    // 改用原生 codeSplitting.groups（test 匹配模块，name 作为 chunk 名）。
+    rolldownOptions: {
       output: {
-        manualChunks(id) {
-          if (
-            id.includes('node_modules/apexcharts') ||
-            id.includes('node_modules/vue3-apexcharts')
-          ) {
-            return 'apexcharts'
-          }
-          // CodeMirror 6 模块化，单独 chunk 由 CodeEditor 懒加载。
-          if (
-            id.includes('node_modules/@codemirror/') ||
-            id.includes('node_modules/codemirror') ||
-            id.includes('node_modules/@lezer/')
-          ) {
-            return 'codemirror'
-          }
+        codeSplitting: {
+          groups: [
+            {
+              name: 'apexcharts',
+              test: /[\\/]node_modules[\\/](apexcharts|vue3-apexcharts)[\\/]/,
+            },
+            // CodeMirror 6 模块化，单独 chunk 由 CodeEditor 懒加载。
+            {
+              name: 'codemirror',
+              test: /[\\/]node_modules[\\/](@codemirror|codemirror|@lezer)[\\/]/,
+            },
+          ],
         },
       },
     },
